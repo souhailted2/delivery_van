@@ -29,24 +29,20 @@ jobs:
           version: 9
 
       - name: Install dependencies
-        run: pnpm install --frozen-lockfile
+        run: pnpm install --no-frozen-lockfile
 
       - name: Build API server
         run: pnpm --filter @workspace/api-server run build
 
       - name: Build frontend
-        run: |
-          PORT=22606 BASE_PATH=/ pnpm --filter @workspace/erp-van-sales run build
+        run: PORT=22606 BASE_PATH=/ pnpm --filter @workspace/erp-van-sales run build
 
       - name: Create deployment archive
         run: |
           tar -czf deploy.tar.gz \
             artifacts/api-server/dist/ \
             artifacts/api-server/package.json \
-            artifacts/erp-van-sales/dist/ \
-            lib/db/ \
-            pnpm-workspace.yaml \
-            package.json
+            artifacts/erp-van-sales/dist/public/
 
       - name: Copy archive to server
         uses: appleboy/scp-action@v0.1.7
@@ -65,20 +61,16 @@ jobs:
           password: ${{ secrets.HETZNER_PASSWORD }}
           script: |
             set -e
-            echo "=== Extracting deployment ==="
+            echo "=== Extracting ==="
+            mkdir -p /var/www/erp-api
             cd /var/www/erp-api
-            tar -xzf /tmp/deploy.tar.gz --strip-components=0
-
-            echo "=== Installing production dependencies ==="
-            cd /var/www/erp-api/artifacts/api-server
-            npm install --production --ignore-scripts 2>/dev/null || true
+            tar -xzf /tmp/deploy.tar.gz
+            rm -f /tmp/deploy.tar.gz
 
             echo "=== Reloading PM2 ==="
             pm2 reload erp-api --update-env || pm2 restart erp-api
 
-            echo "=== Checking health ==="
+            echo "=== Health check ==="
             sleep 3
-            curl -sf http://localhost:8080/api/healthz && echo "OK" || echo "WARNING: healthz failed"
-
-            echo "=== Done ==="
-            rm -f /tmp/deploy.tar.gz
+            curl -sf http://localhost:8080/api/healthz && echo "OK" || echo "WARNING: healthz check failed"
+            echo "=== Deploy complete ==="
