@@ -3,10 +3,6 @@ name: Deploy API to Hetzner
 on:
   push:
     branches: [main]
-    paths:
-      - 'artifacts/api-server/**'
-      - 'lib/**'
-      - '.github/workflows/deploy-hetzner.yml'
   workflow_dispatch:
 
 jobs:
@@ -37,12 +33,25 @@ jobs:
       - name: Build frontend
         run: PORT=22606 BASE_PATH=/ pnpm --filter @workspace/erp-van-sales run build
 
+      - name: Bundle production node_modules for API
+        run: |
+          cd artifacts/api-server
+          npm install --omit=dev --ignore-scripts 2>/dev/null || true
+          cd ../..
+
       - name: Create deployment archive
         run: |
           tar -czf deploy.tar.gz \
             artifacts/api-server/dist/ \
             artifacts/api-server/package.json \
+            artifacts/api-server/node_modules/ \
             artifacts/erp-van-sales/dist/public/
+
+      - name: Get server SSH fingerprint
+        id: fingerprint
+        run: |
+          FINGERPRINT=$(ssh-keyscan -H ${{ secrets.HETZNER_HOST }} 2>/dev/null | ssh-keygen -lf - | awk '{print $2}')
+          echo "fingerprint=$FINGERPRINT" >> $GITHUB_OUTPUT
 
       - name: Copy archive to server
         uses: appleboy/scp-action@v0.1.7
