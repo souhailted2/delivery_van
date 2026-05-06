@@ -72,5 +72,10 @@ jobs:
 
             echo "=== Health check ==="
             sleep 3
-            curl -sf http://localhost:8080/api/healthz && echo "OK" || echo "WARNING: healthz check failed"
+            STATUS=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:8080/api/healthz)
+            echo "Health status: $STATUS"
+            if [ "$STATUS" != "200" ]; then
+              echo "ERROR: Health check failed with status $STATUS"
+              exit 1
+            fi
             echo "=== Deploy complete ==="
