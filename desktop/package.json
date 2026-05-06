@@ -3,6 +3,10 @@
   "version": "1.0.0",
   "description": "ERP Van Sales - تطبيق إدارة مبيعات الشاحنات",
   "main": "main.js",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/souhailted2/delivery_van.git"
+  },
   "scripts": {
     "start": "electron .",
     "build-renderer": "node build-renderer.mjs",
