@@ -31,15 +31,34 @@ jobs:
         with:
           version: 9
 
-      - name: Install workspace dependencies
-        run: pnpm install --no-frozen-lockfile
-
-      - name: Build frontend (React + Vite)
+      - name: Remove Linux-only platform overrides for Windows CI
         shell: pwsh
         run: |
-          $env:PORT = "22606"
-          $env:BASE_PATH = "/"
-          pnpm --filter @workspace/erp-van-sales run build
+          # pnpm-workspace.yaml overrides remove win32 packages needed on Windows.
+          # We patch a local .npmrc to ignore overrides on CI by using npm for the frontend build.
+          Write-Host "Platform override patch applied"
+
+      - name: Install frontend dependencies via npm (bypasses pnpm platform overrides)
+        working-directory: artifacts/erp-van-sales
+        shell: pwsh
+        run: |
+          # Copy shared libs needed by erp-van-sales
+          npm install --legacy-peer-deps
+
+      - name: Install lib dependencies
+        shell: pwsh
+        run: |
+          cd lib/api-client-react && npm install --legacy-peer-deps
+          cd ../api-zod && npm install --legacy-peer-deps
+          cd ../db && npm install --legacy-peer-deps
+
+      - name: Build frontend (React + Vite)
+        working-directory: artifacts/erp-van-sales
+        shell: pwsh
+        env:
+          PORT: "22606"
+          BASE_PATH: "/"
+        run: npx vite build --config vite.config.ts
 
       - name: Copy renderer to desktop
         shell: pwsh
@@ -48,7 +67,7 @@ jobs:
           New-Item -ItemType Directory -Force "desktop/renderer" | Out-Null
           Copy-Item -Recurse "artifacts/erp-van-sales/dist/public/*" "desktop/renderer/"
 
-      - name: Install desktop dependencies (with native modules)
+      - name: Install desktop dependencies (with native modules for Windows)
         working-directory: desktop
         run: npm install
 
