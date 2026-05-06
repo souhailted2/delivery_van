@@ -37,7 +37,6 @@ jobs:
         run: |
           cd artifacts/api-server
           npm install --omit=dev --ignore-scripts 2>/dev/null || true
-          cd ../..
 
       - name: Create deployment archive
         run: |
@@ -46,12 +45,6 @@ jobs:
             artifacts/api-server/package.json \
             artifacts/api-server/node_modules/ \
             artifacts/erp-van-sales/dist/public/
-
-      - name: Get server SSH fingerprint
-        id: fingerprint
-        run: |
-          FINGERPRINT=$(ssh-keyscan -H ${{ secrets.HETZNER_HOST }} 2>/dev/null | ssh-keygen -lf - | awk '{print $2}')
-          echo "fingerprint=$FINGERPRINT" >> $GITHUB_OUTPUT
 
       - name: Copy archive to server
         uses: appleboy/scp-action@v0.1.7
