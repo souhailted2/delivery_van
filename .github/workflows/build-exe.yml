@@ -9,6 +9,9 @@ on:
       - '.github/workflows/build-exe.yml'
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
   build-windows:
     name: Build .exe on Windows
@@ -52,10 +55,10 @@ jobs:
       - name: Build Windows installer
         working-directory: desktop
         env:
-          GH_TOKEN: ${{ secrets.GH_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: npm run dist
 
-      - name: Upload installer artifact
+      - name: Upload installer as artifact
         uses: actions/upload-artifact@v4
         with:
           name: ERP-Van-Sales-Windows-Installer
@@ -65,11 +68,9 @@ jobs:
       - name: Create GitHub Release
         if: github.ref == 'refs/heads/main'
         uses: softprops/action-gh-release@v2
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          tag_name: v${{ github.run_number }}
-          name: "ERP Van Sales v${{ github.run_number }}"
+          tag_name: build-${{ github.run_number }}
+          name: "ERP Van Sales — Build ${{ github.run_number }}"
           body: |
             ## تطبيق Windows سطح المكتب
 
