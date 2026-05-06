@@ -3,10 +3,6 @@ name: Build Windows Installer (.exe)
 on:
   push:
     branches: [main]
-    paths:
-      - 'desktop/**'
-      - 'artifacts/erp-van-sales/**'
-      - '.github/workflows/build-exe.yml'
   workflow_dispatch:
 
 permissions:
@@ -35,7 +31,6 @@ jobs:
         shell: pwsh
         run: |
           $content = Get-Content pnpm-workspace.yaml -Raw
-          # Remove all lines that exclude win32 packages so Windows runner can install them
           $lines = $content -split "`n"
           $filtered = $lines | Where-Object {
             $_ -notmatch '"esbuild>@esbuild/win32' -and
@@ -44,7 +39,7 @@ jobs:
             $_ -notmatch '"rollup>@rollup/rollup-win32'
           }
           $filtered -join "`n" | Set-Content pnpm-workspace.yaml
-          Write-Host "Patched pnpm-workspace.yaml - removed win32 exclusions"
+          Write-Host "Patched pnpm-workspace.yaml — removed win32 exclusions for CI"
 
       - name: Install workspace dependencies
         run: pnpm install --no-frozen-lockfile
