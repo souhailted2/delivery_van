@@ -1,0 +1,2578 @@
+openapi: 3.1.0
+info:
+  # Do not change the title, if the title changes, the import paths will be broken
+  title: Api
+  version: 0.1.0
+  description: ERP Van Sales API
+servers:
+  - url: /api
+    description: Base API path
+tags:
+  - name: health
+    description: Health operations
+  - name: auth
+    description: Authentication
+  - name: products
+    description: Product management
+  - name: categories
+    description: Product categories
+  - name: suppliers
+    description: Supplier management
+  - name: purchases
+    description: Purchase orders
+  - name: clients
+    description: Client management
+  - name: trucks
+    description: Truck management
+  - name: stock
+    description: Stock management
+  - name: invoices
+    description: Invoice management
+  - name: returns
+    description: Returns management
+  - name: cash
+    description: Cash management
+  - name: reports
+    description: Reports
+  - name: users
+    description: User management
+  - name: Storage
+    description: Object storage upload and serving endpoints.
+
+paths:
+  /healthz:
+    get:
+      operationId: healthCheck
+      tags: [health]
+      summary: Health check
+      responses:
+        "200":
+          description: Healthy
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthStatus"
+
+  # AUTH
+  /auth/login:
+    post:
+      operationId: login
+      tags: [auth]
+      summary: Login
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/LoginBody"
+      responses:
+        "200":
+          description: Login successful
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LoginResponse"
+
+  /auth/logout:
+    post:
+      operationId: logout
+      tags: [auth]
+      summary: Logout
+      responses:
+        "200":
+          description: Logged out
+
+  /auth/me:
+    get:
+      operationId: getMe
+      tags: [auth]
+      summary: Get current user or truck session
+      responses:
+        "200":
+          description: Current user
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/User"
+
+  /auth/truck-login:
+    post:
+      operationId: truckLogin
+      tags: [auth]
+      summary: Login as truck
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TruckLoginBody"
+      responses:
+        "200":
+          description: Truck login successful
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LoginResponse"
+
+  # USERS
+  /users:
+    get:
+      operationId: listUsers
+      tags: [users]
+      summary: List all users
+      responses:
+        "200":
+          description: List of users
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/User"
+    post:
+      operationId: createUser
+      tags: [users]
+      summary: Create user
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateUserBody"
+      responses:
+        "201":
+          description: User created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/User"
+
+  /users/{id}:
+    get:
+      operationId: getUser
+      tags: [users]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      summary: Get user
+      responses:
+        "200":
+          description: User
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/User"
+    put:
+      operationId: updateUser
+      tags: [users]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      summary: Update user
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateUserBody"
+      responses:
+        "200":
+          description: Updated user
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/User"
+    delete:
+      operationId: deleteUser
+      tags: [users]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      summary: Delete user
+      responses:
+        "204":
+          description: Deleted
+
+  # CATEGORIES
+  /categories:
+    get:
+      operationId: listCategories
+      tags: [categories]
+      summary: List categories
+      responses:
+        "200":
+          description: List of categories
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Category"
+    post:
+      operationId: createCategory
+      tags: [categories]
+      summary: Create category
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateCategoryBody"
+      responses:
+        "201":
+          description: Category created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Category"
+
+  /categories/{id}:
+    put:
+      operationId: updateCategory
+      tags: [categories]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      summary: Update category
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateCategoryBody"
+      responses:
+        "200":
+          description: Updated category
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Category"
+    delete:
+      operationId: deleteCategory
+      tags: [categories]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      summary: Delete category
+      responses:
+        "204":
+          description: Deleted
+
+  # STORAGE
+  /storage/uploads/request-url:
+    post:
+      tags: [Storage]
+      operationId: requestUploadUrl
+      summary: Request a presigned URL for file upload
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UploadUrlRequest'
+      responses:
+        '200':
+          description: Presigned upload URL generated.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UploadUrlResponse'
+        '400':
+          description: Missing or invalid fields.
+  /storage/public-objects/{filePath}:
+    get:
+      tags: [Storage]
+      operationId: getPublicObject
+      summary: Serve a public asset
+      parameters:
+        - name: filePath
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Object content streamed.
+          content:
+            '*/*':
+              schema:
+                type: string
+                format: binary
+        '404':
+          description: Not found.
+  /storage/objects/{objectPath}:
+    get:
+      tags: [Storage]
+      operationId: getStorageObject
+      summary: Serve an object entity
+      parameters:
+        - name: objectPath
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Object content streamed.
+          content:
+            '*/*':
+              schema:
+                type: string
+                format: binary
+        '404':
+          description: Not found.
+
+  # PRODUCTS
+  /products/upload-image:
+    post:
+      tags: [products]
+      operationId: uploadProductImage
+      summary: Upload a product image
+      description: Accepts multipart/form-data with a single image file (JPEG, PNG, WebP; max 2 MB). Returns the public serving URL for the uploaded image.
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file]
+              properties:
+                file:
+                  type: string
+                  format: binary
+                  description: The image file to upload.
+      responses:
+        '200':
+          description: Image uploaded successfully.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProductImageUploadResponse'
+        '400':
+          description: Invalid file (wrong type, too large, or missing).
+        '401':
+          description: Not authenticated.
+        '500':
+          description: Upload failed.
+
+  /products:
+    get:
+      operationId: listProducts
+      tags: [products]
+      summary: List products
+      parameters:
+        - name: categoryId
+          in: query
+          schema:
+            type: integer
+        - name: search
+          in: query
+          schema:
+            type: string
+      responses:
+        "200":
+          description: List of products
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Product"
+    post:
+      operationId: createProduct
+      tags: [products]
+      summary: Create product
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateProductBody"
+      responses:
+        "201":
+          description: Product created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Product"
+
+  /products/{id}:
+    get:
+      operationId: getProduct
+      tags: [products]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      summary: Get product
+      responses:
+        "200":
+          description: Product
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Product"
+    put:
+      operationId: updateProduct
+      tags: [products]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      summary: Update product
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateProductBody"
+      responses:
+        "200":
+          description: Updated product
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Product"
+    delete:
+      operationId: deleteProduct
+      tags: [products]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      summary: Delete product
+      responses:
+        "204":
+          description: Deleted
+
+  # SUPPLIERS
+  /suppliers:
+    get:
+      operationId: listSuppliers
+      tags: [suppliers]
+      summary: List suppliers
+      responses:
+        "200":
+          description: List of suppliers
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Supplier"
+    post:
+      operationId: createSupplier
+      tags: [suppliers]
+      summary: Create supplier
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateSupplierBody"
+      responses:
+        "201":
+          description: Supplier created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Supplier"
+
+  /suppliers/{id}:
+    get:
+      operationId: getSupplier
+      tags: [suppliers]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      summary: Get supplier
+      responses:
+        "200":
+          description: Supplier
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Supplier"
+    put:
+      operationId: updateSupplier
+      tags: [suppliers]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      summary: Update supplier
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateSupplierBody"
+      responses:
+        "200":
+          description: Updated supplier
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Supplier"
+    delete:
+      operationId: deleteSupplier
+      tags: [suppliers]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      summary: Delete supplier
+      responses:
+        "204":
+          description: Deleted
+
+  # PURCHASES
+  /purchases:
+    get:
+      operationId: listPurchases
+      tags: [purchases]
+      summary: List purchase orders
+      responses:
+        "200":
+          description: List of purchases
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Purchase"
+    post:
+      operationId: createPurchase
+      tags: [purchases]
+      summary: Create purchase order (Bon d'achat)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreatePurchaseBody"
+      responses:
+        "201":
+          description: Purchase created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Purchase"
+
+  /purchases/{id}:
+    get:
+      operationId: getPurchase
+      tags: [purchases]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      summary: Get purchase
+      responses:
+        "200":
+          description: Purchase
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Purchase"
+
+  /purchases/{id}/payment:
+    post:
+      operationId: addPurchasePayment
+      tags: [purchases]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      summary: Record payment for purchase
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PurchasePaymentBody"
+      responses:
+        "200":
+          description: Payment recorded
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Purchase"
+
+  # CLIENTS
+  /clients:
+    get:
+      operationId: listClients
+      tags: [clients]
+      summary: List clients
+      parameters:
+        - name: search
+          in: query
+          schema:
+            type: string
+      responses:
+        "200":
+          description: List of clients
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Client"
+    post:
+      operationId: createClient
+      tags: [clients]
+      summary: Create client
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateClientBody"
+      responses:
+        "201":
+          description: Client created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Client"
+
+  /clients/{id}:
+    get:
+      operationId: getClient
+      tags: [clients]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      summary: Get client
+      responses:
+        "200":
+          description: Client
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Client"
+    put:
+      operationId: updateClient
+      tags: [clients]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      summary: Update client
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateClientBody"
+      responses:
+        "200":
+          description: Updated client
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Client"
+    delete:
+      operationId: deleteClient
+      tags: [clients]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      summary: Delete client
+      responses:
+        "204":
+          description: Deleted
+
+  # TRUCKS
+  /trucks:
+    get:
+      operationId: listTrucks
+      tags: [trucks]
+      summary: List trucks
+      responses:
+        "200":
+          description: List of trucks
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Truck"
+    post:
+      operationId: createTruck
+      tags: [trucks]
+      summary: Create truck
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateTruckBody"
+      responses:
+        "201":
+          description: Truck created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Truck"
+
+  /trucks/{id}:
+    get:
+      operationId: getTruck
+      tags: [trucks]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      summary: Get truck
+      responses:
+        "200":
+          description: Truck
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Truck"
+    put:
+      operationId: updateTruck
+      tags: [trucks]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      summary: Update truck
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateTruckBody"
+      responses:
+        "200":
+          description: Updated truck
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Truck"
+    delete:
+      operationId: deleteTruck
+      tags: [trucks]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      summary: Delete truck
+      responses:
+        "204":
+          description: Deleted
+
+  /trucks/{id}/stock:
+    get:
+      operationId: getTruckStock
+      tags: [trucks]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      summary: Get truck stock
+      responses:
+        "200":
+          description: Truck stock
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/TruckStockItem"
+
+  /trucks/me/stock:
+    get:
+      operationId: getMyTruckStock
+      tags: [trucks]
+      summary: Get logged-in truck stock
+      responses:
+        "200":
+          description: My truck stock
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/TruckStockItem"
+
+  /trucks/me/clients:
+    get:
+      operationId: getMyTruckClients
+      tags: [trucks]
+      summary: Get clients belonging to my truck
+      responses:
+        "200":
+          description: My truck clients
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Client"
+    post:
+      operationId: createMyTruckClient
+      tags: [trucks]
+      summary: Add client to my truck
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateClientBody"
+      responses:
+        "201":
+          description: Client created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Client"
+
+  /trucks/me/clients/{id}:
+    put:
+      operationId: updateMyTruckClient
+      tags: [trucks]
+      summary: Update a client belonging to my truck
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateClientBody"
+      responses:
+        "200":
+          description: Client updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Client"
+
+  /trucks/me/vendeurs:
+    get:
+      operationId: getMyTruckVendeurs
+      tags: [trucks]
+      summary: Get vendeurs assigned to my truck
+      responses:
+        "200":
+          description: My truck vendeurs
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/User"
+    post:
+      operationId: createMyTruckVendeur
+      tags: [trucks]
+      summary: Add vendeur to my truck
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateUserBody"
+      responses:
+        "201":
+          description: Vendeur created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/User"
+
+  /trucks/me/invoices/{id}:
+    get:
+      operationId: getMyTruckInvoice
+      tags: [trucks]
+      summary: Get a single truck invoice with items
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Invoice detail with items
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Invoice"
+
+  /trucks/me/invoices:
+    get:
+      operationId: getMyTruckInvoices
+      tags: [trucks]
+      summary: Get invoices for my truck
+      responses:
+        "200":
+          description: My truck invoices
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Invoice"
+    post:
+      operationId: createMyTruckInvoice
+      tags: [trucks]
+      summary: Create invoice from truck (truck-authenticated)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateTruckSaleBody"
+      responses:
+        "201":
+          description: Invoice created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Invoice"
+
+  # STOCK
+  /stock/warehouse:
+    get:
+      operationId: getWarehouseStock
+      tags: [stock]
+      summary: Get warehouse stock
+      responses:
+        "200":
+          description: Warehouse stock
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/WarehouseStockItem"
+
+  /stock/transfer:
+    post:
+      operationId: transferStock
+      tags: [stock]
+      summary: Transfer stock from warehouse to truck
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/StockTransferBody"
+      responses:
+        "200":
+          description: Transfer completed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StockTransfer"
+
+  /stock/transfers:
+    get:
+      operationId: listStockTransfers
+      tags: [stock]
+      summary: List stock transfers
+      responses:
+        "200":
+          description: List of transfers
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/StockTransfer"
+
+  # INVOICES
+  /invoices:
+    get:
+      operationId: listInvoices
+      tags: [invoices]
+      summary: List invoices
+      parameters:
+        - name: truckId
+          in: query
+          schema:
+            type: integer
+        - name: clientId
+          in: query
+          schema:
+            type: integer
+        - name: dateFrom
+          in: query
+          schema:
+            type: string
+            format: date
+        - name: dateTo
+          in: query
+          schema:
+            type: string
+            format: date
+        - name: paymentType
+          in: query
+          schema:
+            type: string
+            enum: [cash, credit]
+      responses:
+        "200":
+          description: List of invoices
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Invoice"
+    post:
+      operationId: createInvoice
+      tags: [invoices]
+      summary: Create invoice
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateInvoiceBody"
+      responses:
+        "201":
+          description: Invoice created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Invoice"
+
+  /invoices/{id}:
+    get:
+      operationId: getInvoice
+      tags: [invoices]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      summary: Get invoice
+      responses:
+        "200":
+          description: Invoice
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Invoice"
+    delete:
+      operationId: deleteInvoice
+      tags: [invoices]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      summary: Delete invoice
+      responses:
+        "204":
+          description: Deleted
+
+  # RETURNS
+  /returns:
+    get:
+      operationId: listReturns
+      tags: [returns]
+      summary: List returns
+      responses:
+        "200":
+          description: List of returns
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Return"
+    post:
+      operationId: createReturn
+      tags: [returns]
+      summary: Create return
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateReturnBody"
+      responses:
+        "201":
+          description: Return created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Return"
+
+  /returns/{id}:
+    get:
+      operationId: getReturn
+      tags: [returns]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      summary: Get return
+      responses:
+        "200":
+          description: Return
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Return"
+
+  /trucks/me/cash:
+    get:
+      operationId: getMyTruckCash
+      tags: [trucks]
+      summary: Get current truck cash balance and transfer history
+      responses:
+        "200":
+          description: Truck cash details
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TruckCashDetail"
+
+  /trucks/me/cash/transfer:
+    post:
+      operationId: createMyTruckCashTransfer
+      tags: [trucks]
+      summary: Request cash transfer to admin (truck-authenticated)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TruckCashTransferBody"
+      responses:
+        "201":
+          description: Transfer request created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CashTransfer"
+
+  # CASH
+  /cash/trucks/{truckId}:
+    get:
+      operationId: getTruckCash
+      tags: [cash]
+      parameters:
+        - name: truckId
+          in: path
+          required: true
+          schema:
+            type: integer
+      summary: Get truck cash balance
+      responses:
+        "200":
+          description: Truck cash
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TruckCash"
+
+  /cash/transfers:
+    get:
+      operationId: listCashTransfers
+      tags: [cash]
+      summary: List cash transfer requests
+      responses:
+        "200":
+          description: List of cash transfers
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/CashTransfer"
+    post:
+      operationId: createCashTransfer
+      tags: [cash]
+      summary: Request cash transfer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateCashTransferBody"
+      responses:
+        "201":
+          description: Transfer request created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CashTransfer"
+
+  /cash/transfers/{id}/approve:
+    post:
+      operationId: approveCashTransfer
+      tags: [cash]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      summary: Approve cash transfer
+      responses:
+        "200":
+          description: Transfer approved
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CashTransfer"
+
+  /cash/transfers/{id}/reject:
+    post:
+      operationId: rejectCashTransfer
+      tags: [cash]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      summary: Reject cash transfer
+      responses:
+        "200":
+          description: Transfer rejected
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CashTransfer"
+
+  # REPORTS
+  /reports/dashboard:
+    get:
+      operationId: getDashboardStats
+      tags: [reports]
+      summary: Get dashboard statistics
+      responses:
+        "200":
+          description: Dashboard stats
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DashboardStats"
+
+  /reports/daily:
+    get:
+      operationId: getDailyReport
+      tags: [reports]
+      summary: Get daily sales report
+      parameters:
+        - name: date
+          in: query
+          schema:
+            type: string
+            format: date
+        - name: truckId
+          in: query
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Daily report
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DailyReport"
+
+  /reports/trucks:
+    get:
+      operationId: getTruckPerformance
+      tags: [reports]
+      summary: Get truck performance report
+      parameters:
+        - name: dateFrom
+          in: query
+          schema:
+            type: string
+            format: date
+        - name: dateTo
+          in: query
+          schema:
+            type: string
+            format: date
+      responses:
+        "200":
+          description: Truck performance
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/TruckPerformance"
+
+  /reports/debts:
+    get:
+      operationId: getDebtsReport
+      tags: [reports]
+      summary: Get debts report (clients + suppliers)
+      responses:
+        "200":
+          description: Debts report
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DebtsReport"
+
+  /reports/top-products:
+    get:
+      operationId: getTopProducts
+      tags: [reports]
+      summary: Get top selling products
+      parameters:
+        - name: limit
+          in: query
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Top products
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/TopProduct"
+
+components:
+  schemas:
+    HealthStatus:
+      type: object
+      properties:
+        status:
+          type: string
+      required:
+        - status
+
+    LoginBody:
+      type: object
+      properties:
+        username:
+          type: string
+        password:
+          type: string
+      required:
+        - username
+        - password
+
+    LoginResponse:
+      type: object
+      properties:
+        user:
+          $ref: "#/components/schemas/User"
+        token:
+          type: string
+      required:
+        - user
+
+    User:
+      type: object
+      properties:
+        id:
+          type: integer
+        username:
+          type: string
+        fullName:
+          type: string
+        role:
+          type: string
+          enum: [admin, vendeur, truck]
+        truckId:
+          type: integer
+          nullable: true
+        canDeleteInvoice:
+          type: boolean
+        canEditPrice:
+          type: boolean
+        canSellOnCredit:
+          type: boolean
+        canViewReports:
+          type: boolean
+        createdAt:
+          type: string
+          format: date-time
+      required:
+        - id
+        - username
+        - fullName
+        - role
+        - canDeleteInvoice
+        - canEditPrice
+        - canSellOnCredit
+        - canViewReports
+        - createdAt
+
+    CreateUserBody:
+      type: object
+      properties:
+        username:
+          type: string
+        password:
+          type: string
+        fullName:
+          type: string
+        role:
+          type: string
+          enum: [admin, vendeur]
+        truckId:
+          type: integer
+          nullable: true
+        canDeleteInvoice:
+          type: boolean
+        canEditPrice:
+          type: boolean
+        canSellOnCredit:
+          type: boolean
+        canViewReports:
+          type: boolean
+      required:
+        - username
+        - password
+        - fullName
+        - role
+
+    UpdateUserBody:
+      type: object
+      properties:
+        fullName:
+          type: string
+        role:
+          type: string
+          enum: [admin, vendeur]
+        truckId:
+          type: integer
+          nullable: true
+        canDeleteInvoice:
+          type: boolean
+        canEditPrice:
+          type: boolean
+        canSellOnCredit:
+          type: boolean
+        canViewReports:
+          type: boolean
+
+    Category:
+      type: object
+      properties:
+        id:
+          type: integer
+        name:
+          type: string
+        createdAt:
+          type: string
+          format: date-time
+      required:
+        - id
+        - name
+        - createdAt
+
+    CreateCategoryBody:
+      type: object
+      properties:
+        name:
+          type: string
+      required:
+        - name
+
+    Product:
+      type: object
+      properties:
+        id:
+          type: integer
+        name:
+          type: string
+        barcode:
+          type: string
+          nullable: true
+        categoryId:
+          type: integer
+          nullable: true
+        categoryName:
+          type: string
+          nullable: true
+        stockQuantity:
+          type: number
+        purchasePrice:
+          type: number
+        sellingPriceRetail:
+          type: number
+        sellingPriceHalfWholesale:
+          type: number
+        sellingPriceWholesale:
+          type: number
+        commissionRetail:
+          type: number
+        commissionHalf:
+          type: number
+        commissionWholesale:
+          type: number
+        imageUrl:
+          type: string
+          nullable: true
+        unit:
+          type: string
+        createdAt:
+          type: string
+          format: date-time
+      required:
+        - id
+        - name
+        - stockQuantity
+        - purchasePrice
+        - sellingPriceRetail
+        - sellingPriceHalfWholesale
+        - sellingPriceWholesale
+        - commissionRetail
+        - commissionHalf
+        - commissionWholesale
+        - unit
+        - createdAt
+
+    CreateProductBody:
+      type: object
+      properties:
+        name:
+          type: string
+        barcode:
+          type: string
+          nullable: true
+        categoryId:
+          type: integer
+          nullable: true
+        stockQuantity:
+          type: number
+        purchasePrice:
+          type: number
+        sellingPriceRetail:
+          type: number
+        sellingPriceHalfWholesale:
+          type: number
+        sellingPriceWholesale:
+          type: number
+        commissionRetail:
+          type: number
+        commissionHalf:
+          type: number
+        commissionWholesale:
+          type: number
+        imageUrl:
+          type: string
+          nullable: true
+        unit:
+          type: string
+      required:
+        - name
+        - stockQuantity
+        - purchasePrice
+        - sellingPriceRetail
+        - sellingPriceHalfWholesale
+        - sellingPriceWholesale
+        - commissionRetail
+        - commissionHalf
+        - commissionWholesale
+        - unit
+
+    Supplier:
+      type: object
+      properties:
+        id:
+          type: integer
+        name:
+          type: string
+        phone:
+          type: string
+          nullable: true
+        email:
+          type: string
+          nullable: true
+        balance:
+          type: number
+        createdAt:
+          type: string
+          format: date-time
+      required:
+        - id
+        - name
+        - balance
+        - createdAt
+
+    CreateSupplierBody:
+      type: object
+      properties:
+        name:
+          type: string
+        phone:
+          type: string
+          nullable: true
+        email:
+          type: string
+          nullable: true
+        balance:
+          type: number
+      required:
+        - name
+
+    Purchase:
+      type: object
+      properties:
+        id:
+          type: integer
+        supplierId:
+          type: integer
+        supplierName:
+          type: string
+        totalAmount:
+          type: number
+        paidAmount:
+          type: number
+        remainingAmount:
+          type: number
+        paymentStatus:
+          type: string
+          enum: [pending, partial, paid]
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/PurchaseItem"
+        createdAt:
+          type: string
+          format: date-time
+      required:
+        - id
+        - supplierId
+        - supplierName
+        - totalAmount
+        - paidAmount
+        - remainingAmount
+        - paymentStatus
+        - items
+        - createdAt
+
+    PurchaseItem:
+      type: object
+      properties:
+        id:
+          type: integer
+        productId:
+          type: integer
+        productName:
+          type: string
+        quantity:
+          type: number
+        purchasePrice:
+          type: number
+        subtotal:
+          type: number
+      required:
+        - id
+        - productId
+        - productName
+        - quantity
+        - purchasePrice
+        - subtotal
+
+    CreatePurchaseBody:
+      type: object
+      properties:
+        supplierId:
+          type: integer
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/PurchaseItemInput"
+        initialPayment:
+          type: number
+      required:
+        - supplierId
+        - items
+
+    PurchaseItemInput:
+      type: object
+      properties:
+        productId:
+          type: integer
+        quantity:
+          type: number
+        purchasePrice:
+          type: number
+      required:
+        - productId
+        - quantity
+        - purchasePrice
+
+    PurchasePaymentBody:
+      type: object
+      properties:
+        amount:
+          type: number
+      required:
+        - amount
+
+    ClientType:
+      type: string
+      enum: [retail, half_wholesale, wholesale]
+
+    Client:
+      type: object
+      properties:
+        id:
+          type: integer
+        name:
+          type: string
+        phone:
+          type: string
+          nullable: true
+        clientType:
+          $ref: "#/components/schemas/ClientType"
+        latitude:
+          type: number
+          nullable: true
+        longitude:
+          type: number
+          nullable: true
+        balance:
+          type: number
+        createdAt:
+          type: string
+          format: date-time
+      required:
+        - id
+        - name
+        - clientType
+        - balance
+        - createdAt
+
+    CreateClientBody:
+      type: object
+      properties:
+        name:
+          type: string
+        phone:
+          type: string
+          nullable: true
+        clientType:
+          $ref: "#/components/schemas/ClientType"
+        latitude:
+          type: number
+          nullable: true
+        longitude:
+          type: number
+          nullable: true
+      required:
+        - name
+
+    Truck:
+      type: object
+      properties:
+        id:
+          type: integer
+        name:
+          type: string
+        plateNumber:
+          type: string
+          nullable: true
+        vendeurId:
+          type: integer
+          nullable: true
+        vendeurName:
+          type: string
+          nullable: true
+        driverName:
+          type: string
+          nullable: true
+        location:
+          type: string
+          nullable: true
+        cashBalance:
+          type: number
+        latitude:
+          type: number
+          nullable: true
+        longitude:
+          type: number
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+      required:
+        - id
+        - name
+        - cashBalance
+        - createdAt
+
+    CreateTruckBody:
+      type: object
+      properties:
+        name:
+          type: string
+        plateNumber:
+          type: string
+          nullable: true
+        vendeurId:
+          type: integer
+          nullable: true
+        driverName:
+          type: string
+          nullable: true
+        password:
+          type: string
+          nullable: true
+        location:
+          type: string
+          nullable: true
+      required:
+        - name
+
+    TruckLoginBody:
+      type: object
+      properties:
+        truckName:
+          type: string
+        password:
+          type: string
+      required:
+        - truckName
+        - password
+
+    TruckStockItem:
+      type: object
+      properties:
+        productId:
+          type: integer
+        productName:
+          type: string
+        quantity:
+          type: number
+        unit:
+          type: string
+        imageUrl:
+          type: string
+          nullable: true
+        sellingPriceRetail:
+          type: number
+        sellingPriceHalfWholesale:
+          type: number
+        sellingPriceWholesale:
+          type: number
+      required:
+        - productId
+        - productName
+        - quantity
+        - unit
+        - sellingPriceRetail
+        - sellingPriceHalfWholesale
+        - sellingPriceWholesale
+
+    WarehouseStockItem:
+      type: object
+      properties:
+        productId:
+          type: integer
+        productName:
+          type: string
+        categoryName:
+          type: string
+          nullable: true
+        quantity:
+          type: number
+        unit:
+          type: string
+        purchasePrice:
+          type: number
+      required:
+        - productId
+        - productName
+        - quantity
+        - unit
+        - purchasePrice
+
+    StockTransferBody:
+      type: object
+      properties:
+        truckId:
+          type: integer
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/StockTransferItemInput"
+      required:
+        - truckId
+        - items
+
+    StockTransferItemInput:
+      type: object
+      properties:
+        productId:
+          type: integer
+        quantity:
+          type: number
+      required:
+        - productId
+        - quantity
+
+    StockTransfer:
+      type: object
+      properties:
+        id:
+          type: integer
+        truckId:
+          type: integer
+        truckName:
+          type: string
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/StockTransferItem"
+        createdAt:
+          type: string
+          format: date-time
+      required:
+        - id
+        - truckId
+        - truckName
+        - items
+        - createdAt
+
+    StockTransferItem:
+      type: object
+      properties:
+        productId:
+          type: integer
+        productName:
+          type: string
+        quantity:
+          type: number
+      required:
+        - productId
+        - productName
+        - quantity
+
+    Invoice:
+      type: object
+      properties:
+        id:
+          type: integer
+        invoiceNumber:
+          type: string
+        truckId:
+          type: integer
+        truckName:
+          type: string
+        clientId:
+          type: integer
+        clientName:
+          type: string
+        paymentType:
+          type: string
+          enum: [cash, credit]
+        totalAmount:
+          type: number
+        totalCommission:
+          type: number
+        latitude:
+          type: number
+          nullable: true
+        longitude:
+          type: number
+          nullable: true
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/InvoiceItem"
+        createdAt:
+          type: string
+          format: date-time
+      required:
+        - id
+        - invoiceNumber
+        - truckId
+        - truckName
+        - clientId
+        - clientName
+        - paymentType
+        - totalAmount
+        - totalCommission
+        - items
+        - createdAt
+
+    InvoiceItem:
+      type: object
+      properties:
+        id:
+          type: integer
+        productId:
+          type: integer
+        productName:
+          type: string
+        quantity:
+          type: number
+        priceType:
+          type: string
+          enum: [retail, half_wholesale, wholesale]
+        unitPrice:
+          type: number
+        commission:
+          type: number
+        subtotal:
+          type: number
+      required:
+        - id
+        - productId
+        - productName
+        - quantity
+        - priceType
+        - unitPrice
+        - commission
+        - subtotal
+
+    CreateTruckSaleBody:
+      type: object
+      properties:
+        clientId:
+          type: integer
+          nullable: true
+        newClient:
+          type: object
+          nullable: true
+          properties:
+            name:
+              type: string
+            phone:
+              type: string
+              nullable: true
+            clientType:
+              type: string
+              enum: [retail, half_wholesale, wholesale]
+          required:
+            - name
+            - clientType
+        paymentType:
+          type: string
+          enum: [cash, credit]
+        latitude:
+          type: number
+          nullable: true
+        longitude:
+          type: number
+          nullable: true
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/InvoiceItemInput"
+      required:
+        - paymentType
+        - items
+
+    CreateInvoiceBody:
+      type: object
+      properties:
+        truckId:
+          type: integer
+        clientId:
+          type: integer
+        paymentType:
+          type: string
+          enum: [cash, credit]
+        latitude:
+          type: number
+          nullable: true
+        longitude:
+          type: number
+          nullable: true
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/InvoiceItemInput"
+      required:
+        - truckId
+        - clientId
+        - paymentType
+        - items
+
+    InvoiceItemInput:
+      type: object
+      properties:
+        productId:
+          type: integer
+        quantity:
+          type: number
+        priceType:
+          type: string
+          enum: [retail, half_wholesale, wholesale]
+        unitPrice:
+          type: number
+      required:
+        - productId
+        - quantity
+        - priceType
+        - unitPrice
+
+    Return:
+      type: object
+      properties:
+        id:
+          type: integer
+        type:
+          type: string
+          enum: [client_return, truck_return]
+        truckId:
+          type: integer
+          nullable: true
+        truckName:
+          type: string
+          nullable: true
+        clientId:
+          type: integer
+          nullable: true
+        clientName:
+          type: string
+          nullable: true
+        invoiceId:
+          type: integer
+          nullable: true
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/ReturnItem"
+        totalAmount:
+          type: number
+        createdAt:
+          type: string
+          format: date-time
+      required:
+        - id
+        - type
+        - items
+        - totalAmount
+        - createdAt
+
+    ReturnItem:
+      type: object
+      properties:
+        productId:
+          type: integer
+        productName:
+          type: string
+        quantity:
+          type: number
+        unitPrice:
+          type: number
+        subtotal:
+          type: number
+      required:
+        - productId
+        - productName
+        - quantity
+        - unitPrice
+        - subtotal
+
+    CreateReturnBody:
+      type: object
+      properties:
+        type:
+          type: string
+          enum: [client_return, truck_return]
+        truckId:
+          type: integer
+          nullable: true
+        clientId:
+          type: integer
+          nullable: true
+        invoiceId:
+          type: integer
+          nullable: true
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/ReturnItemInput"
+      required:
+        - type
+        - items
+
+    ReturnItemInput:
+      type: object
+      properties:
+        productId:
+          type: integer
+        quantity:
+          type: number
+        unitPrice:
+          type: number
+      required:
+        - productId
+        - quantity
+        - unitPrice
+
+    TruckCash:
+      type: object
+      properties:
+        truckId:
+          type: integer
+        truckName:
+          type: string
+        cashBalance:
+          type: number
+        pendingTransfers:
+          type: number
+      required:
+        - truckId
+        - truckName
+        - cashBalance
+        - pendingTransfers
+
+    CashTransfer:
+      type: object
+      properties:
+        id:
+          type: integer
+        truckId:
+          type: integer
+        truckName:
+          type: string
+        amount:
+          type: number
+        status:
+          type: string
+          enum: [pending, approved, rejected]
+        note:
+          type: string
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+      required:
+        - id
+        - truckId
+        - truckName
+        - amount
+        - status
+        - createdAt
+
+    TruckCashDetail:
+      type: object
+      properties:
+        truckId:
+          type: integer
+        truckName:
+          type: string
+        cashBalance:
+          type: number
+        totalCashSales:
+          type: number
+        totalTransferred:
+          type: number
+        pendingAmount:
+          type: number
+        transfers:
+          type: array
+          items:
+            $ref: "#/components/schemas/CashTransfer"
+      required:
+        - truckId
+        - truckName
+        - cashBalance
+        - totalCashSales
+        - totalTransferred
+        - pendingAmount
+        - transfers
+
+    TruckCashTransferBody:
+      type: object
+      properties:
+        amount:
+          type: number
+        note:
+          type: string
+          nullable: true
+      required:
+        - amount
+
+    CreateCashTransferBody:
+      type: object
+      properties:
+        truckId:
+          type: integer
+        amount:
+          type: number
+        note:
+          type: string
+          nullable: true
+      required:
+        - truckId
+        - amount
+
+    DashboardStats:
+      type: object
+      properties:
+        todaySales:
+          type: number
+        todayCashSales:
+          type: number
+        todayCreditSales:
+          type: number
+        todayInvoices:
+          type: integer
+        monthSales:
+          type: number
+        totalClients:
+          type: integer
+        totalClientsDebt:
+          type: number
+        totalSuppliersDebt:
+          type: number
+        activeTrucks:
+          type: integer
+        lowStockProducts:
+          type: integer
+        pendingCashTransfers:
+          type: integer
+        recentInvoices:
+          type: array
+          items:
+            $ref: "#/components/schemas/Invoice"
+      required:
+        - todaySales
+        - todayCashSales
+        - todayCreditSales
+        - todayInvoices
+        - monthSales
+        - totalClients
+        - totalClientsDebt
+        - totalSuppliersDebt
+        - activeTrucks
+        - lowStockProducts
+        - pendingCashTransfers
+        - recentInvoices
+
+    DailyReport:
+      type: object
+      properties:
+        date:
+          type: string
+        totalSales:
+          type: number
+        cashSales:
+          type: number
+        creditSales:
+          type: number
+        totalCommission:
+          type: number
+        invoiceCount:
+          type: integer
+        topProducts:
+          type: array
+          items:
+            $ref: "#/components/schemas/TopProduct"
+        byTruck:
+          type: array
+          items:
+            $ref: "#/components/schemas/TruckPerformance"
+      required:
+        - date
+        - totalSales
+        - cashSales
+        - creditSales
+        - totalCommission
+        - invoiceCount
+        - topProducts
+        - byTruck
+
+    TruckPerformance:
+      type: object
+      properties:
+        truckId:
+          type: integer
+        truckName:
+          type: string
+        vendeurName:
+          type: string
+          nullable: true
+        totalSales:
+          type: number
+        cashSales:
+          type: number
+        creditSales:
+          type: number
+        totalCommission:
+          type: number
+        invoiceCount:
+          type: integer
+      required:
+        - truckId
+        - truckName
+        - totalSales
+        - cashSales
+        - creditSales
+        - totalCommission
+        - invoiceCount
+
+    DebtsReport:
+      type: object
+      properties:
+        clientDebts:
+          type: array
+          items:
+            $ref: "#/components/schemas/ClientDebt"
+        supplierDebts:
+          type: array
+          items:
+            $ref: "#/components/schemas/SupplierDebt"
+        totalClientDebt:
+          type: number
+        totalSupplierDebt:
+          type: number
+      required:
+        - clientDebts
+        - supplierDebts
+        - totalClientDebt
+        - totalSupplierDebt
+
+    ClientDebt:
+      type: object
+      properties:
+        clientId:
+          type: integer
+        clientName:
+          type: string
+        phone:
+          type: string
+          nullable: true
+        debtAmount:
+          type: number
+      required:
+        - clientId
+        - clientName
+        - debtAmount
+
+    SupplierDebt:
+      type: object
+      properties:
+        supplierId:
+          type: integer
+        supplierName:
+          type: string
+        phone:
+          type: string
+          nullable: true
+        debtAmount:
+          type: number
+      required:
+        - supplierId
+        - supplierName
+        - debtAmount
+
+    TopProduct:
+      type: object
+      properties:
+        productId:
+          type: integer
+        productName:
+          type: string
+        totalQuantity:
+          type: number
+        totalRevenue:
+          type: number
+        invoiceCount:
+          type: integer
+      required:
+        - productId
+        - productName
+        - totalQuantity
+        - totalRevenue
+        - invoiceCount
+
+    ProductImageUploadResponse:
+      type: object
+      required: [imageUrl]
+      properties:
+        imageUrl:
+          type: string
+          description: The URL to use when displaying or storing the uploaded image.
+
+    UploadUrlRequest:
+      type: object
+      required: [name, size, contentType]
+      properties:
+        name:
+          type: string
+          minLength: 1
+        size:
+          type: integer
+          minimum: 1
+        contentType:
+          type: string
+          minLength: 1
+    UploadUrlResponse:
+      type: object
+      required: [uploadURL, objectPath]
+      properties:
+        uploadURL:
+          type: string
+          format: uri
+        objectPath:
+          type: string
+        metadata:
+          $ref: '#/components/schemas/UploadUrlRequest'

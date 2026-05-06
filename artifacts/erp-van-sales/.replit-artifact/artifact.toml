@@ -1,0 +1,31 @@
+kind = "web"
+previewPath = "/"
+title = "ERP Van Sales"
+version = "1.0.0"
+id = "artifacts/erp-van-sales"
+router = "path"
+
+[[integratedSkills]]
+name = "react-vite"
+version = "1.0.0"
+
+[[services]]
+name = "web"
+paths = [ "/" ]
+localPort = 22606
+
+[services.development]
+run = "pnpm --filter @workspace/erp-van-sales run dev"
+
+[services.production]
+build = [ "pnpm", "--filter", "@workspace/erp-van-sales", "run", "build" ]
+publicDir = "artifacts/erp-van-sales/dist/public"
+serve = "static"
+
+[[services.production.rewrites]]
+from = "/*"
+to = "/index.html"
+
+[services.env]
+PORT = "22606"
+BASE_PATH = "/"

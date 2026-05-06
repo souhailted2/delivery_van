@@ -1,0 +1,169 @@
+Create a full professional ERP + Van Sales system using Python Flask (backend) and HTML/CSS/JavaScript (frontend), mobile-friendly.
+
+## GENERAL REQUIREMENTS
+- Language: French (UI labels)
+- Currency: DZD
+- Offline support for mobile (truck app using local SQLite + sync later)
+- Role-based system (Admin / Vendeur)
+
+---
+
+## MODULE 1: PRODUCTS
+- Fields:
+  - name
+  - category
+  - stock_quantity (central warehouse)
+  - purchase_price (per kg or unit)
+  - selling_price_retail
+  - selling_price_half_wholesale
+  - selling_price_wholesale
+  - commission_retail (%)
+  - commission_half (%)
+  - commission_wholesale (%)
+  - image
+
+---
+
+## MODULE 2: SUPPLIERS (FOURNISSEURS)
+- name
+- phone
+- email
+- balance
+
+### Purchases:
+- create "Bon d'achat"
+- add products + quantity + purchase price
+- total amount
+- payment:
+  - full
+  - partial
+- track supplier debt
+
+---
+
+## MODULE 3: STOCK MANAGEMENT
+- Central warehouse stock
+- Truck stock (each truck has its own stock)
+
+### Transfer to truck:
+- select truck
+- select products + quantities
+- decrease warehouse stock
+- increase truck stock
+
+---
+
+## MODULE 4: TRUCK (VENDEUR APP - OFFLINE)
+- Works without internet (local database)
+- Sync when internet is available
+
+### Features:
+- view products (with images)
+- select client
+- create invoice:
+  - choose product
+  - quantity
+  - price type:
+    - retail / half / wholesale
+  - auto price calculation
+  - commission auto calculation
+
+### Payment:
+- cash
+- credit (client debt)
+
+### Bluetooth printing:
+- print invoice مباشرة
+
+---
+
+## MODULE 5: CLIENTS
+- name
+- phone
+- GPS location (latitude, longitude)
+
+---
+
+## MODULE 6: GPS
+- Track truck location
+- Save client location عند أول زيارة
+- Link invoice to GPS position
+
+---
+
+## MODULE 7: CASH MANAGEMENT (TRUCK)
+- Track cash in hand per truck
+
+### Transfer money:
+- vendeur sends transfer request
+- admin:
+  - accept → deduct cash
+  - reject → keep pending
+
+---
+
+## MODULE 8: RETURNS
+- Return products from client
+- Return products from truck to warehouse
+
+---
+
+## MODULE 9: REPORTS
+### Daily reports:
+- total sales
+- cash sales
+- credit sales
+- commissions
+- best products
+
+### Admin reports:
+- per truck performance
+- supplier debts
+- client debts
+- profit estimation
+
+---
+
+## MODULE 10: PERMISSIONS
+Roles:
+- Admin
+- Vendeur
+
+Permissions configurable:
+- delete invoice
+- edit price
+- sell on credit
+- view reports
+
+---
+
+## MODULE 11: OPTIONAL BARCODE
+- Add barcode field but not required to use
+
+---
+
+## TECHNICAL:
+- Backend: Flask + SQLAlchemy
+- Database:
+  - central (SQLite or PostgreSQL)
+  - mobile local SQLite
+- Sync API بين الهاتف والسيرفر
+- Clean UI dashboard
+- Mobile responsive
+
+---
+
+## BONUS:
+- Export PDF invoices
+- Export Excel reports
+
+---
+
+Build the full project structure with:
+- models.py
+- routes.py
+- templates/
+- static/
+- API for sync
+
+Make it ready to run step-by-step.

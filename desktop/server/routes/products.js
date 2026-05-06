@@ -1,0 +1,160 @@
+const { Router } = require("express");
+const { getDb } = require("../db");
+const { getUserDataPath } = require("../config");
+const multer = require("multer");
+const path = require("path");
+const fs = require("fs");
+const crypto = require("crypto");
+
+const router = Router();
+
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 20 * 1024 * 1024 },
+  fileFilter: (_req, file, cb) => {
+    if (file.mimetype.startsWith("image/")) cb(null, true);
+    else cb(new Error("يُسمح برفع ملفات الصور فقط"));
+  },
+});
+
+router.post("/products/upload-image", (req, res, next) => {
+  if (!req.session?.userId && !req.session?.truckId) {
+    return res.status(401).json({ error: "Non authentifié" });
+  }
+  next();
+}, (req, res, next) => {
+  upload.single("file")(req, res, (err) => {
+    if (err) return res.status(400).json({ error: err.message || "خطأ في معالجة الملف" });
+    next();
+  });
+}, (req, res) => {
+  if (!req.file) return res.status(400).json({ error: "ملف الصورة مطلوب" });
+  try {
+    const uploadsDir = path.join(getUserDataPath(), "uploads");
+    fs.mkdirSync(uploadsDir, { recursive: true });
+    const filename = `${crypto.randomUUID()}.jpg`;
+    fs.writeFileSync(path.join(uploadsDir, filename), req.file.buffer);
+    res.json({ imageUrl: `/api/storage/uploads/${filename}` });
+  } catch (err) {
+    console.error("Image upload error:", err);
+    res.status(500).json({ error: "حدث خطأ أثناء حفظ الصورة" });
+  }
+});
+
+router.get("/storage/uploads/:filename", (req, res) => {
+  const filename = path.basename(req.params.filename);
+  const filePath = path.join(getUserDataPath(), "uploads", filename);
+  if (!fs.existsSync(filePath)) return res.status(404).json({ error: "الملف غير موجود" });
+  res.setHeader("Content-Type", "image/jpeg");
+  res.sendFile(filePath);
+});
+
+function formatProduct(p) {
+  return {
+    id: p.id, name: p.name, barcode: p.barcode,
+    categoryId: p.category_id, categoryName: p.category_name,
+    stockQuantity: Number(p.stock_quantity ?? 0),
+    purchasePrice: Number(p.purchase_price ?? 0),
+    sellingPriceRetail: Number(p.selling_price_retail ?? 0),
+    sellingPriceHalfWholesale: Number(p.selling_price_half_wholesale ?? 0),
+    sellingPriceWholesale: Number(p.selling_price_wholesale ?? 0),
+    commissionRetail: Number(p.commission_retail ?? 0),
+    commissionHalf: Number(p.commission_half ?? 0),
+    commissionWholesale: Number(p.commission_wholesale ?? 0),
+    imageUrl: p.image_url, unit: p.unit, createdAt: p.created_at,
+  };
+}
+
+const SELECT_PRODUCT = `
+  SELECT p.*, c.name AS category_name
+  FROM products p LEFT JOIN categories c ON p.category_id = c.id
+`;
+
+router.get("/products", (req, res) => {
+  const { categoryId, search } = req.query;
+  const db = getDb();
+  let query = SELECT_PRODUCT;
+  const params = [];
+  const conds = [];
+  if (categoryId) { conds.push("p.category_id = ?"); params.push(parseInt(categoryId)); }
+  if (search) { conds.push("p.name LIKE ?"); params.push(`%${search}%`); }
+  if (conds.length) query += " WHERE " + conds.join(" AND ");
+  query += " ORDER BY p.name";
+  const products = db.prepare(query).all(...params);
+  res.json(products.map(formatProduct));
+});
+
+router.post("/products", (req, res) => {
+  const { name, barcode, categoryId, stockQuantity, purchasePrice, sellingPriceRetail,
+    sellingPriceHalfWholesale, sellingPriceWholesale, commissionRetail,
+    commissionHalf, commissionWholesale, imageUrl, unit } = req.body;
+  if (!name) return res.status(400).json({ error: "Nom requis" });
+  const db = getDb();
+  const info = db.prepare(`
+    INSERT INTO products (name, barcode, category_id, stock_quantity, purchase_price,
+      selling_price_retail, selling_price_half_wholesale, selling_price_wholesale,
+      commission_retail, commission_half, commission_wholesale, image_url, unit)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
+  `).run(name, barcode || null, categoryId || null,
+    Number(stockQuantity ?? 0), Number(purchasePrice ?? 0),
+    Number(sellingPriceRetail ?? 0), Number(sellingPriceHalfWholesale ?? 0),
+    Number(sellingPriceWholesale ?? 0), Number(commissionRetail ?? 0),
+    Number(commissionHalf ?? 0), Number(commissionWholesale ?? 0),
+    imageUrl || null, unit || "unité");
+  const product = db.prepare(SELECT_PRODUCT + " WHERE p.id = ?").get(info.lastInsertRowid);
+  res.status(201).json(formatProduct(product));
+});
+
+router.get("/products/:id", (req, res) => {
+  const db = getDb();
+  const product = db.prepare(SELECT_PRODUCT + " WHERE p.id = ?").get(parseInt(req.params.id));
+  if (!product) return res.status(404).json({ error: "Produit non trouvé" });
+  res.json(formatProduct(product));
+});
+
+router.put("/products/:id", (req, res) => {
+  const id = parseInt(req.params.id);
+  const db = getDb();
+  const existing = db.prepare("SELECT * FROM products WHERE id = ?").get(id);
+  if (!existing) return res.status(404).json({ error: "Produit non trouvé" });
+  const { name, barcode, categoryId, stockQuantity, purchasePrice, sellingPriceRetail,
+    sellingPriceHalfWholesale, sellingPriceWholesale, commissionRetail,
+    commissionHalf, commissionWholesale, imageUrl, unit } = req.body;
+  db.prepare(`
+    UPDATE products SET
+      name = COALESCE(?,name), barcode = COALESCE(?,barcode),
+      category_id = COALESCE(?,category_id),
+      stock_quantity = COALESCE(?,stock_quantity),
+      purchase_price = COALESCE(?,purchase_price),
+      selling_price_retail = COALESCE(?,selling_price_retail),
+      selling_price_half_wholesale = COALESCE(?,selling_price_half_wholesale),
+      selling_price_wholesale = COALESCE(?,selling_price_wholesale),
+      commission_retail = COALESCE(?,commission_retail),
+      commission_half = COALESCE(?,commission_half),
+      commission_wholesale = COALESCE(?,commission_wholesale),
+      image_url = COALESCE(?,image_url),
+      unit = COALESCE(?,unit)
+    WHERE id = ?
+  `).run(
+    name ?? null, barcode ?? null, categoryId ?? null,
+    stockQuantity != null ? Number(stockQuantity) : null,
+    purchasePrice != null ? Number(purchasePrice) : null,
+    sellingPriceRetail != null ? Number(sellingPriceRetail) : null,
+    sellingPriceHalfWholesale != null ? Number(sellingPriceHalfWholesale) : null,
+    sellingPriceWholesale != null ? Number(sellingPriceWholesale) : null,
+    commissionRetail != null ? Number(commissionRetail) : null,
+    commissionHalf != null ? Number(commissionHalf) : null,
+    commissionWholesale != null ? Number(commissionWholesale) : null,
+    imageUrl ?? null, unit ?? null, id
+  );
+  const product = db.prepare(SELECT_PRODUCT + " WHERE p.id = ?").get(id);
+  res.json(formatProduct(product));
+});
+
+router.delete("/products/:id", (req, res) => {
+  const db = getDb();
+  db.prepare("DELETE FROM products WHERE id = ?").run(parseInt(req.params.id));
+  res.status(204).send();
+});
+
+module.exports = router;

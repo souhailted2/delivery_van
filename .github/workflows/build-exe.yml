@@ -1,0 +1,83 @@
+name: Build Windows Installer (.exe)
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'desktop/**'
+      - 'artifacts/erp-van-sales/**'
+      - '.github/workflows/build-exe.yml'
+  workflow_dispatch:
+
+jobs:
+  build-windows:
+    name: Build .exe on Windows
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v3
+        with:
+          version: 9
+
+      - name: Install workspace dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build frontend (React + Vite)
+        run: |
+          $env:PORT = "22606"
+          $env:BASE_PATH = "/"
+          pnpm --filter @workspace/erp-van-sales run build
+        shell: pwsh
+
+      - name: Copy renderer to desktop
+        run: |
+          if (Test-Path "desktop/renderer") { Remove-Item -Recurse -Force "desktop/renderer" }
+          New-Item -ItemType Directory -Force "desktop/renderer" | Out-Null
+          Copy-Item -Recurse "artifacts/erp-van-sales/dist/public/*" "desktop/renderer/"
+        shell: pwsh
+
+      - name: Install desktop dependencies (with native modules)
+        working-directory: desktop
+        run: npm install
+
+      - name: Build Windows installer
+        working-directory: desktop
+        run: npm run dist
+        env:
+          GH_TOKEN: ${{ secrets.GH_TOKEN }}
+
+      - name: Upload installer artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ERP-Van-Sales-Windows-Installer
+          path: desktop/dist-installer/*.exe
+          if-no-files-found: error
+
+      - name: Create GitHub Release
+        if: github.ref == 'refs/heads/main'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ github.run_number }}
+          name: "ERP Van Sales v${{ github.run_number }}"
+          body: |
+            ## تطبيق Windows سطح المكتب
+
+            - يعمل بدون إنترنت (SQLite محلي)
+            - صور المنتجات تُحفظ محلياً
+            - مزامنة مع deleveri.alllal.com عند الاتصال
+
+            **التثبيت:** شغّل الملف `ERP Van Sales Setup X.X.X.exe` كمسؤول
+          files: desktop/dist-installer/*.exe
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
