@@ -2,6 +2,7 @@ import { Router, type IRouter } from "express";
 import healthRouter from "./health";
 import authRouter from "./auth";
 import usersRouter from "./users";
+import branchesRouter from "./branches";
 import categoriesRouter from "./categories";
 import productsRouter from "./products";
 import suppliersRouter from "./suppliers";
@@ -14,6 +15,8 @@ import returnsRouter from "./returns";
 import cashRouter from "./cash";
 import reportsRouter from "./reports";
 import storageRouter from "./storage";
+import settingsRouter from "./settings";
+import syncV2Router from "./sync-v2";
 
 const router: IRouter = Router();
 
@@ -21,6 +24,7 @@ router.use(healthRouter);
 router.use(storageRouter);
 router.use(authRouter);
 router.use(usersRouter);
+router.use(branchesRouter);
 router.use(categoriesRouter);
 router.use(productsRouter);
 router.use(suppliersRouter);
@@ -32,5 +36,7 @@ router.use(invoicesRouter);
 router.use(returnsRouter);
 router.use(cashRouter);
 router.use(reportsRouter);
+router.use(settingsRouter);
+router.use(syncV2Router);
 
 export default router;
