@@ -14,9 +14,17 @@ function initDb(userDataPath) {
   const dbPath = path.join(userDataPath, "erp-van-sales.db");
   fs.mkdirSync(userDataPath, { recursive: true });
   db = new Database(dbPath);
+
   db.pragma("journal_mode = WAL");
   db.pragma("foreign_keys = ON");
+  db.pragma("synchronous = NORMAL");
+  db.pragma("cache_size = -32000");
+  db.pragma("mmap_size = 268435456");
+  db.pragma("temp_store = MEMORY");
+  db.pragma("wal_autocheckpoint = 1000");
+
   createSchema();
+  createIndexes();
   seedDefaultAdmin();
   return db;
 }
@@ -199,8 +207,6 @@ function createSchema() {
       error TEXT
     );
 
-    -- Maps local SQLite IDs to remote server IDs for idempotent incremental sync.
-    -- entity_type: 'category' | 'supplier' | 'truck' | 'product' | 'client' | 'invoice' | 'return'
     CREATE TABLE IF NOT EXISTS sync_map (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       entity_type TEXT NOT NULL,
@@ -209,6 +215,54 @@ function createSchema() {
       synced_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')),
       UNIQUE(entity_type, local_id)
     );
+
+    CREATE TABLE IF NOT EXISTS other_branches_stock (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      branch_id INTEGER NOT NULL,
+      branch_name TEXT NOT NULL,
+      product_id INTEGER NOT NULL,
+      product_name TEXT NOT NULL,
+      quantity REAL NOT NULL DEFAULT 0,
+      unit TEXT NOT NULL DEFAULT 'unité',
+      fetched_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now'))
+    );
+  `);
+}
+
+function createIndexes() {
+  db.exec(`
+    CREATE INDEX IF NOT EXISTS idx_invoices_truck_id     ON invoices(truck_id);
+    CREATE INDEX IF NOT EXISTS idx_invoices_client_id    ON invoices(client_id);
+    CREATE INDEX IF NOT EXISTS idx_invoices_created_at   ON invoices(created_at);
+    CREATE INDEX IF NOT EXISTS idx_invoices_payment_type ON invoices(payment_type);
+
+    CREATE INDEX IF NOT EXISTS idx_invoice_items_invoice_id ON invoice_items(invoice_id);
+    CREATE INDEX IF NOT EXISTS idx_invoice_items_product_id ON invoice_items(product_id);
+
+    CREATE INDEX IF NOT EXISTS idx_truck_stock_truck_id    ON truck_stock(truck_id);
+    CREATE INDEX IF NOT EXISTS idx_truck_stock_product_id  ON truck_stock(product_id);
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_truck_stock_unique ON truck_stock(truck_id, product_id);
+
+    CREATE INDEX IF NOT EXISTS idx_clients_truck_id ON clients(truck_id);
+    CREATE INDEX IF NOT EXISTS idx_clients_name     ON clients(name);
+
+    CREATE INDEX IF NOT EXISTS idx_products_category_id ON products(category_id);
+    CREATE INDEX IF NOT EXISTS idx_products_name        ON products(name);
+
+    CREATE INDEX IF NOT EXISTS idx_purchase_items_purchase_id ON purchase_items(purchase_id);
+    CREATE INDEX IF NOT EXISTS idx_purchase_items_product_id  ON purchase_items(product_id);
+
+    CREATE INDEX IF NOT EXISTS idx_return_items_return_id  ON return_items(return_id);
+    CREATE INDEX IF NOT EXISTS idx_return_items_product_id ON return_items(product_id);
+
+    CREATE INDEX IF NOT EXISTS idx_returns_truck_id ON returns(truck_id);
+
+    CREATE INDEX IF NOT EXISTS idx_cash_transfers_truck_id ON cash_transfers(truck_id);
+    CREATE INDEX IF NOT EXISTS idx_cash_transfers_status   ON cash_transfers(status);
+
+    CREATE INDEX IF NOT EXISTS idx_stock_transfer_items_transfer_id ON stock_transfer_items(transfer_id);
+
+    CREATE INDEX IF NOT EXISTS idx_other_branches_stock_branch_id ON other_branches_stock(branch_id);
   `);
 }
 
@@ -222,4 +276,20 @@ function seedDefaultAdmin() {
   }
 }
 
-module.exports = { initDb, getDb, hashPassword };
+function closeDb() {
+  if (db) {
+    db.close();
+    db = null;
+  }
+}
+
+/**
+ * Atomic backup using better-sqlite3's built-in backup API.
+ * Handles WAL mode correctly — includes all committed transactions.
+ */
+async function backupDb(destPath) {
+  if (!db) throw new Error("Database not initialized.");
+  await db.backup(destPath);
+}
+
+module.exports = { initDb, getDb, hashPassword, closeDb, backupDb };
