@@ -24,6 +24,7 @@ router.get("/trucks", (_req, res) => {
   const trucks = db.prepare(`
     SELECT t.*, u.full_name AS vendeur_name
     FROM trucks t LEFT JOIN users u ON t.vendeur_id = u.id
+    WHERE t.is_deleted = 0
     ORDER BY t.name
   `).all();
   res.json(trucks.map(formatTruck));
@@ -49,7 +50,7 @@ router.get("/trucks/:id", (req, res) => {
   const db = getDb();
   const t = db.prepare(`
     SELECT t.*, u.full_name AS vendeur_name FROM trucks t
-    LEFT JOIN users u ON t.vendeur_id = u.id WHERE t.id = ?
+    LEFT JOIN users u ON t.vendeur_id = u.id WHERE t.id = ? AND t.is_deleted = 0
   `).get(parseInt(req.params.id));
   if (!t) return res.status(404).json({ error: "Camion non trouvé" });
   res.json(formatTruck(t));
@@ -59,7 +60,7 @@ router.put("/trucks/:id", (req, res) => {
   const id = parseInt(req.params.id);
   const { name, plateNumber, vendeurId, driverName, password, location } = req.body;
   const db = getDb();
-  const existing = db.prepare("SELECT * FROM trucks WHERE id = ?").get(id);
+  const existing = db.prepare("SELECT * FROM trucks WHERE id = ? AND is_deleted = 0").get(id);
   if (!existing) return res.status(404).json({ error: "Camion non trouvé" });
   db.prepare(`UPDATE trucks SET
     name = COALESCE(?,name), plate_number = COALESCE(?,plate_number),
@@ -78,7 +79,9 @@ router.put("/trucks/:id", (req, res) => {
 
 router.delete("/trucks/:id", (req, res) => {
   const db = getDb();
-  db.prepare("DELETE FROM trucks WHERE id = ?").run(parseInt(req.params.id));
+  db.prepare(
+    "UPDATE trucks SET is_deleted = 1, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id = ?"
+  ).run(parseInt(req.params.id));
   res.status(204).send();
 });
 
@@ -87,7 +90,7 @@ router.get("/trucks/:id/stock", (req, res) => {
   const stock = db.prepare(`
     SELECT ts.product_id, p.name AS product_name, ts.quantity, p.unit
     FROM truck_stock ts LEFT JOIN products p ON ts.product_id = p.id
-    WHERE ts.truck_id = ?
+    WHERE ts.truck_id = ? AND ts.is_deleted = 0
   `).all(parseInt(req.params.id));
   res.json(stock.map(s => ({ productId: s.product_id, productName: s.product_name, quantity: Number(s.quantity), unit: s.unit })));
 });
@@ -102,7 +105,7 @@ router.get("/trucks/me/stock", (req, res) => {
     SELECT ts.product_id, p.name AS product_name, ts.quantity, p.unit, p.image_url,
       p.selling_price_retail, p.selling_price_half_wholesale, p.selling_price_wholesale
     FROM truck_stock ts LEFT JOIN products p ON ts.product_id = p.id
-    WHERE ts.truck_id = ?
+    WHERE ts.truck_id = ? AND ts.is_deleted = 0
   `).all(truckId);
   res.json(stock.map(s => ({
     productId: s.product_id, productName: s.product_name, quantity: Number(s.quantity),
@@ -117,7 +120,7 @@ router.get("/trucks/me/clients", (req, res) => {
   const truckId = truckFromSession(req);
   if (!truckId) return res.status(401).json({ error: "Non authentifié comme camion" });
   const db = getDb();
-  const clients = db.prepare("SELECT * FROM clients WHERE truck_id = ? ORDER BY name").all(truckId);
+  const clients = db.prepare("SELECT * FROM clients WHERE truck_id = ? AND is_deleted = 0 ORDER BY name").all(truckId);
   res.json(clients.map(c => ({
     id: c.id, name: c.name, phone: c.phone, clientType: c.client_type,
     truckId: c.truck_id, latitude: c.latitude, longitude: c.longitude,
@@ -149,7 +152,7 @@ router.put("/trucks/me/clients/:id", (req, res) => {
   if (!name) return res.status(400).json({ error: "Nom requis" });
   const validTypes = ["retail", "half_wholesale", "wholesale"];
   const db = getDb();
-  const existing = db.prepare("SELECT * FROM clients WHERE id = ? AND truck_id = ?").get(clientId, truckId);
+  const existing = db.prepare("SELECT * FROM clients WHERE id = ? AND truck_id = ? AND is_deleted = 0").get(clientId, truckId);
   if (!existing) return res.status(404).json({ error: "Client non trouvé" });
   db.prepare(`UPDATE clients SET name = ?, phone = ?,
     client_type = ? WHERE id = ?`).run(
@@ -166,7 +169,7 @@ router.get("/trucks/me/vendeurs", (req, res) => {
   const vendeurs = db.prepare(`
     SELECT id,username,full_name,role,truck_id,can_delete_invoice,can_edit_price,
       can_sell_on_credit,can_view_reports,created_at
-    FROM users WHERE truck_id = ? AND role = 'vendeur' ORDER BY id
+    FROM users WHERE truck_id = ? AND role = 'vendeur' AND is_deleted = 0 ORDER BY id
   `).all(truckId);
   res.json(vendeurs.map(u => ({
     id: u.id, username: u.username, fullName: u.full_name, role: u.role,
@@ -210,7 +213,7 @@ router.post("/trucks/me/invoices", (req, res) => {
   const createInvoice = db.transaction(() => {
     let resolvedClientId = clientId;
     if (clientId) {
-      const existing = db.prepare("SELECT * FROM clients WHERE id = ? AND truck_id = ?").get(clientId, truckId);
+      const existing = db.prepare("SELECT * FROM clients WHERE id = ? AND truck_id = ? AND is_deleted = 0").get(clientId, truckId);
       if (!existing) throw { status: 403, message: "Client non autorisé" };
     }
     if (!clientId && newClient) {
@@ -236,7 +239,7 @@ router.post("/trucks/me/invoices", (req, res) => {
       const qty = Number(item.quantity);
       const unitPrice = Number(item.unitPrice);
       const subtotal = qty * unitPrice;
-      const product = db.prepare("SELECT * FROM products WHERE id = ?").get(parseInt(item.productId));
+      const product = db.prepare("SELECT * FROM products WHERE id = ? AND is_deleted = 0").get(parseInt(item.productId));
       let commissionRate = 0;
       if (product) {
         if (item.priceType === "retail") commissionRate = Number(product.commission_retail);
@@ -248,7 +251,7 @@ router.post("/trucks/me/invoices", (req, res) => {
         .run(invoiceId, parseInt(item.productId), qty, item.priceType || "retail", unitPrice, commission, subtotal);
       totalAmount += subtotal;
       totalCommission += commission;
-      const ts = db.prepare("SELECT * FROM truck_stock WHERE truck_id = ? AND product_id = ?").get(truckId, parseInt(item.productId));
+      const ts = db.prepare("SELECT * FROM truck_stock WHERE truck_id = ? AND product_id = ? AND is_deleted = 0").get(truckId, parseInt(item.productId));
       if (ts) {
         db.prepare("UPDATE truck_stock SET quantity = ? WHERE id = ?").run(Math.max(0, Number(ts.quantity) - qty), ts.id);
       }
@@ -256,11 +259,11 @@ router.post("/trucks/me/invoices", (req, res) => {
 
     db.prepare("UPDATE invoices SET total_amount = ?, total_commission = ? WHERE id = ?").run(totalAmount, totalCommission, invoiceId);
     if ((paymentType || "cash") === "cash") {
-      const truck = db.prepare("SELECT * FROM trucks WHERE id = ?").get(truckId);
+      const truck = db.prepare("SELECT * FROM trucks WHERE id = ? AND is_deleted = 0").get(truckId);
       if (truck) db.prepare("UPDATE trucks SET cash_balance = ? WHERE id = ?").run(Number(truck.cash_balance) + totalAmount, truckId);
     }
     if (paymentType === "credit") {
-      const client = db.prepare("SELECT * FROM clients WHERE id = ?").get(resolvedClientId);
+      const client = db.prepare("SELECT * FROM clients WHERE id = ? AND is_deleted = 0").get(resolvedClientId);
       if (client) db.prepare("UPDATE clients SET balance = ? WHERE id = ?").run(Number(client.balance) - totalAmount, resolvedClientId);
     }
     return invoiceId;
@@ -292,7 +295,7 @@ router.get("/trucks/me/invoices", (req, res) => {
   const invoices = db.prepare(`
     SELECT i.*, t.name AS truck_name, c.name AS client_name
     FROM invoices i LEFT JOIN trucks t ON i.truck_id = t.id LEFT JOIN clients c ON i.client_id = c.id
-    WHERE i.truck_id = ? ORDER BY i.created_at
+    WHERE i.truck_id = ? AND i.is_deleted = 0 ORDER BY i.created_at
   `).all(truckId);
   res.json(invoices.map(i => ({
     id: i.id, invoiceNumber: i.invoice_number, truckId: i.truck_id, truckName: i.truck_name,
@@ -310,12 +313,12 @@ router.get("/trucks/me/invoices/:id", (req, res) => {
   const inv = db.prepare(`
     SELECT i.*, t.name AS truck_name, c.name AS client_name
     FROM invoices i LEFT JOIN trucks t ON i.truck_id = t.id LEFT JOIN clients c ON i.client_id = c.id
-    WHERE i.id = ? AND i.truck_id = ?
+    WHERE i.id = ? AND i.truck_id = ? AND i.is_deleted = 0
   `).get(invoiceId, truckId);
   if (!inv) return res.status(404).json({ error: "Facture non trouvée" });
   const items = db.prepare(`
     SELECT ii.*, p.name AS product_name FROM invoice_items ii
-    LEFT JOIN products p ON ii.product_id = p.id WHERE ii.invoice_id = ?
+    LEFT JOIN products p ON ii.product_id = p.id WHERE ii.invoice_id = ? AND ii.is_deleted = 0
   `).all(invoiceId);
   res.json({
     id: inv.id, invoiceNumber: inv.invoice_number, truckId: inv.truck_id, truckName: inv.truck_name,
@@ -334,16 +337,28 @@ router.get("/trucks/me/cash", (req, res) => {
   const truckId = truckFromSession(req);
   if (!truckId) return res.status(401).json({ error: "Non authentifié comme camion" });
   const db = getDb();
-  const truck = db.prepare("SELECT * FROM trucks WHERE id = ?").get(truckId);
+  const truck = db.prepare("SELECT id, name, cash_balance FROM trucks WHERE id = ? AND is_deleted = 0").get(truckId);
   if (!truck) return res.status(404).json({ error: "Camion non trouvé" });
-  const allInvoices = db.prepare("SELECT payment_type, total_amount FROM invoices WHERE truck_id = ?").all(truckId);
-  const totalCashSales = allInvoices.filter(i => i.payment_type === "cash").reduce((s, i) => s + Number(i.total_amount), 0);
-  const transfers = db.prepare("SELECT * FROM cash_transfers WHERE truck_id = ? ORDER BY created_at").all(truckId);
-  const totalTransferred = transfers.filter(t => t.status === "approved").reduce((s, t) => s + Number(t.amount), 0);
-  const pendingAmount = transfers.filter(t => t.status === "pending").reduce((s, t) => s + Number(t.amount), 0);
+
+  const cashStats = db.prepare(`
+    SELECT COALESCE(SUM(CASE WHEN payment_type = 'cash' THEN total_amount ELSE 0 END), 0) AS total_cash_sales
+    FROM invoices WHERE truck_id = ? AND is_deleted = 0
+  `).get(truckId);
+
+  const transferStats = db.prepare(`
+    SELECT
+      COALESCE(SUM(CASE WHEN status = 'approved' THEN amount ELSE 0 END), 0) AS total_transferred,
+      COALESCE(SUM(CASE WHEN status = 'pending'  THEN amount ELSE 0 END), 0) AS pending_amount
+    FROM cash_transfers WHERE truck_id = ?
+  `).get(truckId);
+
+  const transfers = db.prepare("SELECT * FROM cash_transfers WHERE truck_id = ? ORDER BY created_at DESC").all(truckId);
+
   res.json({
     truckId: truck.id, truckName: truck.name, cashBalance: Number(truck.cash_balance),
-    totalCashSales, totalTransferred, pendingAmount,
+    totalCashSales:   Number(cashStats.total_cash_sales),
+    totalTransferred: Number(transferStats.total_transferred),
+    pendingAmount:    Number(transferStats.pending_amount),
     transfers: transfers.map(t => ({ ...t, amount: Number(t.amount), truckName: truck.name, createdAt: t.created_at })),
   });
 });
@@ -354,7 +369,7 @@ router.post("/trucks/me/cash/transfer", (req, res) => {
   const { amount, note } = req.body;
   if (!amount || Number(amount) <= 0) return res.status(400).json({ error: "Montant invalide" });
   const db = getDb();
-  const truck = db.prepare("SELECT * FROM trucks WHERE id = ?").get(truckId);
+  const truck = db.prepare("SELECT * FROM trucks WHERE id = ? AND is_deleted = 0").get(truckId);
   if (!truck) return res.status(404).json({ error: "Camion non trouvé" });
   if (Number(amount) > Number(truck.cash_balance)) {
     return res.status(400).json({ error: "Montant supérieur au solde disponible" });
