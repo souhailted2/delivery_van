@@ -71,17 +71,25 @@ const SELECT_PRODUCT = `
 `;
 
 router.get("/products", (req, res) => {
-  const { categoryId, search } = req.query;
+  const { categoryId, search, page, limit } = req.query;
   const db = getDb();
-  let query = SELECT_PRODUCT;
+  const conds = ["p.is_deleted = 0"];
   const params = [];
-  const conds = [];
   if (categoryId) { conds.push("p.category_id = ?"); params.push(parseInt(categoryId)); }
-  if (search) { conds.push("p.name LIKE ?"); params.push(`%${search}%`); }
-  if (conds.length) query += " WHERE " + conds.join(" AND ");
-  query += " ORDER BY p.name";
-  const products = db.prepare(query).all(...params);
-  res.json(products.map(formatProduct));
+  if (search)     { conds.push("p.name LIKE ?");      params.push(`%${search}%`); }
+  const where = " WHERE " + conds.join(" AND ");
+
+  if (page !== undefined || limit !== undefined) {
+    const pageNum  = Math.max(1, parseInt(page) || 1);
+    const pageSize = Math.min(500, Math.max(1, parseInt(limit) || 100));
+    const offset   = (pageNum - 1) * pageSize;
+    const products = db.prepare(SELECT_PRODUCT + where + " ORDER BY p.name LIMIT ? OFFSET ?")
+      .all(...params, pageSize, offset);
+    res.json(products.map(formatProduct));
+  } else {
+    const products = db.prepare(SELECT_PRODUCT + where + " ORDER BY p.name").all(...params);
+    res.json(products.map(formatProduct));
+  }
 });
 
 router.post("/products", (req, res) => {
@@ -101,13 +109,13 @@ router.post("/products", (req, res) => {
     Number(sellingPriceWholesale ?? 0), Number(commissionRetail ?? 0),
     Number(commissionHalf ?? 0), Number(commissionWholesale ?? 0),
     imageUrl || null, unit || "unité");
-  const product = db.prepare(SELECT_PRODUCT + " WHERE p.id = ?").get(info.lastInsertRowid);
+  const product = db.prepare(SELECT_PRODUCT + " WHERE p.id = ? AND p.is_deleted = 0").get(info.lastInsertRowid);
   res.status(201).json(formatProduct(product));
 });
 
 router.get("/products/:id", (req, res) => {
   const db = getDb();
-  const product = db.prepare(SELECT_PRODUCT + " WHERE p.id = ?").get(parseInt(req.params.id));
+  const product = db.prepare(SELECT_PRODUCT + " WHERE p.id = ? AND p.is_deleted = 0").get(parseInt(req.params.id));
   if (!product) return res.status(404).json({ error: "Produit non trouvé" });
   res.json(formatProduct(product));
 });
@@ -115,7 +123,7 @@ router.get("/products/:id", (req, res) => {
 router.put("/products/:id", (req, res) => {
   const id = parseInt(req.params.id);
   const db = getDb();
-  const existing = db.prepare("SELECT * FROM products WHERE id = ?").get(id);
+  const existing = db.prepare("SELECT * FROM products WHERE id = ? AND is_deleted = 0").get(id);
   if (!existing) return res.status(404).json({ error: "Produit non trouvé" });
   const { name, barcode, categoryId, stockQuantity, purchasePrice, sellingPriceRetail,
     sellingPriceHalfWholesale, sellingPriceWholesale, commissionRetail,
@@ -153,7 +161,9 @@ router.put("/products/:id", (req, res) => {
 
 router.delete("/products/:id", (req, res) => {
   const db = getDb();
-  db.prepare("DELETE FROM products WHERE id = ?").run(parseInt(req.params.id));
+  db.prepare(
+    "UPDATE products SET is_deleted = 1, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id = ?"
+  ).run(parseInt(req.params.id));
   res.status(204).send();
 });
 
