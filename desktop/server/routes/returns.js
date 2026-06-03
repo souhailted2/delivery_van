@@ -9,14 +9,14 @@ function getReturnWithItems(db, id) {
     FROM returns r
     LEFT JOIN trucks t ON r.truck_id = t.id
     LEFT JOIN clients c ON r.client_id = c.id
-    WHERE r.id = ?
+    WHERE r.id = ? AND r.is_deleted = 0
   `).get(id);
   if (!ret) return null;
 
   const items = db.prepare(`
     SELECT ri.*, p.name AS product_name
     FROM return_items ri LEFT JOIN products p ON ri.product_id = p.id
-    WHERE ri.return_id = ?
+    WHERE ri.return_id = ? AND ri.is_deleted = 0
   `).all(id);
 
   return {
@@ -35,7 +35,7 @@ function getReturnWithItems(db, id) {
 
 router.get("/returns", (_req, res) => {
   const db = getDb();
-  const ids = db.prepare("SELECT id FROM returns ORDER BY created_at").all();
+  const ids = db.prepare("SELECT id FROM returns WHERE is_deleted = 0 ORDER BY created_at").all();
   res.json(ids.map(r => getReturnWithItems(db, r.id)).filter(Boolean));
 });
 
@@ -53,9 +53,9 @@ router.post("/returns", (req, res) => {
 
     let totalAmount = 0;
     for (const item of items) {
-      const qty = Number(item.quantity);
+      const qty      = Number(item.quantity);
       const unitPrice = Number(item.unitPrice);
-      const subtotal = qty * unitPrice;
+      const subtotal  = qty * unitPrice;
       totalAmount += subtotal;
 
       db.prepare(`INSERT INTO return_items (return_id, product_id, quantity, unit_price, subtotal) VALUES (?,?,?,?,?)`)
@@ -71,7 +71,7 @@ router.post("/returns", (req, res) => {
             .run(parseInt(truckId), parseInt(item.productId), qty);
         }
       } else if (type === "truck_return") {
-        const product = db.prepare("SELECT * FROM products WHERE id = ?").get(parseInt(item.productId));
+        const product = db.prepare("SELECT * FROM products WHERE id = ? AND is_deleted = 0").get(parseInt(item.productId));
         if (product) {
           db.prepare("UPDATE products SET stock_quantity = ? WHERE id = ?")
             .run(Number(product.stock_quantity) + qty, parseInt(item.productId));
