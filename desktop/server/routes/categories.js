@@ -5,7 +5,7 @@ const router = Router();
 
 router.get("/categories", (_req, res) => {
   const db = getDb();
-  const cats = db.prepare("SELECT * FROM categories ORDER BY name").all();
+  const cats = db.prepare("SELECT * FROM categories WHERE is_deleted = 0 ORDER BY name").all();
   res.json(cats.map(c => ({ ...c, createdAt: c.created_at })));
 });
 
@@ -22,7 +22,7 @@ router.put("/categories/:id", (req, res) => {
   const id = parseInt(req.params.id);
   const { name } = req.body;
   const db = getDb();
-  db.prepare("UPDATE categories SET name = ? WHERE id = ?").run(name, id);
+  db.prepare("UPDATE categories SET name = ? WHERE id = ? AND is_deleted = 0").run(name, id);
   const cat = db.prepare("SELECT * FROM categories WHERE id = ?").get(id);
   if (!cat) return res.status(404).json({ error: "Catégorie non trouvée" });
   res.json({ ...cat, createdAt: cat.created_at });
@@ -31,7 +31,9 @@ router.put("/categories/:id", (req, res) => {
 router.delete("/categories/:id", (req, res) => {
   const id = parseInt(req.params.id);
   const db = getDb();
-  db.prepare("DELETE FROM categories WHERE id = ?").run(id);
+  db.prepare(
+    "UPDATE categories SET is_deleted = 1, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id = ?"
+  ).run(id);
   res.status(204).send();
 });
 
