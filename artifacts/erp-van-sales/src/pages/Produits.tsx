@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from "react";
-import { useListProducts, useListCategories, useCreateProduct, useUpdateProduct } from "@workspace/api-client-react";
+import { useListProducts, useListCategories, useCreateProduct, useUpdateProduct, useDeleteProduct } from "@workspace/api-client-react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { formatCurrency } from "@/lib/utils";
@@ -7,20 +7,12 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
+import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Plus, Pencil, Search, X, ImagePlus, Trash2, WifiOff } from "lucide-react";
+import { Plus, Pencil, Search, X, ImagePlus, Trash2, WifiOff, FileSpreadsheet } from "lucide-react";
 import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-
-declare global {
-  interface Window {
-    electronAPI?: {
-      checkOnline: () => Promise<boolean>;
-      getVersion: () => Promise<string>;
-      isElectron: boolean;
-    };
-  }
-}
+import ExcelImportDialog from "@/components/ExcelImportDialog";
 
 type Product = {
   id: number; name: string; barcode?: string | null; categoryId?: number | null;
@@ -227,6 +219,7 @@ function ImageUpload({
               alt=""
               className="w-full h-full object-cover"
               style={{ display: "block" }}
+              onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }}
             />
           ) : uploadDisabled ? (
             <WifiOff className="h-6 w-6 text-muted-foreground/30" />
@@ -412,6 +405,10 @@ export default function Produits() {
   const [addOpen, setAddOpen] = useState(false);
   const [addForm, setAddForm] = useState(emptyForm);
 
+  const [importOpen, setImportOpen] = useState(false);
+
+  const [deleteTarget, setDeleteTarget] = useState<{ id: number; name: string } | null>(null);
+
   const [editOpen, setEditOpen] = useState(false);
   const [editId, setEditId] = useState<number | null>(null);
   const [editForm, setEditForm] = useState(emptyForm);
@@ -443,6 +440,25 @@ export default function Produits() {
     },
   });
 
+  const deleteProduct = useDeleteProduct({
+    mutation: {
+      onSuccess: () => {
+        invalidate();
+        toast.success("تم حذف المنتج بنجاح");
+        setDeleteTarget(null);
+      },
+      onError: (err: unknown) => {
+        const msg = err instanceof Error ? err.message : "";
+        if (msg.includes("foreign key") || msg.includes("violates") || msg.includes("constraint")) {
+          toast.error("لا يمكن حذف هذا المنتج لأنه مرتبط بفواتير أو مبيعات");
+        } else {
+          toast.error("حدث خطأ أثناء الحذف");
+        }
+        setDeleteTarget(null);
+      },
+    },
+  });
+
   const openEdit = (p: Product) => {
     setEditId(p.id);
     setEditForm(toForm(p));
@@ -456,9 +472,14 @@ export default function Produits() {
           <h1 className="text-3xl font-bold tracking-tight">المنتجات</h1>
           <p className="text-muted-foreground">إدارة كتالوج المنتجات.</p>
         </div>
-        <Button onClick={() => setAddOpen(true)}>
-          <Plus className="ml-2 h-4 w-4" /> إضافة منتج
-        </Button>
+        <div className="flex gap-2">
+          <Button variant="outline" onClick={() => setImportOpen(true)} className="text-green-700 border-green-300 hover:bg-green-50">
+            <FileSpreadsheet className="ml-2 h-4 w-4" /> استيراد Excel
+          </Button>
+          <Button onClick={() => setAddOpen(true)}>
+            <Plus className="ml-2 h-4 w-4" /> إضافة منتج
+          </Button>
+        </div>
       </div>
 
       {/* Search */}
@@ -481,6 +502,39 @@ export default function Produits() {
           {filtered.length} نتيجة من أصل {products.length}
         </p>
       )}
+
+      {/* Delete Confirmation Dialog */}
+      <AlertDialog open={!!deleteTarget} onOpenChange={(o) => { if (!o) setDeleteTarget(null); }}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>تأكيد الحذف</AlertDialogTitle>
+            <AlertDialogDescription>
+              هل أنت متأكد من حذف المنتج{" "}
+              <span className="font-bold text-foreground">«{deleteTarget?.name}»</span>؟
+              <br />
+              <span className="text-destructive font-medium">لا يمكن التراجع عن هذه العملية.</span>
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter className="gap-2">
+            <AlertDialogCancel>إلغاء</AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-destructive text-white hover:bg-destructive/90"
+              onClick={() => { if (deleteTarget) deleteProduct.mutate({ id: deleteTarget.id }); }}
+              disabled={deleteProduct.isPending}
+            >
+              {deleteProduct.isPending ? "جارٍ الحذف..." : "تأكيد الحذف"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      {/* Excel Import Dialog */}
+      <ExcelImportDialog
+        open={importOpen}
+        onOpenChange={setImportOpen}
+        existingProducts={products}
+        onImported={invalidate}
+      />
 
       {/* Add Dialog */}
       <Dialog open={addOpen} onOpenChange={setAddOpen}>
@@ -514,58 +568,137 @@ export default function Produits() {
         </DialogContent>
       </Dialog>
 
-      <Card>
+      <Card className="overflow-hidden shadow-sm">
         <CardContent className="p-0">
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead className="w-14">صورة</TableHead>
-                <TableHead>الاسم</TableHead>
-                <TableHead>الفئة</TableHead>
-                <TableHead>المخزون</TableHead>
-                <TableHead>سعر التجزئة</TableHead>
-                <TableHead>سعر الجملة</TableHead>
-                <TableHead className="w-24 text-center">إجراءات</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {isLoading ? (
-                <TableRow><TableCell colSpan={7} className="text-center py-8">جارٍ التحميل...</TableCell></TableRow>
-              ) : filtered.length === 0 ? (
-                <TableRow><TableCell colSpan={7} className="text-center py-8">{search.trim() ? "لا توجد نتائج مطابقة" : "لا توجد منتجات"}</TableCell></TableRow>
-              ) : (
-                filtered.map((p) => (
-                  <TableRow key={p.id}>
-                    <TableCell>
-                      {(p as any).imageUrl ? (
-                        <img
-                          src={(p as any).imageUrl}
-                          alt={p.name}
-                          className="w-10 h-10 rounded-lg object-cover border"
-                        />
-                      ) : (
-                        <div className="w-10 h-10 rounded-lg bg-muted flex items-center justify-center">
-                          <ImagePlus className="h-4 w-4 text-muted-foreground/40" />
-                        </div>
-                      )}
-                    </TableCell>
-                    <TableCell className="font-medium">{p.name}</TableCell>
-                    <TableCell>{(p as any).categoryName || "-"}</TableCell>
-                    <TableCell className={p.stockQuantity < 10 ? "text-destructive font-bold" : ""}>
-                      {p.stockQuantity} {p.unit}
-                    </TableCell>
-                    <TableCell>{formatCurrency(p.sellingPriceRetail)}</TableCell>
-                    <TableCell>{formatCurrency(p.sellingPriceWholesale)}</TableCell>
-                    <TableCell className="text-center">
-                      <Button size="sm" variant="outline" onClick={() => openEdit(p as Product)}>
-                        <Pencil className="h-3.5 w-3.5 ml-1" /> تعديل
-                      </Button>
+          <div className="overflow-x-auto">
+            <Table>
+              <TableHeader>
+                <TableRow className="bg-muted/60 hover:bg-muted/60 border-b-2">
+                  <TableHead className="w-[72px] text-center font-semibold text-foreground/80 py-3">صورة</TableHead>
+                  <TableHead className="font-semibold text-foreground/80 py-3 min-w-[160px]">اسم المنتج</TableHead>
+                  <TableHead className="font-semibold text-foreground/80 py-3 min-w-[100px]">الفئة</TableHead>
+                  <TableHead className="font-semibold text-foreground/80 py-3 text-center min-w-[100px]">المخزون</TableHead>
+                  <TableHead className="font-semibold text-foreground/80 py-3 text-center min-w-[120px]">سعر التجزئة</TableHead>
+                  <TableHead className="font-semibold text-foreground/80 py-3 text-center min-w-[120px]">سعر الجملة</TableHead>
+                  <TableHead className="font-semibold text-foreground/80 py-3 text-center w-[160px]">الإجراءات</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {isLoading ? (
+                  <TableRow>
+                    <TableCell colSpan={7} className="text-center py-16 text-muted-foreground">
+                      <div className="flex flex-col items-center gap-2">
+                        <div className="h-6 w-6 border-2 border-primary border-t-transparent rounded-full animate-spin" />
+                        <span>جارٍ التحميل...</span>
+                      </div>
                     </TableCell>
                   </TableRow>
-                ))
-              )}
-            </TableBody>
-          </Table>
+                ) : filtered.length === 0 ? (
+                  <TableRow>
+                    <TableCell colSpan={7} className="text-center py-16 text-muted-foreground">
+                      <div className="flex flex-col items-center gap-2">
+                        <ImagePlus className="h-10 w-10 text-muted-foreground/30" />
+                        <span className="text-sm">{search.trim() ? "لا توجد نتائج مطابقة للبحث" : "لا توجد منتجات بعد"}</span>
+                      </div>
+                    </TableCell>
+                  </TableRow>
+                ) : (
+                  filtered.map((p) => (
+                    <TableRow key={p.id} className="hover:bg-muted/30 transition-colors border-b last:border-0">
+                      <TableCell className="py-3 text-center">
+                        {(p as any).imageUrl ? (
+                          <img
+                            src={(p as any).imageUrl}
+                            alt={p.name}
+                            className="w-14 h-14 rounded-xl object-cover border border-border shadow-sm mx-auto"
+                            onError={(e) => {
+                              const el = e.target as HTMLImageElement;
+                              el.style.display = "none";
+                              const ph = document.createElement("div");
+                              ph.className = "w-14 h-14 rounded-xl bg-muted flex items-center justify-center mx-auto";
+                              ph.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" style="opacity:0.3"><rect width="18" height="18" x="3" y="3" rx="2"/><circle cx="9" cy="9" r="2"/><path d="m21 15-3.086-3.086a2 2 0 0 0-2.828 0L6 21"/></svg>';
+                              el.parentElement!.appendChild(ph);
+                            }}
+                          />
+                        ) : (
+                          <div className="w-14 h-14 rounded-xl bg-muted/60 border border-dashed border-border flex items-center justify-center mx-auto">
+                            <ImagePlus className="h-5 w-5 text-muted-foreground/30" />
+                          </div>
+                        )}
+                      </TableCell>
+
+                      <TableCell className="py-3">
+                        <div className="font-semibold text-foreground leading-tight">{p.name}</div>
+                        {p.barcode && (
+                          <div className="text-xs text-muted-foreground mt-0.5 font-mono">{p.barcode}</div>
+                        )}
+                      </TableCell>
+
+                      <TableCell className="py-3">
+                        {(p as any).categoryName ? (
+                          <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-primary/10 text-primary">
+                            {(p as any).categoryName}
+                          </span>
+                        ) : (
+                          <span className="text-muted-foreground text-sm">—</span>
+                        )}
+                      </TableCell>
+
+                      <TableCell className="py-3 text-center">
+                        {p.stockQuantity === 0 ? (
+                          <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-bold bg-destructive/10 text-destructive">
+                            نفد المخزون
+                          </span>
+                        ) : p.stockQuantity < 10 ? (
+                          <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-bold bg-orange-100 text-orange-700">
+                            {p.stockQuantity} {p.unit}
+                          </span>
+                        ) : (
+                          <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-medium bg-green-100 text-green-700">
+                            {p.stockQuantity} {p.unit}
+                          </span>
+                        )}
+                      </TableCell>
+
+                      <TableCell className="py-3 text-center font-medium tabular-nums">
+                        {formatCurrency(p.sellingPriceRetail)}
+                      </TableCell>
+
+                      <TableCell className="py-3 text-center font-medium tabular-nums text-muted-foreground">
+                        {formatCurrency(p.sellingPriceWholesale)}
+                      </TableCell>
+
+                      <TableCell className="py-3 text-center">
+                        <div className="flex items-center justify-center gap-1.5">
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            className="h-8 px-3 text-xs font-medium hover:bg-primary/5 hover:border-primary/40 hover:text-primary transition-colors"
+                            onClick={() => openEdit(p as Product)}
+                          >
+                            <Pencil className="h-3 w-3 ml-1" /> تعديل
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            className="h-8 px-3 text-xs font-medium border-destructive/30 text-destructive hover:bg-destructive hover:text-white transition-colors"
+                            onClick={() => setDeleteTarget({ id: p.id, name: p.name })}
+                          >
+                            <Trash2 className="h-3 w-3 ml-1" /> حذف
+                          </Button>
+                        </div>
+                      </TableCell>
+                    </TableRow>
+                  ))
+                )}
+              </TableBody>
+            </Table>
+          </div>
+          {!isLoading && filtered.length > 0 && (
+            <div className="px-4 py-2.5 border-t bg-muted/20 text-xs text-muted-foreground text-left">
+              {filtered.length} منتج{filtered.length !== products.length && ` (من أصل ${products.length})`}
+            </div>
+          )}
         </CardContent>
       </Card>
     </div>
