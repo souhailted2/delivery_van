@@ -17,7 +17,7 @@ router.get("/users", (_req, res) => {
   res.json(db.prepare(`
     SELECT id,username,full_name,role,truck_id,can_delete_invoice,
       can_edit_price,can_sell_on_credit,can_view_reports,created_at
-    FROM users ORDER BY id
+    FROM users WHERE is_deleted = 0 ORDER BY id
   `).all().map(formatUser));
 });
 
@@ -44,7 +44,7 @@ router.post("/users", (req, res) => {
 
 router.get("/users/:id", (req, res) => {
   const db = getDb();
-  const u = db.prepare("SELECT * FROM users WHERE id = ?").get(parseInt(req.params.id));
+  const u = db.prepare("SELECT * FROM users WHERE id = ? AND is_deleted = 0").get(parseInt(req.params.id));
   if (!u) return res.status(404).json({ error: "Utilisateur non trouvé" });
   res.json(formatUser(u));
 });
@@ -53,7 +53,7 @@ router.put("/users/:id", (req, res) => {
   const id = parseInt(req.params.id);
   const { fullName, role, truckId, canDeleteInvoice, canEditPrice, canSellOnCredit, canViewReports, password } = req.body;
   const db = getDb();
-  const existing = db.prepare("SELECT * FROM users WHERE id = ?").get(id);
+  const existing = db.prepare("SELECT * FROM users WHERE id = ? AND is_deleted = 0").get(id);
   if (!existing) return res.status(404).json({ error: "Utilisateur non trouvé" });
   db.prepare(`UPDATE users SET
     full_name = COALESCE(?,full_name), role = COALESCE(?,role),
@@ -76,7 +76,9 @@ router.put("/users/:id", (req, res) => {
 
 router.delete("/users/:id", (req, res) => {
   const db = getDb();
-  db.prepare("DELETE FROM users WHERE id = ?").run(parseInt(req.params.id));
+  db.prepare(
+    "UPDATE users SET is_deleted = 1, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id = ?"
+  ).run(parseInt(req.params.id));
   res.status(204).send();
 });
 
