@@ -102,6 +102,47 @@ app.on("activate", () => {
   if (mainWindow === null && resolvedPort) createWindow(resolvedPort);
 });
 
+ipcMain.handle("backup-db", async () => {
+  const now = new Date();
+  const stamp = `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,"0")}-${String(now.getDate()).padStart(2,"0")}`;
+  const { filePath, canceled } = await dialog.showSaveDialog(mainWindow, {
+    title: "حفظ النسخة الاحتياطية",
+    defaultPath: `erp-backup-${stamp}.db`,
+    filters: [{ name: "SQLite Database", extensions: ["db"] }],
+  });
+  if (canceled || !filePath) return { success: false, canceled: true };
+  try {
+    const { backupDb } = require("./server/db");
+    await backupDb(filePath);
+    return { success: true, path: filePath };
+  } catch (err) {
+    return { success: false, error: err.message };
+  }
+});
+
+ipcMain.handle("restore-db", async () => {
+  const { filePaths, canceled } = await dialog.showOpenDialog(mainWindow, {
+    title: "اختر ملف النسخة الاحتياطية",
+    filters: [{ name: "SQLite Database", extensions: ["db"] }],
+    properties: ["openFile"],
+  });
+  if (canceled || !filePaths.length) return { success: false, canceled: true };
+  const srcPath = filePaths[0];
+  const dbPath = path.join(app.getPath("userData"), "erp-van-sales.db");
+  const { closeDb, initDb } = require("./server/db");
+  closeDb();
+  try {
+    fs.copyFileSync(srcPath, dbPath);
+    // Schedule restart from main process so renderer has time to show feedback
+    setTimeout(() => { app.relaunch(); app.exit(0); }, 2500);
+    return { success: true };
+  } catch (err) {
+    // Re-open DB so app remains functional after failed restore
+    try { initDb(app.getPath("userData")); } catch (_) {}
+    return { success: false, error: err.message };
+  }
+});
+
 ipcMain.handle("check-online", async () => {
   try {
     const https = require("https");
