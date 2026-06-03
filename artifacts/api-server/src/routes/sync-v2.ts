@@ -1,0 +1,169 @@
+/**
+ * Bidirectional sync v2 endpoints for desktop ↔ cloud sync.
+ *
+ * GET  /api/sync/v2/pull?since=ISO  — return all records changed after `since`
+ * POST /api/sync/v2/push            — upsert records sent from desktop by sync_id
+ */
+
+import { Router } from "express";
+import { db } from "@workspace/db";
+import {
+  categoriesTable, productsTable, suppliersTable, clientsTable,
+  trucksTable, usersTable, purchasesTable, purchaseItemsTable,
+  invoicesTable, invoiceItemsTable, returnsTable, returnItemsTable,
+  cashTransfersTable, truckStockTable, stockTransfersTable, stockTransferItemsTable,
+} from "@workspace/db";
+import { gt, or, isNull, sql } from "drizzle-orm";
+
+const router = Router();
+
+// Require auth for all sync routes
+function requireAuth(req: any, res: any, next: any) {
+  if (!req.session?.userId) return res.status(401).json({ error: "Non authentifié" });
+  next();
+}
+
+// All syncable tables with their drizzle table objects
+const SYNC_TABLES = [
+  { name: "categories",           table: categoriesTable,          hasUpdatedAt: true },
+  { name: "products",             table: productsTable,            hasUpdatedAt: true },
+  { name: "suppliers",            table: suppliersTable,           hasUpdatedAt: true },
+  { name: "clients",              table: clientsTable,             hasUpdatedAt: true },
+  { name: "trucks",               table: trucksTable,              hasUpdatedAt: true },
+  { name: "users",                table: usersTable,               hasUpdatedAt: true },
+  { name: "purchases",            table: purchasesTable,           hasUpdatedAt: true },
+  { name: "purchase_items",       table: purchaseItemsTable,       hasUpdatedAt: true },
+  { name: "invoices",             table: invoicesTable,            hasUpdatedAt: true },
+  { name: "invoice_items",        table: invoiceItemsTable,        hasUpdatedAt: true },
+  { name: "returns",              table: returnsTable,             hasUpdatedAt: true },
+  { name: "return_items",         table: returnItemsTable,         hasUpdatedAt: true },
+  { name: "cash_transfers",       table: cashTransfersTable,       hasUpdatedAt: true },
+  { name: "truck_stock",          table: truckStockTable,          hasUpdatedAt: true },
+  { name: "stock_transfers",      table: stockTransfersTable,      hasUpdatedAt: true },
+  { name: "stock_transfer_items", table: stockTransferItemsTable,  hasUpdatedAt: true },
+] as const;
+
+// ─── PULL ─────────────────────────────────────────────────────────────────────
+
+router.get("/sync/v2/pull", requireAuth, async (req, res) => {
+  const sinceRaw = req.query.since as string | undefined;
+  const since = sinceRaw ? new Date(sinceRaw) : new Date(0);
+
+  const result: Record<string, any[]> = {};
+
+  for (const { name, table } of SYNC_TABLES) {
+    try {
+      const t = table as any;
+      if (!t.updatedAt) continue;
+      const rows = await db.select().from(t)
+        .where(or(gt(t.updatedAt, since), isNull(t.updatedAt)));
+      // Convert timestamps to ISO strings and snake_case for desktop
+      result[name] = rows.map((r: any) => snakeCaseRecord(r));
+    } catch {
+      result[name] = [];
+    }
+  }
+
+  res.json({
+    tables: result,
+    cursor: new Date().toISOString(),
+  });
+});
+
+// ─── PUSH ─────────────────────────────────────────────────────────────────────
+
+router.post("/sync/v2/push", requireAuth, async (req, res): Promise<void> => {
+  const { tables } = req.body as { deviceId?: string; tables?: Record<string, any[]> };
+  if (!tables || typeof tables !== "object") {
+    res.status(400).json({ error: "tables object required" }); return;
+  }
+
+  const tableMap: Record<string, any> = {};
+  for (const { name, table } of SYNC_TABLES) tableMap[name] = table;
+
+  for (const [tableName, records] of Object.entries(tables)) {
+    const t = tableMap[tableName] as any;
+    if (!t || !Array.isArray(records)) continue;
+
+    for (const rawRecord of records) {
+      if (!rawRecord.sync_id) continue;
+
+      try {
+        const rec = camelCaseRecord(rawRecord);
+        // Remove local-only or unrecognised fields that don't exist in cloud schema
+        const clean = sanitizeForTable(t, rec);
+        if (!clean) continue;
+
+        // Upsert by sync_id: only overwrite if incoming updated_at is newer
+        await db.insert(t).values(clean)
+          .onConflictDoUpdate({
+            target: t.syncId,
+            set: buildUpdateSet(t, clean),
+            setWhere: sql`excluded.updated_at > ${t.updatedAt} OR ${t.updatedAt} IS NULL`,
+          })
+          .catch(() => {/* ignore FK constraint errors */});
+      } catch {
+        // continue on any error
+      }
+    }
+  }
+
+  res.json({ ok: true, cursor: new Date().toISOString() });
+});
+
+// ─── Helpers ──────────────────────────────────────────────────────────────────
+
+/** snake_case row → snake_case JSON (timestamps as ISO strings) */
+function snakeCaseRecord(row: any): any {
+  const out: any = {};
+  for (const [k, v] of Object.entries(row)) {
+    const snakeKey = k.replace(/([A-Z])/g, m => "_" + m.toLowerCase());
+    out[snakeKey] = v instanceof Date ? v.toISOString() : v;
+  }
+  return out;
+}
+
+/** snake_case incoming → camelCase for Drizzle */
+function camelCaseRecord(row: any): any {
+  const out: any = {};
+  for (const [k, v] of Object.entries(row)) {
+    const camelKey = k.replace(/_([a-z])/g, (_, c) => c.toUpperCase());
+    out[camelKey] = v;
+  }
+  return out;
+}
+
+/** Remove keys not present in the table columns, cast types */
+function sanitizeForTable(t: any, rec: any): any | null {
+  const cols = Object.keys(t);
+  const clean: any = {};
+  for (const col of cols) {
+    if (col === "id") continue; // let DB assign
+    if (rec[col] !== undefined) {
+      const val = rec[col];
+      // Convert ISO strings to Date for timestamp columns
+      if (t[col]?.dataType === "date" && typeof val === "string") {
+        clean[col] = new Date(val);
+      } else {
+        clean[col] = val;
+      }
+    }
+  }
+  // Must have syncId to upsert
+  if (!clean.syncId) return null;
+  // Always refresh updatedAt to now if not provided
+  if (!clean.updatedAt) clean.updatedAt = new Date();
+  return clean;
+}
+
+/** Build the SET clause for ON CONFLICT DO UPDATE (all cols except id and syncId) */
+function buildUpdateSet(t: any, clean: any): any {
+  const set: any = {};
+  for (const [k, v] of Object.entries(clean)) {
+    if (k === "id" || k === "syncId" || k === "createdAt") continue;
+    set[k] = sql.raw("excluded." + k.replace(/([A-Z])/g, m => "_" + m.toLowerCase()));
+  }
+  return set;
+}
+
+export default router;
