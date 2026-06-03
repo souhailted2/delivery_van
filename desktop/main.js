@@ -6,6 +6,7 @@ const fs = require("fs");
 let mainWindow;
 let resolvedPort = null;
 let serverStarted = false;
+let syncEngine = null;
 
 /** Find an available TCP port, trying preferred first then OS-assigned. */
 function findAvailablePort(preferred) {
@@ -78,9 +79,24 @@ async function startServer() {
   if (serverStarted && resolvedPort) return resolvedPort;
   const preferred = 37891;
   resolvedPort = await findAvailablePort(preferred);
+
+  // Create sync engine before server init so index.js can wire it in
+  syncEngine = require("./server/sync-engine");
+
   const { initServer } = require("./server/index");
-  await initServer(resolvedPort, app.getPath("userData"));
+  await initServer(resolvedPort, app.getPath("userData"), syncEngine);
   serverStarted = true;
+
+  // Start auto-sync loop (first sync fires after 3s delay internally)
+  syncEngine.start();
+
+  // Forward sync status changes to renderer via IPC
+  syncEngine.onStatus((status) => {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send("sync-status", status);
+    }
+  });
+
   return resolvedPort;
 }
 
@@ -95,6 +111,7 @@ app.whenReady().then(async () => {
 });
 
 app.on("window-all-closed", () => {
+  if (syncEngine) syncEngine.stop();
   app.quit();
 });
 
@@ -102,62 +119,40 @@ app.on("activate", () => {
   if (mainWindow === null && resolvedPort) createWindow(resolvedPort);
 });
 
-ipcMain.handle("backup-db", async () => {
-  const now = new Date();
-  const stamp = `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,"0")}-${String(now.getDate()).padStart(2,"0")}`;
-  const { filePath, canceled } = await dialog.showSaveDialog(mainWindow, {
-    title: "حفظ النسخة الاحتياطية",
-    defaultPath: `erp-backup-${stamp}.db`,
-    filters: [{ name: "SQLite Database", extensions: ["db"] }],
-  });
-  if (canceled || !filePath) return { success: false, canceled: true };
-  try {
-    const { backupDb } = require("./server/db");
-    await backupDb(filePath);
-    return { success: true, path: filePath };
-  } catch (err) {
-    return { success: false, error: err.message };
-  }
+// ── IPC handlers ─────────────────────────────────────────────────────────────
+
+ipcMain.handle("backup-db", async (_event, destPath) => {
+  const { backupDb } = require("./server/db");
+  await backupDb(destPath);
+  return { ok: true };
 });
 
-ipcMain.handle("restore-db", async () => {
-  const { filePaths, canceled } = await dialog.showOpenDialog(mainWindow, {
-    title: "اختر ملف النسخة الاحتياطية",
-    filters: [{ name: "SQLite Database", extensions: ["db"] }],
-    properties: ["openFile"],
-  });
-  if (canceled || !filePaths.length) return { success: false, canceled: true };
-  const srcPath = filePaths[0];
-  const dbPath = path.join(app.getPath("userData"), "erp-van-sales.db");
-  const { closeDb, initDb } = require("./server/db");
+ipcMain.handle("restore-db", async (_event, srcPath) => {
+  const { closeDb } = require("./server/db");
   closeDb();
-  try {
-    fs.copyFileSync(srcPath, dbPath);
-    // Schedule restart from main process so renderer has time to show feedback
-    setTimeout(() => { app.relaunch(); app.exit(0); }, 2500);
-    return { success: true };
-  } catch (err) {
-    // Re-open DB so app remains functional after failed restore
-    try { initDb(app.getPath("userData")); } catch (_) {}
-    return { success: false, error: err.message };
-  }
+  const dbDest = path.join(app.getPath("userData"), "erp-van-sales.db");
+  fs.copyFileSync(srcPath, dbDest);
+  setTimeout(() => {
+    app.relaunch();
+    app.exit(0);
+  }, 2500);
+  return { ok: true };
 });
 
-ipcMain.handle("check-online", async () => {
-  try {
-    const https = require("https");
-    return await new Promise((resolve) => {
-      const req = https.get(
-        "https://deleveri.alllal.com/api/healthz",
-        { timeout: 5000 },
-        (res) => resolve(res.statusCode < 500)
-      );
-      req.on("error", () => resolve(false));
-      req.on("timeout", () => { req.destroy(); resolve(false); });
-    });
-  } catch {
-    return false;
-  }
+ipcMain.handle("get-sync-status", () => {
+  if (!syncEngine) return { online: false, syncing: false, lastSync: null, error: null, pending: 0 };
+  return syncEngine.getStatus();
 });
 
-ipcMain.handle("get-app-version", () => app.getVersion());
+ipcMain.handle("save-sync-credentials", async (_event, { username, password }) => {
+  if (!syncEngine) return { ok: false, error: "Sync engine not ready" };
+  syncEngine.saveCredentials(username, password);
+  syncEngine.syncOnce().catch(() => {});
+  return { ok: true };
+});
+
+ipcMain.handle("trigger-sync", async () => {
+  if (!syncEngine) return { ok: false, error: "Sync engine not ready" };
+  syncEngine.syncOnce().catch(() => {});
+  return { ok: true };
+});
