@@ -6,20 +6,21 @@ const crypto = require("crypto");
 const { initDb } = require("./db");
 const { setUserDataPath } = require("./config");
 
-const authRouter = require("./routes/auth");
+const authRouter     = require("./routes/auth");
 const categoriesRouter = require("./routes/categories");
 const productsRouter = require("./routes/products");
 const suppliersRouter = require("./routes/suppliers");
 const purchasesRouter = require("./routes/purchases");
-const clientsRouter = require("./routes/clients");
-const trucksRouter = require("./routes/trucks");
-const stockRouter = require("./routes/stock");
+const clientsRouter  = require("./routes/clients");
+const trucksRouter   = require("./routes/trucks");
+const stockRouter    = require("./routes/stock");
 const invoicesRouter = require("./routes/invoices");
-const usersRouter = require("./routes/users");
-const syncRouter = require("./routes/sync");
-const cashRouter = require("./routes/cash");
-const returnsRouter = require("./routes/returns");
-const reportsRouter = require("./routes/reports");
+const usersRouter    = require("./routes/users");
+const syncRouter     = require("./routes/sync");
+const cashRouter     = require("./routes/cash");
+const returnsRouter  = require("./routes/returns");
+const reportsRouter  = require("./routes/reports");
+const syncStatusModule = require("./routes/sync-status");
 
 /** Get or generate a per-installation session secret stored in userData. */
 function getSessionSecret(userDataPath) {
@@ -32,11 +33,14 @@ function getSessionSecret(userDataPath) {
   return secret;
 }
 
-function initServer(port, userDataPath) {
+function initServer(port, userDataPath, syncEngine) {
   return new Promise((resolve, reject) => {
     fs.mkdirSync(userDataPath, { recursive: true });
     setUserDataPath(userDataPath);
     initDb(userDataPath);
+
+    // Wire sync engine into the status router
+    if (syncEngine) syncStatusModule.setEngine(syncEngine);
 
     const sessionSecret = getSessionSecret(userDataPath);
     const app = express();
@@ -64,6 +68,7 @@ function initServer(port, userDataPath) {
     app.use("/api", invoicesRouter);
     app.use("/api", usersRouter);
     app.use("/api", syncRouter);
+    app.use("/api", syncStatusModule.router);  // auto-sync status + credentials
     app.use("/api", cashRouter);
     app.use("/api", returnsRouter);
     app.use("/api", reportsRouter);
