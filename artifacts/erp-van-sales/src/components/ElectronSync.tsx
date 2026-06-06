@@ -1,6 +1,6 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import {
-  Cloud, CloudOff, RefreshCw, CheckCircle, AlertCircle,
+  CloudOff, RefreshCw, CheckCircle, AlertCircle,
   X, Download, Upload, CloudCog,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -21,16 +21,15 @@ import { cn } from "@/lib/utils";
 declare global {
   interface Window {
     electronAPI?: {
-      checkOnline:            () => Promise<boolean>;
-      getVersion:             () => Promise<string>;
-      backupDb:               (dest?: string) => Promise<{ success: boolean; path?: string; canceled?: boolean; error?: string }>;
-      restoreDb:              (src?: string)  => Promise<{ success: boolean; canceled?: boolean; error?: string }>;
-      isElectron:             boolean;
-      // Auto-sync IPC
-      getSyncStatus:          () => Promise<SyncStatus>;
-      saveSyncCredentials:    (creds: { username: string; password: string }) => Promise<{ ok: boolean; error?: string }>;
-      triggerSync:            () => Promise<{ ok: boolean }>;
-      onSyncStatus:           (cb: (s: SyncStatus) => void) => void;
+      checkOnline:              () => Promise<boolean>;
+      getVersion:               () => Promise<string>;
+      backupDb:                 (dest?: string) => Promise<{ success: boolean; path?: string; canceled?: boolean; error?: string }>;
+      restoreDb:                (src?: string)  => Promise<{ success: boolean; canceled?: boolean; error?: string }>;
+      isElectron:               boolean;
+      getSyncStatus:            () => Promise<SyncStatus>;
+      saveSyncCredentials:      (creds: { username: string; password: string }) => Promise<{ ok: boolean; error?: string }>;
+      triggerSync:              () => Promise<{ ok: boolean }>;
+      onSyncStatus:             (cb: (s: SyncStatus) => void) => void;
       removeSyncStatusListener: () => void;
     };
   }
@@ -53,71 +52,132 @@ function formatTime(iso: string | null): string {
   return new Date(iso).toLocaleTimeString("ar-DZ", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
 }
 
+// ─── Unified adapter ─────────────────────────────────────────────────────────
+// Wraps either Electron IPC or local REST API so the UI doesn't care which.
+
+type DesktopMode = "electron" | "standalone";
+
+async function restGetStatus(): Promise<SyncStatus> {
+  const r = await fetch("/api/sync/status");
+  if (!r.ok) throw new Error("status error");
+  return r.json();
+}
+
+async function restSaveCreds(username: string, password: string): Promise<void> {
+  const r = await fetch("/api/sync/credentials", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ username, password }),
+  });
+  if (!r.ok) throw new Error("credentials error");
+}
+
+async function restTrigger(): Promise<void> {
+  await fetch("/api/sync/trigger", { method: "POST" });
+}
+
+// ─── Component ───────────────────────────────────────────────────────────────
+
 export function ElectronSyncButton() {
+  const [mode, setMode] = useState<DesktopMode | null>(null);
   const [syncStatus, setSyncStatus] = useState<SyncStatus>(DEFAULT_STATUS);
   const [open, setOpen] = useState(false);
 
-  // Auto-sync creds state
   const [autoUsername, setAutoUsername] = useState("");
-  const [autoPassword, setAutoPassword] = useState("");
+  const [autoPassword, setAutoPassword] = useState("")  ;
   const [savingCreds, setSavingCreds] = useState(false);
   const [credsMsg, setCredsMsg] = useState<string | null>(null);
 
-  // Backup / Restore
   const [backingUp, setBackingUp] = useState(false);
   const [restoring, setRestoring] = useState(false);
   const [confirmRestore, setConfirmRestore] = useState(false);
 
   const { toast } = useToast();
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  const api = window.electronAPI;
-  if (!api) return null;
-
-  // Fetch status on mount
+  // ── Detect desktop mode on mount ──────────────────────────────────────────
   useEffect(() => {
-    if (!api.getSyncStatus) return;
-    api.getSyncStatus().then((s) => { if (s) setSyncStatus(s); }).catch(() => {});
+    if (window.electronAPI?.isElectron) {
+      setMode("electron");
+      return;
+    }
+    // Try standalone REST endpoint (exists only when running inside installer)
+    const ctrl = new AbortController();
+    fetch("/api/sync/status", { signal: ctrl.signal })
+      .then(r => { if (r.ok) setMode("standalone"); })
+      .catch(() => {});
+    return () => ctrl.abort();
   }, []);
 
-  // Listen for push events from main process
+  // ── Status fetching ───────────────────────────────────────────────────────
+  const fetchStatus = useCallback(async () => {
+    if (!mode) return;
+    try {
+      if (mode === "electron") {
+        const s = await window.electronAPI!.getSyncStatus();
+        if (s) setSyncStatus(s);
+      } else {
+        const s = await restGetStatus();
+        setSyncStatus(s);
+      }
+    } catch {}
+  }, [mode]);
+
+  // Initial fetch + Electron push events
   useEffect(() => {
-    if (!api.onSyncStatus) return;
-    api.onSyncStatus((s) => setSyncStatus(s));
-    return () => api.removeSyncStatusListener?.();
-  }, []);
+    if (!mode) return undefined;
+    fetchStatus();
 
-  // Poll every 5 s as fallback
+    if (mode === "electron" && window.electronAPI?.onSyncStatus) {
+      window.electronAPI.onSyncStatus(s => setSyncStatus(s));
+      return () => window.electronAPI?.removeSyncStatusListener?.();
+    }
+    return undefined;
+  }, [mode, fetchStatus]);
+
+  // Poll every 5 s (both modes — Electron as fallback, standalone as primary)
   useEffect(() => {
-    if (!api.getSyncStatus) return;
-    const id = setInterval(() => {
-      api.getSyncStatus().then((s) => { if (s) setSyncStatus(s); }).catch(() => {});
-    }, 5000);
-    return () => clearInterval(id);
-  }, []);
+    if (!mode) return;
+    pollRef.current = setInterval(fetchStatus, 5000);
+    return () => { if (pollRef.current) clearInterval(pollRef.current); };
+  }, [mode, fetchStatus]);
 
-  const handleTrigger = useCallback(() => {
-    api.triggerSync?.().catch(() => {});
-  }, []);
+  // ── Actions ───────────────────────────────────────────────────────────────
+  const handleTrigger = useCallback(async () => {
+    if (!mode) return;
+    try {
+      if (mode === "electron") await window.electronAPI?.triggerSync?.();
+      else await restTrigger();
+      // Refresh status after a short delay
+      setTimeout(fetchStatus, 800);
+    } catch {}
+  }, [mode, fetchStatus]);
 
   const handleSaveCreds = useCallback(async () => {
-    if (!autoUsername || !autoPassword) return;
+    if (!autoUsername || !autoPassword || !mode) return;
     setSavingCreds(true); setCredsMsg(null);
     try {
-      await api.saveSyncCredentials?.({ username: autoUsername, password: autoPassword });
+      if (mode === "electron") {
+        await window.electronAPI?.saveSyncCredentials?.({ username: autoUsername, password: autoPassword });
+      } else {
+        await restSaveCreds(autoUsername, autoPassword);
+      }
       setCredsMsg("تم حفظ البيانات — المزامنة تعمل تلقائياً");
       setAutoPassword("");
       toast({ title: "تم الحفظ", description: "ستبدأ المزامنة التلقائية خلال لحظات" });
+      setTimeout(fetchStatus, 2000);
     } catch {
-      setCredsMsg("خطأ في الحفظ");
+      setCredsMsg("خطأ في الحفظ، تحقق من البيانات");
     } finally {
       setSavingCreds(false);
     }
-  }, [autoUsername, autoPassword]);
+  }, [autoUsername, autoPassword, mode, fetchStatus, toast]);
 
   const handleBackup = async () => {
+    if (mode !== "electron") return;
     setBackingUp(true);
     try {
-      const result = await api.backupDb();
+      const result = await window.electronAPI!.backupDb();
       if (result.canceled) return;
       if (result.success) {
         toast({ title: "✅ تم حفظ النسخة الاحتياطية", description: result.path });
@@ -130,9 +190,10 @@ export function ElectronSyncButton() {
   };
 
   const handleRestoreConfirmed = async () => {
+    if (mode !== "electron") return;
     setRestoring(true);
     try {
-      const result = await api.restoreDb();
+      const result = await window.electronAPI!.restoreDb();
       if (result.canceled) return;
       if (!result.success) {
         toast({ title: "❌ فشلت الاستعادة", description: result.error, variant: "destructive" });
@@ -147,7 +208,9 @@ export function ElectronSyncButton() {
     }
   };
 
-  // Status dot colour
+  // ── Render guard ──────────────────────────────────────────────────────────
+  if (!mode) return null;
+
   const { online, syncing, error } = syncStatus;
   const dotClass = syncing
     ? "bg-blue-400 animate-pulse"
@@ -179,27 +242,29 @@ export function ElectronSyncButton() {
         </span>
       </Button>
 
-      {/* ─── Restore confirmation ─── */}
-      <AlertDialog open={confirmRestore} onOpenChange={setConfirmRestore}>
-        <AlertDialogContent dir="rtl">
-          <AlertDialogHeader>
-            <AlertDialogTitle>تأكيد استعادة البيانات</AlertDialogTitle>
-            <AlertDialogDescription>
-              سيتم <strong>استبدال جميع البيانات الحالية</strong> بالبيانات الموجودة في ملف النسخة الاحتياطية،
-              ثم سيُعاد تشغيل البرنامج تلقائياً. هذا الإجراء لا يمكن التراجع عنه.
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter className="flex-row-reverse gap-2">
-            <AlertDialogCancel>إلغاء</AlertDialogCancel>
-            <AlertDialogAction
-              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
-              onClick={handleRestoreConfirmed}
-            >
-              نعم، استعادة البيانات
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
+      {/* ─── Restore confirmation (Electron only) ─── */}
+      {mode === "electron" && (
+        <AlertDialog open={confirmRestore} onOpenChange={setConfirmRestore}>
+          <AlertDialogContent dir="rtl">
+            <AlertDialogHeader>
+              <AlertDialogTitle>تأكيد استعادة البيانات</AlertDialogTitle>
+              <AlertDialogDescription>
+                سيتم <strong>استبدال جميع البيانات الحالية</strong> بالبيانات الموجودة في ملف النسخة الاحتياطية،
+                ثم سيُعاد تشغيل البرنامج تلقائياً. هذا الإجراء لا يمكن التراجع عنه.
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter className="flex-row-reverse gap-2">
+              <AlertDialogCancel>إلغاء</AlertDialogCancel>
+              <AlertDialogAction
+                className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                onClick={handleRestoreConfirmed}
+              >
+                نعم، استعادة البيانات
+              </AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
+      )}
 
       {/* ─── Main dialog ─── */}
       <Dialog open={open} onOpenChange={setOpen}>
@@ -215,7 +280,7 @@ export function ElectronSyncButton() {
           </DialogHeader>
 
           <div className="space-y-4">
-            {/* Auto-sync status */}
+            {/* Status card */}
             <div className={cn(
               "flex items-start gap-3 p-3 rounded-lg border",
               online ? "bg-green-50 border-green-200" : "bg-gray-50 border-gray-200"
@@ -263,7 +328,7 @@ export function ElectronSyncButton() {
               مزامنة الآن
             </Button>
 
-            {/* Credentials form for auto-sync */}
+            {/* Credentials form */}
             <div className="space-y-3 pt-1">
               <p className="text-xs font-medium text-muted-foreground">
                 بيانات دخول السيرفر (deleveri.alllal.com)
@@ -304,46 +369,50 @@ export function ElectronSyncButton() {
                 <p className="text-xs text-center text-muted-foreground">{credsMsg}</p>
               )}
               <p className="text-[10px] text-muted-foreground text-center">
-                يتم تشفير كلمة المرور محلياً ولا تُرسل إلا للسيرفر المحدد
+                تُحفظ البيانات محلياً ولا تُرسل إلا للسيرفر المحدد أعلاه
               </p>
             </div>
 
-            {/* Backup / Restore */}
-            <Separator />
-            <div className="space-y-2">
-              <p className="text-xs font-medium text-muted-foreground text-center">النسخ الاحتياطي المحلي</p>
-              <div className="grid grid-cols-2 gap-2">
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={handleBackup}
-                  disabled={busy}
-                  className="gap-2 border-slate-300 text-slate-700 hover:bg-slate-50"
-                >
-                  {backingUp
-                    ? <RefreshCw className="h-3.5 w-3.5 animate-spin" />
-                    : <Download className="h-3.5 w-3.5" />
-                  }
-                  {backingUp ? "جارٍ الحفظ..." : "نسخة احتياطية"}
-                </Button>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => setConfirmRestore(true)}
-                  disabled={busy}
-                  className="gap-2 border-amber-300 text-amber-700 hover:bg-amber-50"
-                >
-                  {restoring
-                    ? <RefreshCw className="h-3.5 w-3.5 animate-spin" />
-                    : <Upload className="h-3.5 w-3.5" />
-                  }
-                  {restoring ? "جارٍ الاستعادة..." : "استعادة البيانات"}
-                </Button>
-              </div>
-              <p className="text-xs text-muted-foreground text-center">
-                💾 احفظ نسخة على قرص خارجي بشكل دوري
-              </p>
-            </div>
+            {/* Backup / Restore — Electron only */}
+            {mode === "electron" && (
+              <>
+                <Separator />
+                <div className="space-y-2">
+                  <p className="text-xs font-medium text-muted-foreground text-center">النسخ الاحتياطي المحلي</p>
+                  <div className="grid grid-cols-2 gap-2">
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={handleBackup}
+                      disabled={busy}
+                      className="gap-2 border-slate-300 text-slate-700 hover:bg-slate-50"
+                    >
+                      {backingUp
+                        ? <RefreshCw className="h-3.5 w-3.5 animate-spin" />
+                        : <Download className="h-3.5 w-3.5" />
+                      }
+                      {backingUp ? "جارٍ الحفظ..." : "نسخة احتياطية"}
+                    </Button>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => setConfirmRestore(true)}
+                      disabled={busy}
+                      className="gap-2 border-amber-300 text-amber-700 hover:bg-amber-50"
+                    >
+                      {restoring
+                        ? <RefreshCw className="h-3.5 w-3.5 animate-spin" />
+                        : <Upload className="h-3.5 w-3.5" />
+                      }
+                      {restoring ? "جارٍ الاستعادة..." : "استعادة البيانات"}
+                    </Button>
+                  </div>
+                  <p className="text-xs text-muted-foreground text-center">
+                    💾 احفظ نسخة على قرص خارجي بشكل دوري
+                  </p>
+                </div>
+              </>
+            )}
 
             <div className="flex justify-end">
               <Button variant="ghost" size="sm" onClick={() => setOpen(false)}>
