@@ -16,7 +16,14 @@ const REQUEST_TIMEOUT = 15_000;
 
 // Tables included in sync (order matters for FK dependencies on pull)
 const PULL_TABLES = [
+  // Catalog — FK-free first
   "categories", "users", "suppliers", "clients", "trucks", "products",
+  // Transactional — FK-dependent order
+  "purchases", "purchase_items",
+  "invoices", "invoice_items",
+  "returns", "return_items",
+  "cash_transfers", "truck_stock",
+  "stock_transfers", "stock_transfer_items",
 ];
 const PUSH_TABLES = [
   "categories", "suppliers", "clients", "trucks", "products", "users",
