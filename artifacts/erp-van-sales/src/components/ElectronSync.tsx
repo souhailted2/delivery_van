@@ -173,31 +173,66 @@ export function ElectronSyncButton() {
     }
   }, [autoUsername, autoPassword, mode, fetchStatus, toast]);
 
+  // Standalone: hidden file input ref for restore
+  const restoreInputRef = useRef<HTMLInputElement>(null);
+  const [pendingRestoreFile, setPendingRestoreFile] = useState<File | null>(null);
+
   const handleBackup = async () => {
-    if (mode !== "electron") return;
-    setBackingUp(true);
-    try {
-      const result = await window.electronAPI!.backupDb();
-      if (result.canceled) return;
-      if (result.success) {
-        toast({ title: "✅ تم حفظ النسخة الاحتياطية", description: result.path });
-      } else {
-        toast({ title: "❌ فشل الحفظ", description: result.error, variant: "destructive" });
+    if (!mode) return;
+    if (mode === "electron") {
+      setBackingUp(true);
+      try {
+        const result = await window.electronAPI!.backupDb();
+        if (result.canceled) return;
+        if (result.success) {
+          toast({ title: "✅ تم حفظ النسخة الاحتياطية", description: result.path });
+        } else {
+          toast({ title: "❌ فشل الحفظ", description: result.error, variant: "destructive" });
+        }
+      } finally {
+        setBackingUp(false);
       }
-    } finally {
-      setBackingUp(false);
+    } else {
+      // Standalone: trigger browser download
+      window.location.href = "/api/backup/download";
     }
   };
 
+  // Standalone restore: file picked → show confirm dialog
+  const handleRestoreFilePick = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setPendingRestoreFile(file);
+    setConfirmRestore(true);
+    e.target.value = "";
+  };
+
   const handleRestoreConfirmed = async () => {
-    if (mode !== "electron") return;
+    if (!mode) return;
     setRestoring(true);
     try {
-      const result = await window.electronAPI!.restoreDb();
-      if (result.canceled) return;
-      if (!result.success) {
-        toast({ title: "❌ فشلت الاستعادة", description: result.error, variant: "destructive" });
-        return;
+      if (mode === "electron") {
+        const result = await window.electronAPI!.restoreDb();
+        if (result.canceled) return;
+        if (!result.success) {
+          toast({ title: "❌ فشلت الاستعادة", description: result.error, variant: "destructive" });
+          return;
+        }
+      } else {
+        if (!pendingRestoreFile) return;
+        const buf = await pendingRestoreFile.arrayBuffer();
+        const b64 = btoa(String.fromCharCode(...new Uint8Array(buf)));
+        const r = await fetch("/api/backup/restore", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ data: b64 }),
+        });
+        if (!r.ok) {
+          const err = await r.json().catch(() => ({ error: "فشل الاتصال" }));
+          toast({ title: "❌ فشلت الاستعادة", description: err.error, variant: "destructive" });
+          return;
+        }
+        setPendingRestoreFile(null);
       }
       toast({
         title: "✅ تمت الاستعادة بنجاح",
@@ -242,29 +277,36 @@ export function ElectronSyncButton() {
         </span>
       </Button>
 
-      {/* ─── Restore confirmation (Electron only) ─── */}
-      {mode === "electron" && (
-        <AlertDialog open={confirmRestore} onOpenChange={setConfirmRestore}>
-          <AlertDialogContent dir="rtl">
-            <AlertDialogHeader>
-              <AlertDialogTitle>تأكيد استعادة البيانات</AlertDialogTitle>
-              <AlertDialogDescription>
-                سيتم <strong>استبدال جميع البيانات الحالية</strong> بالبيانات الموجودة في ملف النسخة الاحتياطية،
-                ثم سيُعاد تشغيل البرنامج تلقائياً. هذا الإجراء لا يمكن التراجع عنه.
-              </AlertDialogDescription>
-            </AlertDialogHeader>
-            <AlertDialogFooter className="flex-row-reverse gap-2">
-              <AlertDialogCancel>إلغاء</AlertDialogCancel>
-              <AlertDialogAction
-                className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
-                onClick={handleRestoreConfirmed}
-              >
-                نعم، استعادة البيانات
-              </AlertDialogAction>
-            </AlertDialogFooter>
-          </AlertDialogContent>
-        </AlertDialog>
-      )}
+      {/* ─── Restore confirmation (both modes) ─── */}
+      <AlertDialog open={confirmRestore} onOpenChange={setConfirmRestore}>
+        <AlertDialogContent dir="rtl">
+          <AlertDialogHeader>
+            <AlertDialogTitle>تأكيد استعادة البيانات</AlertDialogTitle>
+            <AlertDialogDescription>
+              سيتم <strong>استبدال جميع البيانات الحالية</strong> بالبيانات الموجودة في ملف النسخة الاحتياطية،
+              ثم سيُعاد تشغيل البرنامج تلقائياً. هذا الإجراء لا يمكن التراجع عنه.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter className="flex-row-reverse gap-2">
+            <AlertDialogCancel onClick={() => setPendingRestoreFile(null)}>إلغاء</AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              onClick={handleRestoreConfirmed}
+            >
+              نعم، استعادة البيانات
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      {/* Hidden file input for standalone restore */}
+      <input
+        ref={restoreInputRef}
+        type="file"
+        accept=".db"
+        className="hidden"
+        onChange={handleRestoreFilePick}
+      />
 
       {/* ─── Main dialog ─── */}
       <Dialog open={open} onOpenChange={setOpen}>
@@ -373,46 +415,45 @@ export function ElectronSyncButton() {
               </p>
             </div>
 
-            {/* Backup / Restore — Electron only */}
-            {mode === "electron" && (
-              <>
-                <Separator />
-                <div className="space-y-2">
-                  <p className="text-xs font-medium text-muted-foreground text-center">النسخ الاحتياطي المحلي</p>
-                  <div className="grid grid-cols-2 gap-2">
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={handleBackup}
-                      disabled={busy}
-                      className="gap-2 border-slate-300 text-slate-700 hover:bg-slate-50"
-                    >
-                      {backingUp
-                        ? <RefreshCw className="h-3.5 w-3.5 animate-spin" />
-                        : <Download className="h-3.5 w-3.5" />
-                      }
-                      {backingUp ? "جارٍ الحفظ..." : "نسخة احتياطية"}
-                    </Button>
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={() => setConfirmRestore(true)}
-                      disabled={busy}
-                      className="gap-2 border-amber-300 text-amber-700 hover:bg-amber-50"
-                    >
-                      {restoring
-                        ? <RefreshCw className="h-3.5 w-3.5 animate-spin" />
-                        : <Upload className="h-3.5 w-3.5" />
-                      }
-                      {restoring ? "جارٍ الاستعادة..." : "استعادة البيانات"}
-                    </Button>
-                  </div>
-                  <p className="text-xs text-muted-foreground text-center">
-                    💾 احفظ نسخة على قرص خارجي بشكل دوري
-                  </p>
-                </div>
-              </>
-            )}
+            {/* Backup / Restore — both Electron and Standalone */}
+            <Separator />
+            <div className="space-y-2">
+              <p className="text-xs font-medium text-muted-foreground text-center">النسخ الاحتياطي المحلي</p>
+              <div className="grid grid-cols-2 gap-2">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={handleBackup}
+                  disabled={busy}
+                  className="gap-2 border-slate-300 text-slate-700 hover:bg-slate-50"
+                >
+                  {backingUp
+                    ? <RefreshCw className="h-3.5 w-3.5 animate-spin" />
+                    : <Download className="h-3.5 w-3.5" />
+                  }
+                  {backingUp ? "جارٍ الحفظ..." : "نسخة احتياطية"}
+                </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => {
+                    if (mode === "electron") setConfirmRestore(true);
+                    else restoreInputRef.current?.click();
+                  }}
+                  disabled={busy}
+                  className="gap-2 border-amber-300 text-amber-700 hover:bg-amber-50"
+                >
+                  {restoring
+                    ? <RefreshCw className="h-3.5 w-3.5 animate-spin" />
+                    : <Upload className="h-3.5 w-3.5" />
+                  }
+                  {restoring ? "جارٍ الاستعادة..." : "استعادة البيانات"}
+                </Button>
+              </div>
+              <p className="text-xs text-muted-foreground text-center">
+                💾 احفظ نسخة على قرص خارجي بشكل دوري
+              </p>
+            </div>
 
             <div className="flex justify-end">
               <Button variant="ghost" size="sm" onClick={() => setOpen(false)}>
