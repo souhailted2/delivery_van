@@ -1,128 +1,115 @@
 # ERP Van Sales — تطبيق Windows سطح المكتب
 
-تطبيق Electron كامل يعمل بدون إنترنت مع دعم المزامنة مع السيرفر الرئيسي.
+تطبيق **خفيف على الذاكرة والمعالج** — يشغّل سيرفر Express محلي ويفتح المتصفح تلقائياً.
+لا يحتاج Chromium. لا يحتاج Electron.
 
 ## كيف يعمل
 
 ```
-┌──────────────────────────────────────┐
-│         جهاز Windows                │
-│                                      │
-│  ┌─────────────┐   ┌──────────────┐ │
-│  │  واجهة React│←→│ Express محلي │ │
-│  └─────────────┘   └──────┬───────┘ │
-│                            │          │
-│                    ┌───────▼───────┐  │
-│                    │  SQLite محلي  │  │
-│                    └───────────────┘  │
-└──────────────────────┬────────────────┘
-                        │ عند الإنترنت
+┌──────────────────────────────────────────────┐
+│           جهاز Windows (بعد التثبيت)         │
+│                                              │
+│  C:\Program Files\ERP Van Sales\            │
+│    node.exe         ← Node.js 20 runtime     │
+│    standalone\server.js  ← نقطة الدخل       │
+│    server\          ← Express routes          │
+│    node_modules\    ← المكتبات               │
+│    renderer\        ← الواجهة المبنية        │
+│                                              │
+│  %APPDATA%\ERP Van Sales\                   │
+│    erp-van-sales.db ← قاعدة البيانات SQLite  │
+│    .session-secret  ← مفتاح الجلسة          │
+└──────────────────────┬───────────────────────┘
+                        │ عند الاتصال بالإنترنت
                         ▼
-              deleveri.alllal.com
+              deleveri.alllal.com (مزامنة)
 ```
 
 - يعمل 100% بدون إنترنت
-- صور المنتجات تُحفظ محلياً في AppData
-- زر "مزامنة" يرفع البيانات للسيرفر عند الاتصال
+- بيانات في `%APPDATA%\ERP Van Sales\` — سهل النسخ الاحتياطي
+- يفتح المتصفح تلقائياً على `http://localhost:37891`
+- للاستخدام الشبكي: افتح `http://[IP]:37891` من أي جهاز في الشبكة
+
+---
+
+## تنزيل التطبيق (الطريقة الأسرع)
+
+1. اذهب إلى **[GitHub Releases](https://github.com/souhailted2/delivery_van/releases)**
+2. حمّل `ERP-Van-Sales-Setup.exe` من أحدث إصدار
+3. شغّله كمسؤول (Run as Administrator)
+4. اتبع خطوات التثبيت
+5. ستجد اختصار **ERP Van Sales** في قائمة Start وعلى سطح المكتب
 
 ---
 
 ## بيانات الدخول الافتراضية
 
-- **المستخدم:** `admin`
-- **كلمة السر:** `admin123`
-
-> غيّر كلمة السر فور أول تشغيل!
-
----
-
-## مكان حفظ البيانات
-
-| النوع | المسار |
+| الحقل | القيمة |
 |-------|--------|
-| قاعدة البيانات | `%APPDATA%\ERP Van Sales\erp-van-sales.db` |
-| صور المنتجات | `%APPDATA%\ERP Van Sales\uploads\` |
+| المستخدم | `admin` |
+| كلمة السر | `admin123` |
+
+> **مهم:** غيّر كلمة السر فور أول تشغيل!
 
 ---
 
-## ملاحظة: بناء .exe يتطلب Windows
+## النسخ الاحتياطي
 
-> ملف NSIS `.exe` **لا يمكن بناؤه على Linux أو Replit**.
-> بديل للاختبار على Replit/Linux:
-> ```bash
-> cd desktop && npm install --ignore-scripts && npx electron-builder --dir
-> ```
-> ينتج مجلداً غير محزوم في `dist-installer/linux-unpacked/` (للتحقق من البنية فقط).
-> للملف `.exe` الحقيقي: اتبع تعليمات Windows أدناه، أو أنشئ GitHub Actions Workflow.
+```
+%APPDATA%\ERP Van Sales\
+├── erp-van-sales.db     ← انسخ هذا الملف للنسخ الاحتياطي
+└── .session-secret      ← لا حاجة لنسخه
+```
+
+**للنسخ الاحتياطي:** انسخ الملف `erp-van-sales.db` إلى مكان آمن (USB، سحابة، إلخ).
+
+**للاستعادة:** ضع الملف المنسوخ مكان الأصلي ثم أعد تشغيل التطبيق.
 
 ---
 
-## بناء ملف التثبيت (.exe) على Windows
+## بناء ملف التثبيت يدوياً (للمطورين)
 
-### المتطلبات
+### عبر GitHub Actions (تلقائي)
+كل `push` إلى الفرع `main` يبني ملف التثبيت تلقائياً وينشره في GitHub Releases.
 
-1. **Node.js 18+** — https://nodejs.org/en/download
-2. **pnpm** — `npm install -g pnpm`
-3. **Python 3** — https://www.python.org/downloads/
-4. **Visual Studio Build Tools** — https://visualstudio.microsoft.com/downloads/#build-tools-for-visual-studio-2022
-   - اختر: "Desktop development with C++"
-
-### خطوات البناء الكاملة (من الصفر)
+### يدوياً على Windows
 
 ```cmd
 :: من مجلد جذر المشروع
+npm install -g pnpm
 pnpm install
 
-:: الدخول إلى مجلد الديسكتوب
-cd desktop
-npm install
-
 :: بناء الواجهة
-node build-renderer.mjs
+pnpm --filter @workspace/erp-van-sales run build
 
-:: بناء ملف الإعداد
-npm run dist
+:: نسخ الواجهة المبنية
+xcopy /E /I /Y artifacts\erp-van-sales\dist\public\* desktop\renderer\
+
+:: تثبيت مكتبات السيرفر (production فقط)
+cd desktop
+npm install --omit=dev
+
+:: نسخ node.exe (تحتاج node.js مثبتاً)
+copy "%ProgramFiles%\nodejs\node.exe" bundle\node.exe
+
+:: بناء المثبّت (تحتاج NSIS مثبتاً من nsis.sourceforge.io)
+mkdir dist-standalone
+"C:\Program Files (x86)\NSIS\makensis.exe" standalone\installer.nsi
 ```
 
-الناتج: `desktop\dist-installer\ERP Van Sales Setup 1.0.0.exe`
+الناتج: `desktop\dist-standalone\ERP-Van-Sales-Setup.exe`
 
-### طريقة أسرع (الـ renderer مبني مسبقاً)
+---
 
-مجلد `renderer/` يحتوي على الواجهة الجاهزة. يكفيك:
+## تشغيل السيرفر مباشرة بدون تثبيت (للاختبار)
 
 ```cmd
 cd desktop
 npm install
-npm run dist
+node standalone\server.js
 ```
 
----
-
-## تثبيت التطبيق على أجهزة العملاء
-
-1. انسخ `ERP Van Sales Setup 1.0.0.exe` للعميل
-2. شغّله كمسؤول (Run as Administrator)
-3. اتبع خطوات التثبيت
-4. يظهر في قائمة البرامج وعلى سطح المكتب
-
----
-
-## تشغيل في وضع التطوير
-
-```cmd
-cd desktop
-npm install
-npm start
-```
-
----
-
-## المزامنة مع السيرفر الرئيسي
-
-زر "مزامنة" في التطبيق يرسل إلى `deleveri.alllal.com`:
-- الفئات → المنتجات → الموردين → العملاء → الشاحنات → الفواتير → المرتجعات
-
-الترتيب صحيح ومضمون. السجلات المزامَنة مسبقاً تُتخطى (idempotent).
+ثم افتح المتصفح على `http://localhost:37891`
 
 ---
 
@@ -130,31 +117,21 @@ npm start
 
 ```
 desktop/
-├── main.js              ← Electron main process
-├── preload.js           ← IPC bridge
-├── build-renderer.mjs   ← سكريبت بناء الواجهة
-├── package.json         ← إعدادات + electron-builder
+├── standalone/
+│   ├── server.js         ← نقطة الدخل الرئيسية (بدون Electron)
+│   ├── launcher.vbs      ← مشغّل Windows (يخفي نافذة CMD)
+│   └── installer.nsi     ← سكريبت NSIS لبناء المثبّت
+├── server/
+│   ├── index.js          ← Express server setup
+│   ├── db.js             ← SQLite schema + seeding
+│   ├── config.js         ← مشاركة userDataPath
+│   ├── sync-engine.js    ← مزامنة مع deleveri.alllal.com
+│   └── routes/           ← مسارات API الكاملة
+├── renderer/             ← الواجهة React المبنية (تُنسخ من dist)
+├── bundle/               ← node.exe (يُنسخ في CI)
 ├── build/
-│   ├── icon.ico         ← أيقونة Windows
+│   ├── icon.ico          ← أيقونة Windows
 │   └── icon.png
-├── renderer/            ← واجهة React مبنية
-└── server/
-    ├── index.js         ← Express server
-    ├── db.js            ← SQLite schema + seeding
-    ├── config.js        ← مشاركة userDataPath
-    └── routes/
-        ├── auth.js
-        ├── products.js  ← يشمل رفع الصور محلياً
-        ├── categories.js
-        ├── clients.js
-        ├── invoices.js
-        ├── returns.js
-        ├── trucks.js
-        ├── stock.js
-        ├── suppliers.js
-        ├── purchases.js
-        ├── cash.js
-        ├── users.js
-        ├── reports.js
-        └── sync.js      ← مزامنة مع deleveri.alllal.com
+├── build-renderer.mjs    ← سكريبت بناء الواجهة
+└── package.json
 ```
