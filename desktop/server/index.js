@@ -33,7 +33,8 @@ function getSessionSecret(userDataPath) {
   return secret;
 }
 
-function initServer(port, userDataPath, syncEngine) {
+function initServer(port, userDataPath, syncEngine, host) {
+  const listenHost = host || "127.0.0.1";
   return new Promise((resolve, reject) => {
     fs.mkdirSync(userDataPath, { recursive: true });
     setUserDataPath(userDataPath);
@@ -90,7 +91,7 @@ function initServer(port, userDataPath, syncEngine) {
       res.status(500).json({ error: "Erreur serveur interne" });
     });
 
-    const server = app.listen(port, "127.0.0.1", () => resolve(server));
+    const server = app.listen(port, listenHost, () => resolve(server));
     server.on("error", reject);
   });
 }
