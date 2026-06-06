@@ -21,6 +21,7 @@ const cashRouter     = require("./routes/cash");
 const returnsRouter  = require("./routes/returns");
 const reportsRouter  = require("./routes/reports");
 const syncStatusModule = require("./routes/sync-status");
+const backupRouter     = require("./routes/backup");
 
 /** Get or generate a per-installation session secret stored in userData. */
 function getSessionSecret(userDataPath) {
@@ -70,6 +71,7 @@ function initServer(port, userDataPath, syncEngine, host) {
     app.use("/api", usersRouter);
     app.use("/api", syncRouter);
     app.use("/api", syncStatusModule.router);  // auto-sync status + credentials
+    app.use("/api", backupRouter);             // backup download + restore
     app.use("/api", cashRouter);
     app.use("/api", returnsRouter);
     app.use("/api", reportsRouter);
