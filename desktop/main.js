@@ -121,22 +121,39 @@ app.on("activate", () => {
 
 // ── IPC handlers ─────────────────────────────────────────────────────────────
 
-ipcMain.handle("backup-db", async (_event, destPath) => {
-  const { backupDb } = require("./server/db");
-  await backupDb(destPath);
-  return { ok: true };
+ipcMain.handle("backup-db", async () => {
+  const { canceled, filePath } = await dialog.showSaveDialog(mainWindow, {
+    title: "حفظ نسخة احتياطية",
+    defaultPath: `erp-van-sales-backup-${new Date().toISOString().slice(0,10)}.db`,
+    filters: [{ name: "SQLite Database", extensions: ["db"] }],
+  });
+  if (canceled || !filePath) return { success: false, canceled: true };
+  try {
+    const { backupDb } = require("./server/db");
+    await backupDb(filePath);
+    return { success: true, path: filePath };
+  } catch (err) {
+    return { success: false, error: err.message };
+  }
 });
 
-ipcMain.handle("restore-db", async (_event, srcPath) => {
-  const { closeDb } = require("./server/db");
-  closeDb();
-  const dbDest = path.join(app.getPath("userData"), "erp-van-sales.db");
-  fs.copyFileSync(srcPath, dbDest);
-  setTimeout(() => {
-    app.relaunch();
-    app.exit(0);
-  }, 2500);
-  return { ok: true };
+ipcMain.handle("restore-db", async () => {
+  const { canceled, filePaths } = await dialog.showOpenDialog(mainWindow, {
+    title: "اختر ملف النسخة الاحتياطية",
+    filters: [{ name: "SQLite Database", extensions: ["db"] }],
+    properties: ["openFile"],
+  });
+  if (canceled || !filePaths?.length) return { success: false, canceled: true };
+  try {
+    const { closeDb } = require("./server/db");
+    closeDb();
+    const dbDest = path.join(app.getPath("userData"), "erp-van-sales.db");
+    fs.copyFileSync(filePaths[0], dbDest);
+    setTimeout(() => { app.relaunch(); app.exit(0); }, 800);
+    return { success: true };
+  } catch (err) {
+    return { success: false, error: err.message };
+  }
 });
 
 ipcMain.handle("get-sync-status", () => {
