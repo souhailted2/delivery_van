@@ -165,7 +165,10 @@ function getTableColumns(tableName) {
 
 /** Upsert a record from cloud into local SQLite. Only applies if newer. */
 function upsertRecord(tableName, record) {
-  if (!record.sync_id) return;
+  // Assign a sync_id if missing (older cloud records may not have one yet)
+  if (!record.sync_id) {
+    record = { ...record, sync_id: `cloud_${tableName}_${record.id}` };
+  }
   const db   = getDb();
   const cols  = getTableColumns(tableName).filter(c => c in record);
   if (!cols.length) return;
