@@ -30,6 +30,7 @@ declare global {
       getSyncStatus:            () => Promise<SyncStatus>;
       saveSyncCredentials:      (creds: { username: string; password: string }) => Promise<{ ok: boolean; error?: string }>;
       triggerSync:              () => Promise<{ ok: boolean }>;
+      resetSync:                () => Promise<{ ok: boolean }>;
       onSyncStatus:             (cb: (s: SyncStatus) => void) => void;
       removeSyncStatusListener: () => void;
     };
@@ -77,6 +78,10 @@ async function restTrigger(): Promise<void> {
   await fetch("/api/sync/trigger", { method: "POST" });
 }
 
+async function restResetSync(): Promise<void> {
+  await fetch("/api/sync/reset", { method: "POST" });
+}
+
 // ─── Component ───────────────────────────────────────────────────────────────
 
 export function ElectronSyncButton() {
@@ -94,6 +99,8 @@ export function ElectronSyncButton() {
   const [backingUp, setBackingUp] = useState(false);
   const [restoring, setRestoring] = useState(false);
   const [confirmRestore, setConfirmRestore] = useState(false);
+  const [confirmReset, setConfirmReset] = useState(false);
+  const [resetting, setResetting] = useState(false);
 
   const { toast } = useToast();
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -159,10 +166,25 @@ export function ElectronSyncButton() {
     try {
       if (mode === "electron") await window.electronAPI?.triggerSync?.();
       else await restTrigger();
-      // Refresh status after a short delay
       setTimeout(fetchStatus, 800);
     } catch {}
   }, [mode, fetchStatus]);
+
+  const handleResetSync = useCallback(async () => {
+    if (!mode) return;
+    setResetting(true);
+    try {
+      if (mode === "electron") await window.electronAPI?.resetSync?.();
+      else await restResetSync();
+      toast({ title: "✅ تمت إعادة الضبط", description: "ستبدأ مزامنة كاملة خلال لحظات..." });
+      setTimeout(fetchStatus, 1500);
+    } catch {
+      toast({ title: "❌ فشل", description: "تعذّرت إعادة الضبط", variant: "destructive" });
+    } finally {
+      setResetting(false);
+      setConfirmReset(false);
+    }
+  }, [mode, fetchStatus, toast]);
 
   const handleSaveCreds = useCallback(async () => {
     if (!autoUsername || !autoPassword || !mode) return;
@@ -264,7 +286,7 @@ export function ElectronSyncButton() {
     : online   ? "bg-green-400"
     :            "bg-gray-400";
 
-  const busy = savingCreds || backingUp || restoring;
+  const busy = savingCreds || backingUp || restoring || resetting;
 
   return (
     <>
@@ -287,6 +309,25 @@ export function ElectronSyncButton() {
           {syncing ? "مزامنة..." : online ? "متصل" : "أوفلاين"}
         </span>
       </Button>
+
+      {/* ─── Reset sync confirmation ─── */}
+      <AlertDialog open={confirmReset} onOpenChange={setConfirmReset}>
+        <AlertDialogContent dir="rtl">
+          <AlertDialogHeader>
+            <AlertDialogTitle>إعادة ضبط المزامنة</AlertDialogTitle>
+            <AlertDialogDescription>
+              سيتم <strong>مسح سجل المزامنة</strong> وإجراء مزامنة كاملة من السيرفر.
+              لن تُفقد أي بيانات محلية — فقط سيتم إعادة سحب كل البيانات من السيرفر.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter className="flex-row-reverse gap-2">
+            <AlertDialogCancel>إلغاء</AlertDialogCancel>
+            <AlertDialogAction onClick={handleResetSync} disabled={resetting}>
+              {resetting ? "جاري الضبط..." : "إعادة الضبط والمزامنة"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
 
       {/* ─── Restore confirmation (both modes) ─── */}
       <AlertDialog open={confirmRestore} onOpenChange={setConfirmRestore}>
@@ -370,16 +411,29 @@ export function ElectronSyncButton() {
               </div>
             </div>
 
-            <Button
-              variant="outline"
-              size="sm"
-              className="w-full gap-2"
-              onClick={handleTrigger}
-              disabled={syncing}
-            >
-              <RefreshCw className={cn("h-3.5 w-3.5", syncing && "animate-spin")} />
-              مزامنة الآن
-            </Button>
+            <div className="flex gap-2">
+              <Button
+                variant="outline"
+                size="sm"
+                className="flex-1 gap-2"
+                onClick={handleTrigger}
+                disabled={busy}
+              >
+                <RefreshCw className={cn("h-3.5 w-3.5", syncing && "animate-spin")} />
+                مزامنة الآن
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                className="gap-2 border-orange-300 text-orange-700 hover:bg-orange-50"
+                onClick={() => setConfirmReset(true)}
+                disabled={busy}
+                title="إعادة ضبط المزامنة — مزامنة كاملة من السيرفر"
+              >
+                <RefreshCw className="h-3.5 w-3.5" />
+                إعادة الضبط
+              </Button>
+            </div>
 
             {/* Credentials form */}
             <div className="space-y-3 pt-1">
