@@ -174,53 +174,69 @@ function getTableColumns(tableName) {
     .filter(c => !EXCLUDE_ON_UPSERT.has(c));
 }
 
-/** Upsert a record from cloud into local SQLite. Only applies if newer.
+/** Upsert a record from cloud into local SQLite.
  *
- *  Strategy (FK constraints are OFF during pull transaction):
- *  1. Try INSERT … ON CONFLICT(sync_id) DO UPDATE  — the normal path.
- *  2. If that fails (PK collision on `id` from existing local row),
- *     fall back to UPDATE WHERE id = ? so we still apply the cloud data.
+ *  Strategy (FK enforcement is OFF during the pull transaction):
+ *
+ *  1. Look for an existing local row by sync_id, then by id.
+ *  2a. Found → UPDATE only if cloud updated_at is newer.
+ *  2b. Not found → INSERT OR REPLACE preserving cloud id so that FK
+ *      child rows (invoice.truck_id, etc.) resolve to the right parent.
+ *
+ *  Root cause this fixes: the old "ON CONFLICT(sync_id)" approach silently
+ *  failed whenever a local row already held the same `id` but a different
+ *  sync_id — the PK constraint fired first and the catch block couldn't
+ *  recover, so nothing was written to SQLite.
  */
 function upsertRecord(tableName, record) {
-  // Assign a fallback sync_id if cloud record is missing one
   if (!record.sync_id) {
     record = { ...record, sync_id: `cloud_${tableName}_${record.id}` };
   }
-  const db  = getDb();
-  const cols = getTableColumns(tableName).filter(c => c in record);
+
+  const db       = getDb();
+  const cols     = getTableColumns(tableName).filter(c => c in record);
   if (!cols.length) return;
 
-  const placeholders = cols.map(() => "?").join(", ");
-  const updateCols   = cols.filter(c => c !== "sync_id" && c !== "created_at" && c !== "id");
-  const updates      = updateCols.map(c => `${c} = excluded.${c}`).join(", ");
-  const vals         = cols.map(c => record[c] ?? null);
+  const updateCols = cols.filter(c => c !== "id" && c !== "sync_id" && c !== "created_at");
+  const vals       = cols.map(c => record[c] ?? null);
 
   try {
-    if (updates) {
-      db.prepare(`
-        INSERT INTO ${tableName} (${cols.join(", ")})
-        VALUES (${placeholders})
-        ON CONFLICT(sync_id) DO UPDATE SET ${updates}
-        WHERE excluded.updated_at > ${tableName}.updated_at
-           OR ${tableName}.updated_at IS NULL
-      `).run(...vals);
-    } else {
-      db.prepare(`INSERT OR IGNORE INTO ${tableName} (${cols.join(", ")}) VALUES (${placeholders})`)
-        .run(...vals);
+    // Find existing local row by sync_id first, then by id
+    let existingId = null;
+    const bySyncId = db.prepare(`SELECT id FROM ${tableName} WHERE sync_id = ? LIMIT 1`)
+                       .get(record.sync_id);
+    if (bySyncId) {
+      existingId = bySyncId.id;
+    } else if (record.id != null) {
+      const byId = db.prepare(`SELECT id FROM ${tableName} WHERE id = ? LIMIT 1`)
+                     .get(record.id);
+      if (byId) existingId = byId.id;
     }
-  } catch {
-    // PK collision: another local row holds this `id`. Update it by sync_id or id.
-    if (!updateCols.length) return;
-    try {
+
+    if (existingId != null) {
+      // UPDATE existing row only if incoming data is newer
+      if (!updateCols.length) return;
       const setClause = updateCols.map(c => `${c} = ?`).join(", ");
       const setVals   = updateCols.map(c => record[c] ?? null);
-      const changed   = db.prepare(
-        `UPDATE ${tableName} SET ${setClause} WHERE sync_id = ?`
-      ).run(...setVals, record.sync_id).changes;
-      if (!changed && record.id != null) {
-        db.prepare(`UPDATE ${tableName} SET ${setClause} WHERE id = ?`)
-          .run(...setVals, record.id);
-      }
+      db.prepare(`
+        UPDATE ${tableName}
+        SET ${setClause}
+        WHERE id = ?
+          AND (updated_at IS NULL OR ? > updated_at)
+      `).run(...setVals, existingId, record.updated_at ?? "9999");
+    } else {
+      // INSERT new row — preserve cloud id so FK children resolve correctly
+      const placeholders = cols.map(() => "?").join(", ");
+      db.prepare(
+        `INSERT OR REPLACE INTO ${tableName} (${cols.join(", ")}) VALUES (${placeholders})`
+      ).run(...vals);
+    }
+  } catch {
+    try {
+      const placeholders = cols.map(() => "?").join(", ");
+      db.prepare(
+        `INSERT OR IGNORE INTO ${tableName} (${cols.join(", ")}) VALUES (${placeholders})`
+      ).run(...vals);
     } catch {}
   }
 }
