@@ -1,19 +1,5 @@
 const { Router } = require("express");
 const { getDb, hashPassword } = require("../db");
-const path = require("path");
-const fs   = require("fs");
-const { getUserDataPath } = require("../config");
-
-const CLOUD_BASE = "https://deleveri.alllal.com";
-function resolveImageUrl(imageUrl) {
-  if (!imageUrl) return imageUrl;
-  if (imageUrl.startsWith("/api/storage/uploads/")) {
-    const filename = path.basename(imageUrl);
-    const localPath = path.join(getUserDataPath(), "uploads", filename);
-    if (!fs.existsSync(localPath)) return `${CLOUD_BASE}${imageUrl}`;
-  }
-  return imageUrl;
-}
 
 const router = Router();
 
@@ -127,7 +113,7 @@ router.get("/trucks/me/stock", (req, res) => {
   `).all(truckId);
   res.json(stock.map(s => ({
     productId: s.product_id, productName: s.product_name, quantity: Number(s.quantity),
-    unit: s.unit, imageUrl: resolveImageUrl(s.image_url),
+    unit: s.unit, imageUrl: s.image_url ?? null,
     sellingPriceRetail: Number(s.selling_price_retail ?? 0),
     sellingPriceHalfWholesale: Number(s.selling_price_half_wholesale ?? 0),
     sellingPriceWholesale: Number(s.selling_price_wholesale ?? 0),

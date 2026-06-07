@@ -44,28 +44,28 @@ router.post("/products/upload-image", (req, res, next) => {
 router.get("/storage/uploads/:filename", (req, res) => {
   const filename = path.basename(req.params.filename);
   const filePath = path.join(getUserDataPath(), "uploads", filename);
-  if (!fs.existsSync(filePath)) return res.status(404).json({ error: "الملف غير موجود" });
-  res.setHeader("Content-Type", "image/jpeg");
-  res.sendFile(filePath);
-});
 
-const CLOUD_BASE = "https://deleveri.alllal.com";
-
-/**
- * Cloud-synced images are stored as "/api/storage/uploads/<uuid>.jpg".
- * The desktop server serves its own local uploads, but images uploaded on
- * the cloud are not present locally. Rewrite to the full cloud URL when the
- * file is not found in the local uploads directory.
- */
-function resolveImageUrl(imageUrl) {
-  if (!imageUrl) return imageUrl;
-  if (imageUrl.startsWith("/api/storage/uploads/")) {
-    const filename = path.basename(imageUrl);
-    const localPath = path.join(getUserDataPath(), "uploads", filename);
-    if (!fs.existsSync(localPath)) return `${CLOUD_BASE}${imageUrl}`;
+  if (fs.existsSync(filePath)) {
+    res.setHeader("Content-Type", "image/jpeg");
+    return res.sendFile(filePath);
   }
-  return imageUrl;
-}
+
+  // File not found locally — proxy from cloud using sync session cookie
+  const { getSessionCookie } = require("../sync-engine");
+  const cookie = getSessionCookie();
+  if (!cookie) return res.status(404).json({ error: "الملف غير موجود" });
+
+  const https = require("https");
+  const cloudUrl = `https://deleveri.alllal.com/api/storage/uploads/${filename}`;
+  const cloudReq = https.get(cloudUrl, { headers: { cookie } }, (cloudRes) => {
+    if (cloudRes.statusCode !== 200) return res.status(404).end();
+    const ct = cloudRes.headers["content-type"] || "image/jpeg";
+    res.setHeader("Content-Type", ct);
+    res.setHeader("Cache-Control", "public, max-age=86400");
+    cloudRes.pipe(res);
+  });
+  cloudReq.on("error", () => res.status(500).end());
+});
 
 function formatProduct(p) {
   return {
@@ -79,7 +79,7 @@ function formatProduct(p) {
     commissionRetail: Number(p.commission_retail ?? 0),
     commissionHalf: Number(p.commission_half ?? 0),
     commissionWholesale: Number(p.commission_wholesale ?? 0),
-    imageUrl: resolveImageUrl(p.image_url), unit: p.unit, createdAt: p.created_at,
+    imageUrl: p.image_url ?? null, unit: p.unit, createdAt: p.created_at,
   };
 }
 

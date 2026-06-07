@@ -22,6 +22,7 @@ const returnsRouter  = require("./routes/returns");
 const reportsRouter  = require("./routes/reports");
 const syncStatusModule = require("./routes/sync-status");
 const backupRouter     = require("./routes/backup");
+const debugRouter      = require("./routes/debug");
 
 /** Get or generate a per-installation session secret stored in userData. */
 function getSessionSecret(userDataPath) {
@@ -72,6 +73,7 @@ function initServer(port, userDataPath, syncEngine, host) {
     app.use("/api", syncRouter);
     app.use("/api", syncStatusModule.router);  // auto-sync status + credentials
     app.use("/api", backupRouter);             // backup download + restore
+    app.use("/api", debugRouter);              // debug: sqlite table counts
     app.use("/api", cashRouter);
     app.use("/api", returnsRouter);
     app.use("/api", reportsRouter);
