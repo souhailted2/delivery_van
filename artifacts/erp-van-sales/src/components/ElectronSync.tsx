@@ -45,6 +45,7 @@ interface SyncStatus {
   pending: number;
   lastPullReceived?: number;
   lastPullWritten?: number;
+  lastPullFirstError?: string | null;
 }
 
 const DEFAULT_STATUS: SyncStatus = {
@@ -409,11 +410,15 @@ export function ElectronSyncButton() {
                 )}
                 {syncStatus.lastSync && syncStatus.lastPullReceived !== undefined && (
                   <p className={`text-xs mt-0.5 font-medium ${
-                    syncStatus.lastPullReceived === 0 ? "text-amber-600" : "text-green-700"
+                    syncStatus.lastPullReceived === 0 ? "text-amber-600" :
+                    syncStatus.lastPullWritten === 0   ? "text-red-600"   : "text-green-700"
                   }`}>
-                    📥 استُقبل من السيرفر: {syncStatus.lastPullReceived} سجل
-                    {syncStatus.lastPullWritten !== undefined && syncStatus.lastPullReceived > 0 &&
-                      ` — كُتب: ${syncStatus.lastPullWritten}`}
+                    📥 استُقبل: {syncStatus.lastPullReceived} — كُتب: {syncStatus.lastPullWritten ?? 0}
+                  </p>
+                )}
+                {syncStatus.lastPullFirstError && (
+                  <p className="text-xs text-red-600 mt-0.5 break-all font-mono">
+                    ⚠️ {syncStatus.lastPullFirstError}
                   </p>
                 )}
                 {syncStatus.pending > 0 && (

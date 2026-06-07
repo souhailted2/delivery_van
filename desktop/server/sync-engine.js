@@ -59,8 +59,9 @@ const status = {
   lastSync: null,   // ISO string
   error:    null,   // string | null
   pending:  0,      // records pending push
-  lastPullReceived: 0,  // total records received from server in last pull
-  lastPullWritten:  0,  // total records written to SQLite in last pull
+  lastPullReceived:   0,    // total records received from server in last pull
+  lastPullWritten:    0,    // total records written to SQLite in last pull
+  lastPullFirstError: null, // first upsert error message (diagnostic)
 };
 
 const listeners = new Set();
@@ -242,13 +243,8 @@ function upsertRecord(tableName, record) {
       ).run(...vals);
       return true;
     } catch (e2) {
-      // Log to sync_log so we can see failures in the UI
-      try {
-        db.prepare(
-          `INSERT INTO sync_log (status, error) VALUES ('upsert_error', ?)`
-        ).run(`${tableName}: ${e2.message || e1.message}`);
-      } catch {}
-      return false;
+      // Return the error message string so pull() can surface it in the UI
+      return `${tableName}: ${e2.message || e1.message}`;
     }
   }
 }
@@ -295,30 +291,45 @@ async function pull() {
   // Count totals for diagnostics
   let totalReceived = 0;
   let totalWritten  = 0;
+  let firstError    = null;
   for (const recs of Object.values(tables)) {
     if (Array.isArray(recs)) totalReceived += recs.length;
   }
 
-  // Disable FK enforcement for the bulk pull so records can be inserted in
-  // any order without cross-table dependency failures.  Re-enabled after.
+  // Use explicit BEGIN/COMMIT instead of db.transaction() to allow
+  // db.prepare() calls inside the loop (better-sqlite3 can silently fail
+  // when prepare() is called inside a db.transaction() callback).
   db.pragma("foreign_keys = OFF");
   try {
-    db.transaction(() => {
+    db.exec("BEGIN");
+    try {
       for (const tblName of PULL_TABLES) {
         const records = tables[tblName];
         if (!Array.isArray(records)) continue;
         for (const rec of records) {
-          if (upsertRecord(tblName, rec)) totalWritten++;
+          const result = upsertRecord(tblName, rec);
+          if (result === true) {
+            totalWritten++;
+          } else if (result !== true && !firstError) {
+            firstError = result || `unknown error in ${tblName}`;
+          }
         }
       }
-    })();
+      db.exec("COMMIT");
+    } catch (txErr) {
+      try { db.exec("ROLLBACK"); } catch {}
+      throw txErr;
+    }
   } finally {
     db.pragma("foreign_keys = ON");
   }
 
   setSyncMeta("last_pull_at", new Date().toISOString());
-  // Expose stats so the UI can show them
-  emit({ lastPullReceived: totalReceived, lastPullWritten: totalWritten });
+  emit({
+    lastPullReceived:   totalReceived,
+    lastPullWritten:    totalWritten,
+    lastPullFirstError: firstError,
+  });
 }
 
 // ─── PUSH ─────────────────────────────────────────────────────────────────────
