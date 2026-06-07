@@ -37,6 +37,12 @@ declare global {
   }
 }
 
+interface PullTableDetail {
+  received: number;
+  written: number;
+  error: string | null;
+}
+
 interface SyncStatus {
   online: boolean;
   syncing: boolean;
@@ -46,6 +52,7 @@ interface SyncStatus {
   lastPullReceived?: number;
   lastPullWritten?: number;
   lastPullFirstError?: string | null;
+  lastPullTables?: Record<string, PullTableDetail>;
 }
 
 interface SqliteCounts { [table: string]: number | string; }
@@ -438,6 +445,40 @@ export function ElectronSyncButton() {
                 {syncStatus.pending > 0 && (
                   <p className="text-xs text-amber-600 mt-0.5">{syncStatus.pending} سجل بانتظار الإرسال</p>
                 )}
+                {/* Per-table sync diagnostics */}
+                {syncStatus.lastPullTables && Object.keys(syncStatus.lastPullTables).length > 0 && (
+                  <div className="mt-2 border border-blue-200 rounded p-2 bg-blue-50/60">
+                    <p className="text-xs font-semibold mb-1 text-blue-700">🔄 آخر سحب — تفاصيل الجداول</p>
+                    <div className="space-y-0.5">
+                      {[
+                        ["trucks","الشاحنات"],["clients","العملاء"],["products","المنتجات"],
+                        ["categories","الفئات"],["suppliers","الموردون"],["invoices","الفواتير"],
+                        ["invoice_items","بنود الفواتير"],["returns","المرتجعات"],
+                        ["return_items","بنود المرتجعات"],["cash_transfers","تحويلات"],
+                        ["truck_stock","مخزون الشاحنة"],["purchases","طلبات الشراء"],
+                      ].map(([key, label]) => {
+                        const d = syncStatus.lastPullTables![key];
+                        if (!d) return null;
+                        const hasErr = !!d.error;
+                        const notWritten = d.received > 0 && d.written < d.received;
+                        return (
+                          <div key={key} className="flex items-center gap-1 text-xs">
+                            <span className="text-muted-foreground w-28 shrink-0">{label}</span>
+                            <span className="font-mono text-gray-500">recv:{d.received}</span>
+                            <span className={`font-mono font-semibold ${
+                              d.received === 0 ? "text-gray-400" :
+                              notWritten || hasErr ? "text-red-600" : "text-green-700"
+                            }`}>wr:{d.written}</span>
+                            {hasErr && (
+                              <span className="text-red-600 break-all font-mono text-[10px]">⚠️{d.error}</span>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
+                {/* SQLite local counts */}
                 {sqliteCounts && Object.keys(sqliteCounts).length > 0 && (
                   <div className="mt-2 border border-border rounded p-2 bg-muted/40">
                     <p className="text-xs font-semibold mb-1 text-muted-foreground">📦 محتوى قاعدة البيانات المحلية</p>
@@ -447,7 +488,7 @@ export function ElectronSyncButton() {
                         ["categories","الفئات"],["suppliers","الموردون"],["invoices","الفواتير"],
                         ["invoice_items","بنود الفواتير"],["returns","المرتجعات"],
                         ["return_items","بنود المرتجعات"],["cash_transfers","تحويلات"],
-                        ["truck_stock","مخزون الشاحنة"],["purchase_orders","طلبات الشراء"],
+                        ["truck_stock","مخزون الشاحنة"],["purchases","طلبات الشراء"],
                       ].map(([key, label]) => (
                         <div key={key} className="flex justify-between text-xs">
                           <span className="text-muted-foreground">{label}</span>

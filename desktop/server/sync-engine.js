@@ -290,12 +290,17 @@ async function pull() {
   const tables = r.data?.tables || {};
   const db = getDb();
 
-  // Count totals for diagnostics
+  // Per-table diagnostics: { [tableName]: { received, written, error } }
+  const tableDetails = {};
   let totalReceived = 0;
   let totalWritten  = 0;
   let firstError    = null;
-  for (const recs of Object.values(tables)) {
-    if (Array.isArray(recs)) totalReceived += recs.length;
+
+  for (const tblName of PULL_TABLES) {
+    const recs = tables[tblName];
+    const cnt = Array.isArray(recs) ? recs.length : 0;
+    tableDetails[tblName] = { received: cnt, written: 0, error: null };
+    totalReceived += cnt;
   }
 
   // Use explicit BEGIN/COMMIT instead of db.transaction() to allow
@@ -312,8 +317,11 @@ async function pull() {
           const result = upsertRecord(tblName, rec);
           if (result === true) {
             totalWritten++;
-          } else if (result !== true && !firstError) {
-            firstError = result || `unknown error in ${tblName}`;
+            tableDetails[tblName].written++;
+          } else {
+            const errMsg = result || `unknown error in ${tblName}`;
+            if (!firstError) firstError = errMsg;
+            if (!tableDetails[tblName].error) tableDetails[tblName].error = errMsg;
           }
         }
       }
@@ -331,6 +339,7 @@ async function pull() {
     lastPullReceived:   totalReceived,
     lastPullWritten:    totalWritten,
     lastPullFirstError: firstError,
+    lastPullTables:     tableDetails,
   });
 }
 

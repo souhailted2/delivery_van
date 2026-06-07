@@ -5,9 +5,9 @@ const router = Router();
 
 const TABLES = [
   "categories", "suppliers", "trucks", "users", "clients", "products",
-  "purchase_orders", "purchase_items", "invoices", "invoice_items",
+  "purchases", "purchase_items", "invoices", "invoice_items",
   "returns", "return_items", "cash_transfers", "truck_stock",
-  "stock_transfers", "stock_transfer_items", "warehouse_stock",
+  "stock_transfers", "stock_transfer_items",
 ];
 
 router.get("/debug/sqlite-counts", (req, res) => {
