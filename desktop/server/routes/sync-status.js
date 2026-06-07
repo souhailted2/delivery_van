@@ -32,4 +32,11 @@ router.post("/sync/trigger", (_req, res) => {
   res.json({ ok: true });
 });
 
+router.post("/sync/reset", (_req, res) => {
+  if (!engine) return res.status(503).json({ error: "Sync engine not started" });
+  engine.resetSync();
+  engine.syncOnce().catch(() => {});
+  res.json({ ok: true });
+});
+
 module.exports = { router, setEngine };
