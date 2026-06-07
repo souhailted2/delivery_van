@@ -2,11 +2,12 @@ import { useState, useEffect, useCallback, useRef } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import {
   CloudOff, RefreshCw, CheckCircle, AlertCircle,
-  X, Download, Upload, CloudCog,
+  X, Download, Upload, CloudCog, ChevronDown, ChevronUp,
+  Wifi, WifiOff,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
-  Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription,
+  Dialog, DialogContent, DialogHeader, DialogTitle,
 } from "@/components/ui/dialog";
 import {
   AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
@@ -15,7 +16,6 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Separator } from "@/components/ui/separator";
-import { Badge } from "@/components/ui/badge";
 import { useToast } from "@/hooks/use-toast";
 import { cn } from "@/lib/utils";
 
@@ -70,13 +70,14 @@ const DEFAULT_STATUS: SyncStatus = {
   online: false, syncing: false, lastSync: null, error: null, pending: 0,
 };
 
-function formatTime(iso: string | null): string {
+function formatDate(iso: string | null): string {
   if (!iso) return "—";
-  return new Date(iso).toLocaleTimeString("ar-DZ", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+  const d = new Date(iso);
+  const today = new Date();
+  const timeStr = d.toLocaleTimeString("ar-DZ", { hour: "2-digit", minute: "2-digit" });
+  if (d.toDateString() === today.toDateString()) return `اليوم ${timeStr}`;
+  return d.toLocaleDateString("ar-DZ", { month: "short", day: "numeric" }) + " " + timeStr;
 }
-
-// ─── Unified adapter ─────────────────────────────────────────────────────────
-// Wraps either Electron IPC or local REST API so the UI doesn't care which.
 
 type DesktopMode = "electron" | "standalone";
 
@@ -113,15 +114,16 @@ export function ElectronSyncButton() {
   const [open, setOpen] = useState(false);
 
   const [autoUsername, setAutoUsername] = useState("");
-  const [autoPassword, setAutoPassword] = useState("")  ;
+  const [autoPassword, setAutoPassword] = useState("");
   const [savingCreds, setSavingCreds] = useState(false);
   const [credsMsg, setCredsMsg] = useState<string | null>(null);
+  const [showCreds, setShowCreds] = useState(false);
 
-  const [backingUp, setBackingUp] = useState(false);
-  const [restoring, setRestoring] = useState(false);
+  const [backingUp, setBackingUp]   = useState(false);
+  const [restoring, setRestoring]   = useState(false);
   const [confirmRestore, setConfirmRestore] = useState(false);
-  const [confirmReset, setConfirmReset] = useState(false);
-  const [resetting, setResetting] = useState(false);
+  const [confirmReset, setConfirmReset]     = useState(false);
+  const [resetting, setResetting]   = useState(false);
   const [sqliteCounts, setSqliteCounts] = useState<SqliteCounts | null>(null);
 
   const { toast } = useToast();
@@ -133,7 +135,6 @@ export function ElectronSyncButton() {
       setMode("electron");
       return;
     }
-    // Try standalone REST endpoint (exists only when running inside installer)
     const ctrl = new AbortController();
     fetch("/api/sync/status", { signal: ctrl.signal })
       .then(r => { if (r.ok) setMode("standalone"); })
@@ -155,11 +156,9 @@ export function ElectronSyncButton() {
     } catch {}
   }, [mode]);
 
-  // Initial fetch + Electron push events
   useEffect(() => {
     if (!mode) return undefined;
     fetchStatus();
-
     if (mode === "electron" && window.electronAPI?.onSyncStatus) {
       window.electronAPI.onSyncStatus(s => setSyncStatus(s));
       return () => window.electronAPI?.removeSyncStatusListener?.();
@@ -167,15 +166,20 @@ export function ElectronSyncButton() {
     return undefined;
   }, [mode, fetchStatus]);
 
-  // Poll every 5 s (both modes — Electron as fallback, standalone as primary)
   useEffect(() => {
     if (!mode) return;
     pollRef.current = setInterval(fetchStatus, 5000);
     return () => { if (pollRef.current) clearInterval(pollRef.current); };
   }, [mode, fetchStatus]);
 
-  // Invalidate all React Query caches when sync transitions syncing → done (no error)
-  // Also refresh SQLite counts so the user can verify what was written
+  // Fetch counts when dialog opens
+  useEffect(() => {
+    if (open && mode) {
+      fetchSqliteCounts().then(setSqliteCounts);
+    }
+  }, [open, mode]);
+
+  // Invalidate caches + refresh counts after sync completes
   useEffect(() => {
     if (prevSyncing.current && !syncStatus.syncing && !syncStatus.error && syncStatus.lastSync) {
       queryClient.invalidateQueries();
@@ -221,6 +225,7 @@ export function ElectronSyncButton() {
       }
       setCredsMsg("تم حفظ البيانات — المزامنة تعمل تلقائياً");
       setAutoPassword("");
+      setShowCreds(false);
       toast({ title: "تم الحفظ", description: "ستبدأ المزامنة التلقائية خلال لحظات" });
       setTimeout(fetchStatus, 2000);
     } catch {
@@ -230,7 +235,6 @@ export function ElectronSyncButton() {
     }
   }, [autoUsername, autoPassword, mode, fetchStatus, toast]);
 
-  // Standalone: hidden file input ref for restore
   const restoreInputRef = useRef<HTMLInputElement>(null);
   const [pendingRestoreFile, setPendingRestoreFile] = useState<File | null>(null);
 
@@ -246,16 +250,12 @@ export function ElectronSyncButton() {
         } else {
           toast({ title: "❌ فشل الحفظ", description: result.error, variant: "destructive" });
         }
-      } finally {
-        setBackingUp(false);
-      }
+      } finally { setBackingUp(false); }
     } else {
-      // Standalone: trigger browser download
       window.location.href = "/api/backup/download";
     }
   };
 
-  // Standalone restore: file picked → show confirm dialog
   const handleRestoreFilePick = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -291,26 +291,29 @@ export function ElectronSyncButton() {
         }
         setPendingRestoreFile(null);
       }
-      toast({
-        title: "✅ تمت الاستعادة بنجاح",
-        description: "سيُعاد تشغيل البرنامج خلال لحظات...",
-      });
-    } finally {
-      setRestoring(false);
-    }
+      toast({ title: "✅ تمت الاستعادة بنجاح", description: "سيُعاد تشغيل البرنامج خلال لحظات..." });
+    } finally { setRestoring(false); }
   };
 
-  // ── Render guard ──────────────────────────────────────────────────────────
   if (!mode) return null;
 
   const { online, syncing, error } = syncStatus;
+  const busy = savingCreds || backingUp || restoring || resetting;
+
   const dotClass = syncing
     ? "bg-blue-400 animate-pulse"
     : error   ? "bg-red-400"
     : online   ? "bg-green-400"
-    :            "bg-gray-400";
+    :            "bg-gray-300";
 
-  const busy = savingCreds || backingUp || restoring || resetting;
+  const totalLocal = sqliteCounts
+    ? Object.values(sqliteCounts).reduce<number>((sum, v) => sum + (typeof v === "number" ? v : 0), 0)
+    : null;
+
+  const DATA_TABLES: [string, string][] = [
+    ["trucks","الشاحنات"], ["clients","العملاء"], ["products","المنتجات"],
+    ["invoices","الفواتير"], ["returns","المرتجعات"], ["purchases","الطلبات"],
+  ];
 
   return (
     <>
@@ -319,48 +322,43 @@ export function ElectronSyncButton() {
         variant="ghost"
         size="sm"
         onClick={() => setOpen(true)}
-        className="relative gap-2 text-xs px-2.5"
+        className="relative gap-1.5 text-xs px-2.5"
         title="المزامنة والنسخ الاحتياطي"
       >
         <CloudCog className="h-4 w-4" />
-        <span
-          className={cn(
-            "absolute top-1.5 right-1.5 h-2 w-2 rounded-full border border-background",
-            dotClass,
-          )}
-        />
-        <span className="hidden sm:inline">
+        <span className={cn("absolute top-1.5 right-1.5 h-2 w-2 rounded-full border border-background", dotClass)} />
+        <span className="hidden sm:inline text-xs">
           {syncing ? "مزامنة..." : online ? "متصل" : "أوفلاين"}
         </span>
       </Button>
 
-      {/* ─── Reset sync confirmation ─── */}
+      {/* ─── Reset confirmation ─── */}
       <AlertDialog open={confirmReset} onOpenChange={setConfirmReset}>
         <AlertDialogContent dir="rtl">
           <AlertDialogHeader>
             <AlertDialogTitle>إعادة ضبط المزامنة</AlertDialogTitle>
             <AlertDialogDescription>
-              سيتم <strong>مسح سجل المزامنة</strong> وإجراء مزامنة كاملة من السيرفر.
-              لن تُفقد أي بيانات محلية — فقط سيتم إعادة سحب كل البيانات من السيرفر.
+              سيتم مسح سجل المزامنة وإجراء مزامنة كاملة من السيرفر.
+              لن تُفقد أي بيانات محلية.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter className="flex-row-reverse gap-2">
             <AlertDialogCancel>إلغاء</AlertDialogCancel>
             <AlertDialogAction onClick={handleResetSync} disabled={resetting}>
-              {resetting ? "جاري الضبط..." : "إعادة الضبط والمزامنة"}
+              {resetting ? "جاري الضبط..." : "تأكيد"}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
 
-      {/* ─── Restore confirmation (both modes) ─── */}
+      {/* ─── Restore confirmation ─── */}
       <AlertDialog open={confirmRestore} onOpenChange={setConfirmRestore}>
         <AlertDialogContent dir="rtl">
           <AlertDialogHeader>
             <AlertDialogTitle>تأكيد استعادة البيانات</AlertDialogTitle>
             <AlertDialogDescription>
-              سيتم <strong>استبدال جميع البيانات الحالية</strong> بالبيانات الموجودة في ملف النسخة الاحتياطية،
-              ثم سيُعاد تشغيل البرنامج تلقائياً. هذا الإجراء لا يمكن التراجع عنه.
+              سيتم استبدال جميع البيانات الحالية بالبيانات الموجودة في ملف النسخة الاحتياطية.
+              هذا الإجراء لا يمكن التراجع عنه.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter className="flex-row-reverse gap-2">
@@ -386,128 +384,106 @@ export function ElectronSyncButton() {
 
       {/* ─── Main dialog ─── */}
       <Dialog open={open} onOpenChange={setOpen}>
-        <DialogContent className="max-w-md" dir="rtl">
-          <DialogHeader>
-            <DialogTitle className="flex items-center gap-2">
-              <CloudCog className="h-5 w-5" />
-              المزامنة التلقائية مع السيرفر
+        <DialogContent className="max-w-sm p-0 overflow-hidden" dir="rtl">
+          <DialogHeader className="px-5 pt-5 pb-0">
+            <DialogTitle className="flex items-center gap-2 text-base">
+              <CloudCog className="h-4 w-4 text-muted-foreground" />
+              المزامنة مع السيرفر
             </DialogTitle>
-            <DialogDescription>
-              البيانات تُزامَن تلقائياً كل 30 ثانية عند الاتصال بالإنترنت.
-            </DialogDescription>
           </DialogHeader>
 
-          <div className="space-y-4">
-            {/* Status card */}
+          <div className="px-5 pb-5 space-y-4 mt-3">
+
+            {/* ── Status card ── */}
             <div className={cn(
-              "flex items-start gap-3 p-3 rounded-lg border",
-              online ? "bg-green-50 border-green-200" : "bg-gray-50 border-gray-200"
+              "rounded-xl border p-4 space-y-2 transition-colors",
+              syncing ? "bg-blue-50 border-blue-200" :
+              error   ? "bg-red-50 border-red-200"   :
+              online  ? "bg-green-50 border-green-200":
+                        "bg-gray-50 border-gray-200"
             )}>
-              {syncing
-                ? <RefreshCw className="h-5 w-5 text-blue-500 animate-spin shrink-0 mt-0.5" />
-                : error
-                ? <AlertCircle className="h-5 w-5 text-red-500 shrink-0 mt-0.5" />
-                : online
-                ? <CheckCircle className="h-5 w-5 text-green-600 shrink-0 mt-0.5" />
-                : <CloudOff className="h-5 w-5 text-gray-400 shrink-0 mt-0.5" />
-              }
-              <div className="flex-1 min-w-0">
+              <div className="flex items-center justify-between">
                 <div className="flex items-center gap-2">
-                  <span className="text-sm font-medium">
-                    {syncing ? "جاري المزامنة..." : online ? "متصل بالسيرفر" : "غير متصل"}
-                  </span>
-                  <Badge variant="secondary" className={cn(
-                    "text-xs",
-                    online ? "bg-green-100 text-green-700" : "bg-gray-100 text-gray-500"
+                  {syncing
+                    ? <RefreshCw className="h-4 w-4 text-blue-500 animate-spin" />
+                    : error
+                    ? <AlertCircle className="h-4 w-4 text-red-500" />
+                    : online
+                    ? <Wifi className="h-4 w-4 text-green-600" />
+                    : <WifiOff className="h-4 w-4 text-gray-400" />
+                  }
+                  <span className={cn(
+                    "text-sm font-semibold",
+                    syncing ? "text-blue-700" :
+                    error   ? "text-red-700"   :
+                    online  ? "text-green-700" :
+                              "text-gray-500"
                   )}>
-                    {online ? "Online" : "Offline"}
-                  </Badge>
+                    {syncing ? "جاري المزامنة..." :
+                     error   ? "خطأ في المزامنة"  :
+                     online  ? "متصل بالسيرفر"    :
+                               "غير متصل"}
+                  </span>
                 </div>
-                {error && <p className="text-xs text-red-600 mt-0.5 break-words">{error}</p>}
                 {syncStatus.lastSync && (
-                  <p className="text-xs text-muted-foreground mt-0.5">
-                    آخر مزامنة: {formatTime(syncStatus.lastSync)}
-                  </p>
-                )}
-                {syncStatus.lastSync && syncStatus.lastPullReceived !== undefined && (
-                  <p className={`text-xs mt-0.5 font-medium ${
-                    syncStatus.lastPullReceived === 0 ? "text-amber-600" :
-                    syncStatus.lastPullWritten === 0   ? "text-red-600"   : "text-green-700"
-                  }`}>
-                    📥 استُقبل: {syncStatus.lastPullReceived} — كُتب: {syncStatus.lastPullWritten ?? 0}
-                  </p>
-                )}
-                {syncStatus.lastPullFirstError && (
-                  <p className="text-xs text-red-600 mt-0.5 break-all font-mono">
-                    ⚠️ {syncStatus.lastPullFirstError}
-                  </p>
-                )}
-                {syncStatus.pending > 0 && (
-                  <p className="text-xs text-amber-600 mt-0.5">{syncStatus.pending} سجل بانتظار الإرسال</p>
-                )}
-                {/* Per-table sync diagnostics */}
-                {syncStatus.lastPullTables && Object.keys(syncStatus.lastPullTables).length > 0 && (
-                  <div className="mt-2 border border-blue-200 rounded p-2 bg-blue-50/60">
-                    <p className="text-xs font-semibold mb-1 text-blue-700">🔄 آخر سحب — تفاصيل الجداول</p>
-                    <div className="space-y-0.5">
-                      {[
-                        ["trucks","الشاحنات"],["clients","العملاء"],["products","المنتجات"],
-                        ["categories","الفئات"],["suppliers","الموردون"],["invoices","الفواتير"],
-                        ["invoice_items","بنود الفواتير"],["returns","المرتجعات"],
-                        ["return_items","بنود المرتجعات"],["cash_transfers","تحويلات"],
-                        ["truck_stock","مخزون الشاحنة"],["purchases","طلبات الشراء"],
-                      ].map(([key, label]) => {
-                        const d = syncStatus.lastPullTables![key];
-                        if (!d) return null;
-                        const hasErr = !!d.error;
-                        const notWritten = d.received > 0 && d.written < d.received;
-                        return (
-                          <div key={key} className="flex items-center gap-1 text-xs">
-                            <span className="text-muted-foreground w-28 shrink-0">{label}</span>
-                            <span className="font-mono text-gray-500">recv:{d.received}</span>
-                            <span className={`font-mono font-semibold ${
-                              d.received === 0 ? "text-gray-400" :
-                              notWritten || hasErr ? "text-red-600" : "text-green-700"
-                            }`}>wr:{d.written}</span>
-                            {hasErr && (
-                              <span className="text-red-600 break-all font-mono text-[10px]">⚠️{d.error}</span>
-                            )}
-                          </div>
-                        );
-                      })}
-                    </div>
-                  </div>
-                )}
-                {/* SQLite local counts */}
-                {sqliteCounts && Object.keys(sqliteCounts).length > 0 && (
-                  <div className="mt-2 border border-border rounded p-2 bg-muted/40">
-                    <p className="text-xs font-semibold mb-1 text-muted-foreground">📦 محتوى قاعدة البيانات المحلية</p>
-                    <div className="grid grid-cols-2 gap-x-3 gap-y-0.5">
-                      {[
-                        ["trucks","الشاحنات"],["clients","العملاء"],["products","المنتجات"],
-                        ["categories","الفئات"],["suppliers","الموردون"],["invoices","الفواتير"],
-                        ["invoice_items","بنود الفواتير"],["returns","المرتجعات"],
-                        ["return_items","بنود المرتجعات"],["cash_transfers","تحويلات"],
-                        ["truck_stock","مخزون الشاحنة"],["purchases","طلبات الشراء"],
-                      ].map(([key, label]) => (
-                        <div key={key} className="flex justify-between text-xs">
-                          <span className="text-muted-foreground">{label}</span>
-                          <span className={`font-mono font-semibold ${
-                            Number(sqliteCounts[key] ?? 0) === 0 ? "text-red-500" : "text-green-700"
-                          }`}>
-                            {sqliteCounts[key] ?? "—"}
-                          </span>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
+                  <span className="text-xs text-muted-foreground">{formatDate(syncStatus.lastSync)}</span>
                 )}
               </div>
+
+              {error && (
+                <p className="text-xs text-red-600 bg-red-100 rounded p-2 break-words">{error}</p>
+              )}
+
+              {syncStatus.pending > 0 && !syncing && (
+                <div className="flex items-center gap-1.5 text-xs text-amber-700 bg-amber-50 rounded px-2 py-1.5 border border-amber-200">
+                  <Upload className="h-3 w-3 shrink-0" />
+                  <span>{syncStatus.pending} سجل بانتظار الإرسال للسيرفر</span>
+                </div>
+              )}
+
+              {!error && online && !syncing && syncStatus.lastSync && (
+                <div className="flex items-center gap-1.5 text-xs text-green-700">
+                  <CheckCircle className="h-3 w-3" />
+                  <span>البيانات محدّثة — تزامن تلقائي كل 60 ثانية</span>
+                </div>
+              )}
             </div>
 
+            {/* ── Data summary grid ── */}
+            {sqliteCounts && (
+              <div className="rounded-xl border bg-muted/20 p-3">
+                <div className="flex items-center justify-between mb-2.5">
+                  <p className="text-xs font-medium text-muted-foreground">البيانات المحلية</p>
+                  {totalLocal !== null && totalLocal > 0 && (
+                    <span className="text-xs font-bold text-foreground">{totalLocal.toLocaleString()} سجل</span>
+                  )}
+                </div>
+                <div className="grid grid-cols-3 gap-1.5">
+                  {DATA_TABLES.map(([key, label]) => {
+                    const count = typeof sqliteCounts[key] === "number" ? (sqliteCounts[key] as number) : null;
+                    const hasData = count !== null && count > 0;
+                    return (
+                      <div key={key} className={cn(
+                        "rounded-lg p-2 text-center border transition-colors",
+                        hasData ? "bg-white border-green-100" : "bg-background border-border"
+                      )}>
+                        <p className={cn(
+                          "text-lg font-bold leading-none",
+                          hasData ? "text-green-700" : "text-muted-foreground"
+                        )}>
+                          {count ?? "—"}
+                        </p>
+                        <p className="text-[10px] text-muted-foreground mt-0.5 leading-tight">{label}</p>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+
+            {/* ── Action buttons ── */}
             <div className="flex gap-2">
               <Button
-                variant="outline"
                 size="sm"
                 className="flex-1 gap-2"
                 onClick={handleTrigger}
@@ -519,78 +495,97 @@ export function ElectronSyncButton() {
               <Button
                 variant="outline"
                 size="sm"
-                className="gap-2 border-orange-300 text-orange-700 hover:bg-orange-50"
+                className="gap-1.5 text-orange-600 border-orange-200 hover:bg-orange-50 hover:text-orange-700"
                 onClick={() => setConfirmReset(true)}
                 disabled={busy}
-                title="إعادة ضبط المزامنة — مزامنة كاملة من السيرفر"
+                title="مزامنة كاملة من الصفر"
               >
                 <RefreshCw className="h-3.5 w-3.5" />
                 إعادة الضبط
               </Button>
             </div>
 
-            {/* Credentials form */}
-            <div className="space-y-3 pt-1">
-              <p className="text-xs font-medium text-muted-foreground">
-                بيانات دخول السيرفر (deleveri.alllal.com)
-              </p>
-              <div className="space-y-2">
-                <div>
-                  <Label className="text-xs">اسم المستخدم</Label>
-                  <Input
-                    value={autoUsername}
-                    onChange={e => setAutoUsername(e.target.value)}
-                    placeholder="admin"
-                    className="h-8 text-sm mt-1"
-                    dir="ltr"
-                  />
-                </div>
-                <div>
-                  <Label className="text-xs">كلمة المرور</Label>
-                  <Input
-                    type="password"
-                    value={autoPassword}
-                    onChange={e => setAutoPassword(e.target.value)}
-                    placeholder="••••••••"
-                    className="h-8 text-sm mt-1"
-                    dir="ltr"
-                    onKeyDown={e => e.key === "Enter" && handleSaveCreds()}
-                  />
-                </div>
-              </div>
-              <Button
-                size="sm"
-                className="w-full"
-                onClick={handleSaveCreds}
-                disabled={busy || !autoUsername || !autoPassword}
+            <Separator />
+
+            {/* ── Credentials (collapsible) ── */}
+            <div>
+              <button
+                className="w-full flex items-center justify-between text-xs font-medium text-muted-foreground hover:text-foreground transition-colors py-0.5"
+                onClick={() => setShowCreds(v => !v)}
               >
-                {savingCreds ? "جاري الحفظ..." : "حفظ وبدء المزامنة التلقائية"}
-              </Button>
-              {credsMsg && (
-                <p className="text-xs text-center text-muted-foreground">{credsMsg}</p>
+                <span>بيانات الدخول للسيرفر</span>
+                {showCreds
+                  ? <ChevronUp className="h-3.5 w-3.5" />
+                  : <ChevronDown className="h-3.5 w-3.5" />
+                }
+              </button>
+
+              {credsMsg && !showCreds && (
+                <p className="text-xs text-green-700 mt-1 flex items-center gap-1">
+                  <CheckCircle className="h-3 w-3" /> {credsMsg}
+                </p>
               )}
-              <p className="text-[10px] text-muted-foreground text-center">
-                تُحفظ البيانات محلياً ولا تُرسل إلا للسيرفر المحدد أعلاه
-              </p>
+
+              {showCreds && (
+                <div className="space-y-2 mt-3">
+                  <p className="text-[11px] text-muted-foreground">السيرفر: deleveri.alllal.com</p>
+                  <div className="grid grid-cols-2 gap-2">
+                    <div>
+                      <Label className="text-xs">المستخدم</Label>
+                      <Input
+                        value={autoUsername}
+                        onChange={e => setAutoUsername(e.target.value)}
+                        placeholder="admin"
+                        className="h-8 text-sm mt-1"
+                        dir="ltr"
+                      />
+                    </div>
+                    <div>
+                      <Label className="text-xs">كلمة المرور</Label>
+                      <Input
+                        type="password"
+                        value={autoPassword}
+                        onChange={e => setAutoPassword(e.target.value)}
+                        placeholder="••••••••"
+                        className="h-8 text-sm mt-1"
+                        dir="ltr"
+                        onKeyDown={e => e.key === "Enter" && handleSaveCreds()}
+                      />
+                    </div>
+                  </div>
+                  <Button
+                    size="sm"
+                    className="w-full"
+                    onClick={handleSaveCreds}
+                    disabled={busy || !autoUsername || !autoPassword}
+                  >
+                    {savingCreds ? "جاري الحفظ..." : "حفظ وبدء المزامنة"}
+                  </Button>
+                  {credsMsg && (
+                    <p className="text-xs text-center text-muted-foreground">{credsMsg}</p>
+                  )}
+                </div>
+              )}
             </div>
 
-            {/* Backup / Restore — both Electron and Standalone */}
             <Separator />
+
+            {/* ── Backup / Restore ── */}
             <div className="space-y-2">
-              <p className="text-xs font-medium text-muted-foreground text-center">النسخ الاحتياطي المحلي</p>
+              <p className="text-xs font-medium text-muted-foreground">النسخ الاحتياطي</p>
               <div className="grid grid-cols-2 gap-2">
                 <Button
                   variant="outline"
                   size="sm"
                   onClick={handleBackup}
                   disabled={busy}
-                  className="gap-2 border-slate-300 text-slate-700 hover:bg-slate-50"
+                  className="gap-1.5"
                 >
                   {backingUp
                     ? <RefreshCw className="h-3.5 w-3.5 animate-spin" />
                     : <Download className="h-3.5 w-3.5" />
                   }
-                  {backingUp ? "جارٍ الحفظ..." : "نسخة احتياطية"}
+                  {backingUp ? "جارٍ..." : "نسخة احتياطية"}
                 </Button>
                 <Button
                   variant="outline"
@@ -600,26 +595,25 @@ export function ElectronSyncButton() {
                     else restoreInputRef.current?.click();
                   }}
                   disabled={busy}
-                  className="gap-2 border-amber-300 text-amber-700 hover:bg-amber-50"
+                  className="gap-1.5 text-amber-700 border-amber-200 hover:bg-amber-50"
                 >
                   {restoring
                     ? <RefreshCw className="h-3.5 w-3.5 animate-spin" />
                     : <Upload className="h-3.5 w-3.5" />
                   }
-                  {restoring ? "جارٍ الاستعادة..." : "استعادة البيانات"}
+                  {restoring ? "جارٍ..." : "استعادة"}
                 </Button>
               </div>
-              <p className="text-xs text-muted-foreground text-center">
-                💾 احفظ نسخة على قرص خارجي بشكل دوري
-              </p>
             </div>
 
-            <div className="flex justify-end">
-              <Button variant="ghost" size="sm" onClick={() => setOpen(false)}>
-                <X className="h-4 w-4 ml-1" />
+            {/* ── Close ── */}
+            <div className="flex justify-center pt-1">
+              <Button variant="ghost" size="sm" onClick={() => setOpen(false)} className="text-xs text-muted-foreground gap-1">
+                <X className="h-3.5 w-3.5" />
                 إغلاق
               </Button>
             </div>
+
           </div>
         </DialogContent>
       </Dialog>
