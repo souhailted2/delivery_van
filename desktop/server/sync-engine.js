@@ -381,4 +381,11 @@ function stop() {
   sessionCookie = null;
 }
 
-module.exports = { start, stop, syncOnce, saveCredentials, getCredentials, onStatus, getStatus: () => ({ ...status }) };
+/** Reset sync cursors — forces a full re-pull on the next sync cycle */
+function resetSync() {
+  const { setSyncMeta } = require("./db");
+  setSyncMeta("last_pull_at", "1970-01-01T00:00:00.000Z");
+  setSyncMeta("last_push_at", "1970-01-01T00:00:00.000Z");
+}
+
+module.exports = { start, stop, syncOnce, saveCredentials, getCredentials, onStatus, getStatus: () => ({ ...status }), resetSync };
