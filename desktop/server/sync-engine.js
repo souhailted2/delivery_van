@@ -14,11 +14,21 @@ const SYNC_INTERVAL  = 30_000;  // 30 seconds
 const ONLINE_CHECK   = 20_000;  // 20 seconds
 const REQUEST_TIMEOUT = 15_000;
 
-// Tables included in sync (order matters for FK dependencies on pull)
+// Tables included in sync — order matters for FK dependencies on pull:
+//   1. FK-free tables first
+//   2. Then tables that reference them
 const PULL_TABLES = [
-  // Catalog — FK-free first
-  "categories", "users", "suppliers", "clients", "trucks", "products",
-  // Transactional — FK-dependent order
+  // FK-free
+  "categories", "suppliers",
+  // trucks before users (users.truck_id) and before clients (clients.truck_id)
+  "trucks",
+  // users may reference trucks
+  "users",
+  // clients reference trucks
+  "clients",
+  // products reference categories
+  "products",
+  // transactional — reference trucks/clients/products/suppliers
   "purchases", "purchase_items",
   "invoices", "invoice_items",
   "returns", "return_items",
@@ -34,8 +44,9 @@ const PUSH_TABLES = [
   "stock_transfers", "stock_transfer_items",
 ];
 
-// Columns excluded when upserting from cloud (local-only / auto fields)
-const EXCLUDE_ON_UPSERT = new Set(["id", "rowid"]);
+// Only exclude SQLite internal rowid — we KEEP the cloud `id` to preserve
+// FK references (invoice.truck_id, invoice.client_id, etc.)
+const EXCLUDE_ON_UPSERT = new Set(["rowid"]);
 
 let syncTimer   = null;
 let onlineTimer = null;
@@ -163,32 +174,54 @@ function getTableColumns(tableName) {
     .filter(c => !EXCLUDE_ON_UPSERT.has(c));
 }
 
-/** Upsert a record from cloud into local SQLite. Only applies if newer. */
+/** Upsert a record from cloud into local SQLite. Only applies if newer.
+ *
+ *  Strategy (FK constraints are OFF during pull transaction):
+ *  1. Try INSERT … ON CONFLICT(sync_id) DO UPDATE  — the normal path.
+ *  2. If that fails (PK collision on `id` from existing local row),
+ *     fall back to UPDATE WHERE id = ? so we still apply the cloud data.
+ */
 function upsertRecord(tableName, record) {
-  // Assign a sync_id if missing (older cloud records may not have one yet)
+  // Assign a fallback sync_id if cloud record is missing one
   if (!record.sync_id) {
     record = { ...record, sync_id: `cloud_${tableName}_${record.id}` };
   }
-  const db   = getDb();
-  const cols  = getTableColumns(tableName).filter(c => c in record);
+  const db  = getDb();
+  const cols = getTableColumns(tableName).filter(c => c in record);
   if (!cols.length) return;
 
   const placeholders = cols.map(() => "?").join(", ");
-  const updates = cols
-    .filter(c => c !== "sync_id" && c !== "created_at")
-    .map(c => `${c} = excluded.${c}`)
-    .join(", ");
+  const updateCols   = cols.filter(c => c !== "sync_id" && c !== "created_at" && c !== "id");
+  const updates      = updateCols.map(c => `${c} = excluded.${c}`).join(", ");
+  const vals         = cols.map(c => record[c] ?? null);
 
   try {
-    db.prepare(`
-      INSERT INTO ${tableName} (${cols.join(", ")})
-      VALUES (${placeholders})
-      ON CONFLICT(sync_id) DO UPDATE SET ${updates}
-      WHERE excluded.updated_at > ${tableName}.updated_at
-        OR ${tableName}.updated_at IS NULL
-    `).run(...cols.map(c => record[c] ?? null));
+    if (updates) {
+      db.prepare(`
+        INSERT INTO ${tableName} (${cols.join(", ")})
+        VALUES (${placeholders})
+        ON CONFLICT(sync_id) DO UPDATE SET ${updates}
+        WHERE excluded.updated_at > ${tableName}.updated_at
+           OR ${tableName}.updated_at IS NULL
+      `).run(...vals);
+    } else {
+      db.prepare(`INSERT OR IGNORE INTO ${tableName} (${cols.join(", ")}) VALUES (${placeholders})`)
+        .run(...vals);
+    }
   } catch {
-    // Ignore constraint errors (FK missing, etc.)
+    // PK collision: another local row holds this `id`. Update it by sync_id or id.
+    if (!updateCols.length) return;
+    try {
+      const setClause = updateCols.map(c => `${c} = ?`).join(", ");
+      const setVals   = updateCols.map(c => record[c] ?? null);
+      const changed   = db.prepare(
+        `UPDATE ${tableName} SET ${setClause} WHERE sync_id = ?`
+      ).run(...setVals, record.sync_id).changes;
+      if (!changed && record.id != null) {
+        db.prepare(`UPDATE ${tableName} SET ${setClause} WHERE id = ?`)
+          .run(...setVals, record.id);
+      }
+    } catch {}
   }
 }
 
@@ -230,14 +263,24 @@ async function pull() {
 
   const tables = r.data?.tables || {};
   const db = getDb();
-  db.transaction(() => {
-    for (const [tblName, records] of Object.entries(tables)) {
-      if (!Array.isArray(records)) continue;
-      for (const rec of records) {
-        upsertRecord(tblName, rec);
+
+  // Disable FK enforcement for the bulk pull so records can be inserted in
+  // any order without cross-table dependency failures.  Re-enabled after.
+  db.pragma("foreign_keys = OFF");
+  try {
+    db.transaction(() => {
+      // Respect FK-safe insertion order (parents before children)
+      for (const tblName of PULL_TABLES) {
+        const records = tables[tblName];
+        if (!Array.isArray(records)) continue;
+        for (const rec of records) {
+          upsertRecord(tblName, rec);
+        }
       }
-    }
-  })();
+    })();
+  } finally {
+    db.pragma("foreign_keys = ON");
+  }
 
   setSyncMeta("last_pull_at", new Date().toISOString());
 }
