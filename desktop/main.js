@@ -173,3 +173,10 @@ ipcMain.handle("trigger-sync", async () => {
   syncEngine.syncOnce().catch(() => {});
   return { ok: true };
 });
+
+ipcMain.handle("reset-sync", async () => {
+  if (!syncEngine) return { ok: false, error: "Sync engine not ready" };
+  syncEngine.resetSync();
+  syncEngine.syncOnce().catch(() => {});
+  return { ok: true };
+});
