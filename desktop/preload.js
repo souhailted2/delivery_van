@@ -11,6 +11,7 @@ contextBridge.exposeInMainWorld("electronAPI", {
   getSyncStatus:       ()                    => ipcRenderer.invoke("get-sync-status"),
   saveSyncCredentials: ({ username, password }) => ipcRenderer.invoke("save-sync-credentials", { username, password }),
   triggerSync:         ()                    => ipcRenderer.invoke("trigger-sync"),
+  resetSync:           ()                    => ipcRenderer.invoke("reset-sync"),
 
   // Listen for push sync-status events from main
   onSyncStatus: (callback) => {
