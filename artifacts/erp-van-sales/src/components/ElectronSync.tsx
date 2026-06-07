@@ -43,6 +43,8 @@ interface SyncStatus {
   lastSync: string | null;
   error: string | null;
   pending: number;
+  lastPullReceived?: number;
+  lastPullWritten?: number;
 }
 
 const DEFAULT_STATUS: SyncStatus = {
@@ -403,6 +405,15 @@ export function ElectronSyncButton() {
                 {syncStatus.lastSync && (
                   <p className="text-xs text-muted-foreground mt-0.5">
                     آخر مزامنة: {formatTime(syncStatus.lastSync)}
+                  </p>
+                )}
+                {syncStatus.lastSync && syncStatus.lastPullReceived !== undefined && (
+                  <p className={`text-xs mt-0.5 font-medium ${
+                    syncStatus.lastPullReceived === 0 ? "text-amber-600" : "text-green-700"
+                  }`}>
+                    📥 استُقبل من السيرفر: {syncStatus.lastPullReceived} سجل
+                    {syncStatus.lastPullWritten !== undefined && syncStatus.lastPullReceived > 0 &&
+                      ` — كُتب: ${syncStatus.lastPullWritten}`}
                   </p>
                 )}
                 {syncStatus.pending > 0 && (

@@ -59,6 +59,8 @@ const status = {
   lastSync: null,   // ISO string
   error:    null,   // string | null
   pending:  0,      // records pending push
+  lastPullReceived: 0,  // total records received from server in last pull
+  lastPullWritten:  0,  // total records written to SQLite in last pull
 };
 
 const listeners = new Set();
@@ -188,6 +190,7 @@ function getTableColumns(tableName) {
  *  sync_id — the PK constraint fired first and the catch block couldn't
  *  recover, so nothing was written to SQLite.
  */
+/** Returns true if a record was successfully written, false otherwise */
 function upsertRecord(tableName, record) {
   if (!record.sync_id) {
     record = { ...record, sync_id: `cloud_${tableName}_${record.id}` };
@@ -195,7 +198,7 @@ function upsertRecord(tableName, record) {
 
   const db       = getDb();
   const cols     = getTableColumns(tableName).filter(c => c in record);
-  if (!cols.length) return;
+  if (!cols.length) return false;
 
   const updateCols = cols.filter(c => c !== "id" && c !== "sync_id" && c !== "created_at");
   const vals       = cols.map(c => record[c] ?? null);
@@ -214,8 +217,7 @@ function upsertRecord(tableName, record) {
     }
 
     if (existingId != null) {
-      // UPDATE existing row only if incoming data is newer
-      if (!updateCols.length) return;
+      if (!updateCols.length) return true; // already exists, nothing to update
       const setClause = updateCols.map(c => `${c} = ?`).join(", ");
       const setVals   = updateCols.map(c => record[c] ?? null);
       db.prepare(`
@@ -224,20 +226,30 @@ function upsertRecord(tableName, record) {
         WHERE id = ?
           AND (updated_at IS NULL OR ? > updated_at)
       `).run(...setVals, existingId, record.updated_at ?? "9999");
+      return true;
     } else {
-      // INSERT new row — preserve cloud id so FK children resolve correctly
       const placeholders = cols.map(() => "?").join(", ");
       db.prepare(
         `INSERT OR REPLACE INTO ${tableName} (${cols.join(", ")}) VALUES (${placeholders})`
       ).run(...vals);
+      return true;
     }
-  } catch {
+  } catch (e1) {
     try {
       const placeholders = cols.map(() => "?").join(", ");
       db.prepare(
         `INSERT OR IGNORE INTO ${tableName} (${cols.join(", ")}) VALUES (${placeholders})`
       ).run(...vals);
-    } catch {}
+      return true;
+    } catch (e2) {
+      // Log to sync_log so we can see failures in the UI
+      try {
+        db.prepare(
+          `INSERT INTO sync_log (status, error) VALUES ('upsert_error', ?)`
+        ).run(`${tableName}: ${e2.message || e1.message}`);
+      } catch {}
+      return false;
+    }
   }
 }
 
@@ -274,23 +286,29 @@ async function pull() {
 
   const r = await request("GET", url, null, sessionCookie);
   if (r.status !== 200) {
-    throw new Error(`Pull failed: HTTP ${r.status}`);
+    throw new Error(`Pull failed: HTTP ${r.status} — ${JSON.stringify(r.data).slice(0,100)}`);
   }
 
   const tables = r.data?.tables || {};
   const db = getDb();
+
+  // Count totals for diagnostics
+  let totalReceived = 0;
+  let totalWritten  = 0;
+  for (const recs of Object.values(tables)) {
+    if (Array.isArray(recs)) totalReceived += recs.length;
+  }
 
   // Disable FK enforcement for the bulk pull so records can be inserted in
   // any order without cross-table dependency failures.  Re-enabled after.
   db.pragma("foreign_keys = OFF");
   try {
     db.transaction(() => {
-      // Respect FK-safe insertion order (parents before children)
       for (const tblName of PULL_TABLES) {
         const records = tables[tblName];
         if (!Array.isArray(records)) continue;
         for (const rec of records) {
-          upsertRecord(tblName, rec);
+          if (upsertRecord(tblName, rec)) totalWritten++;
         }
       }
     })();
@@ -299,6 +317,8 @@ async function pull() {
   }
 
   setSyncMeta("last_pull_at", new Date().toISOString());
+  // Expose stats so the UI can show them
+  emit({ lastPullReceived: totalReceived, lastPullWritten: totalWritten });
 }
 
 // ─── PUSH ─────────────────────────────────────────────────────────────────────
