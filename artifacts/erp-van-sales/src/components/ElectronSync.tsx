@@ -48,6 +48,17 @@ interface SyncStatus {
   lastPullFirstError?: string | null;
 }
 
+interface SqliteCounts { [table: string]: number | string; }
+
+async function fetchSqliteCounts(): Promise<SqliteCounts> {
+  try {
+    const r = await fetch("/api/debug/sqlite-counts");
+    if (!r.ok) return {};
+    const { counts } = await r.json();
+    return counts || {};
+  } catch { return {}; }
+}
+
 const DEFAULT_STATUS: SyncStatus = {
   online: false, syncing: false, lastSync: null, error: null, pending: 0,
 };
@@ -104,6 +115,7 @@ export function ElectronSyncButton() {
   const [confirmRestore, setConfirmRestore] = useState(false);
   const [confirmReset, setConfirmReset] = useState(false);
   const [resetting, setResetting] = useState(false);
+  const [sqliteCounts, setSqliteCounts] = useState<SqliteCounts | null>(null);
 
   const { toast } = useToast();
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -156,9 +168,11 @@ export function ElectronSyncButton() {
   }, [mode, fetchStatus]);
 
   // Invalidate all React Query caches when sync transitions syncing → done (no error)
+  // Also refresh SQLite counts so the user can verify what was written
   useEffect(() => {
     if (prevSyncing.current && !syncStatus.syncing && !syncStatus.error && syncStatus.lastSync) {
       queryClient.invalidateQueries();
+      fetchSqliteCounts().then(setSqliteCounts);
     }
     prevSyncing.current = syncStatus.syncing;
   }, [syncStatus.syncing, syncStatus.error, syncStatus.lastSync, queryClient]);
@@ -423,6 +437,29 @@ export function ElectronSyncButton() {
                 )}
                 {syncStatus.pending > 0 && (
                   <p className="text-xs text-amber-600 mt-0.5">{syncStatus.pending} سجل بانتظار الإرسال</p>
+                )}
+                {sqliteCounts && Object.keys(sqliteCounts).length > 0 && (
+                  <div className="mt-2 border border-border rounded p-2 bg-muted/40">
+                    <p className="text-xs font-semibold mb-1 text-muted-foreground">📦 محتوى قاعدة البيانات المحلية</p>
+                    <div className="grid grid-cols-2 gap-x-3 gap-y-0.5">
+                      {[
+                        ["trucks","الشاحنات"],["clients","العملاء"],["products","المنتجات"],
+                        ["categories","الفئات"],["suppliers","الموردون"],["invoices","الفواتير"],
+                        ["invoice_items","بنود الفواتير"],["returns","المرتجعات"],
+                        ["return_items","بنود المرتجعات"],["cash_transfers","تحويلات"],
+                        ["truck_stock","مخزون الشاحنة"],["purchase_orders","طلبات الشراء"],
+                      ].map(([key, label]) => (
+                        <div key={key} className="flex justify-between text-xs">
+                          <span className="text-muted-foreground">{label}</span>
+                          <span className={`font-mono font-semibold ${
+                            Number(sqliteCounts[key] ?? 0) === 0 ? "text-red-500" : "text-green-700"
+                          }`}>
+                            {sqliteCounts[key] ?? "—"}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
                 )}
               </div>
             </div>

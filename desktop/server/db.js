@@ -138,6 +138,7 @@ function createSchema() {
       id            INTEGER PRIMARY KEY AUTOINCREMENT,
       name          TEXT NOT NULL,
       plate_number  TEXT,
+      phone         TEXT,
       vendeur_id    INTEGER,
       driver_name   TEXT,
       password_hash TEXT,
@@ -147,6 +148,15 @@ function createSchema() {
       longitude     REAL,
       created_at    TEXT NOT NULL DEFAULT (${NOW_EXPR}),
       ${SYNC_COLS}
+    );
+
+    CREATE TABLE IF NOT EXISTS truck_commission_payments (
+      id         INTEGER PRIMARY KEY AUTOINCREMENT,
+      truck_id   INTEGER NOT NULL REFERENCES trucks(id),
+      amount     REAL NOT NULL,
+      note       TEXT,
+      paid_at    TEXT NOT NULL DEFAULT (${NOW_EXPR}),
+      created_at TEXT NOT NULL DEFAULT (${NOW_EXPR})
     );
 
     CREATE TABLE IF NOT EXISTS truck_stock (
@@ -278,6 +288,14 @@ function runMigrations() {
       db.exec(`UPDATE ${tbl} SET updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE updated_at IS NULL`);
     }
   }
+  // v2: phone column on trucks
+  try { db.exec("ALTER TABLE trucks ADD COLUMN phone TEXT"); } catch {}
+  // v3: product_name on invoice_items (cloud schema has this column)
+  try { db.exec("ALTER TABLE invoice_items ADD COLUMN product_name TEXT NOT NULL DEFAULT ''"); } catch {}
+  // v3: branch_id on trucks and stock_transfers (cloud sends these)
+  try { db.exec("ALTER TABLE trucks ADD COLUMN branch_id INTEGER"); } catch {}
+  try { db.exec("ALTER TABLE stock_transfers ADD COLUMN branch_id INTEGER"); } catch {}
+  // v2: truck_commission_payments table (idempotent — CREATE IF NOT EXISTS in schema)
   // Ensure device_id exists in sync_meta
   const devId = db.prepare("SELECT value FROM sync_meta WHERE key='device_id'").get();
   if (!devId) {
