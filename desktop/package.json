@@ -11,7 +11,7 @@
     "standalone": "node standalone/server.js",
     "build-renderer": "node build-renderer.mjs",
     "start": "electron .",
-    "dist": "electron-builder --win"
+    "dist": "electron-builder --win --publish=never"
   },
   "dependencies": {
     "better-sqlite3": "^9.4.3",
@@ -22,5 +22,43 @@
   "devDependencies": {
     "electron": "^29.0.0",
     "electron-builder": "^24.13.3"
+  },
+  "build": {
+    "appId": "com.erp.vansales",
+    "productName": "ERP Van Sales",
+    "copyright": "© 2025 ERP Van Sales",
+    "directories": {
+      "output": "dist-electron",
+      "buildResources": "build"
+    },
+    "files": [
+      "main.js",
+      "preload.js",
+      "server/**/*",
+      "renderer/**/*",
+      "node_modules/**/*",
+      "!node_modules/.cache",
+      "!**/*.map"
+    ],
+    "extraResources": [],
+    "win": {
+      "target": [{ "target": "nsis", "arch": ["x64"] }],
+      "icon": "build/icon.ico"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "ERP Van Sales",
+      "installerIcon": "build/icon.ico",
+      "uninstallerIcon": "build/icon.ico",
+      "installerHeaderIcon": "build/icon.ico",
+      "deleteAppDataOnUninstall": false,
+      "license": null
+    },
+    "nodeGypRebuild": false,
+    "buildDependenciesFromSource": false,
+    "npmRebuild": true
   }
 }
