@@ -1,5 +1,19 @@
 const { Router } = require("express");
 const { getDb, hashPassword } = require("../db");
+const path = require("path");
+const fs   = require("fs");
+const { getUserDataPath } = require("../config");
+
+const CLOUD_BASE = "https://deleveri.alllal.com";
+function resolveImageUrl(imageUrl) {
+  if (!imageUrl) return imageUrl;
+  if (imageUrl.startsWith("/api/storage/uploads/")) {
+    const filename = path.basename(imageUrl);
+    const localPath = path.join(getUserDataPath(), "uploads", filename);
+    if (!fs.existsSync(localPath)) return `${CLOUD_BASE}${imageUrl}`;
+  }
+  return imageUrl;
+}
 
 const router = Router();
 
@@ -10,6 +24,7 @@ function truckFromSession(req) {
 function formatTruck(t) {
   return {
     id: t.id, name: t.name, plateNumber: t.plate_number,
+    phone: t.phone ?? null,
     vendeurId: t.vendeur_id, vendeurName: t.vendeur_name,
     driverName: t.driver_name, location: t.location,
     cashBalance: Number(t.cash_balance ?? 0),
@@ -31,13 +46,13 @@ router.get("/trucks", (_req, res) => {
 });
 
 router.post("/trucks", (req, res) => {
-  const { name, plateNumber, vendeurId, driverName, password, location } = req.body;
+  const { name, plateNumber, phone, vendeurId, driverName, password, location } = req.body;
   if (!name) return res.status(400).json({ error: "Nom requis" });
   const db = getDb();
   const info = db.prepare(`
-    INSERT INTO trucks (name, plate_number, vendeur_id, driver_name, password_hash, location, cash_balance)
-    VALUES (?,?,?,?,?,?,0)
-  `).run(name, plateNumber || null, vendeurId || null, driverName || null,
+    INSERT INTO trucks (name, plate_number, phone, vendeur_id, driver_name, password_hash, location, cash_balance)
+    VALUES (?,?,?,?,?,?,?,0)
+  `).run(name, plateNumber || null, phone || null, vendeurId || null, driverName || null,
     password ? hashPassword(password) : null, location || null);
   const t = db.prepare(`
     SELECT t.*, u.full_name AS vendeur_name FROM trucks t
@@ -58,17 +73,20 @@ router.get("/trucks/:id", (req, res) => {
 
 router.put("/trucks/:id", (req, res) => {
   const id = parseInt(req.params.id);
-  const { name, plateNumber, vendeurId, driverName, password, location } = req.body;
+  const { name, plateNumber, phone, vendeurId, driverName, password, location } = req.body;
   const db = getDb();
   const existing = db.prepare("SELECT * FROM trucks WHERE id = ? AND is_deleted = 0").get(id);
   if (!existing) return res.status(404).json({ error: "Camion non trouvé" });
   db.prepare(`UPDATE trucks SET
     name = COALESCE(?,name), plate_number = COALESCE(?,plate_number),
+    phone = ?,
     vendeur_id = COALESCE(?,vendeur_id), driver_name = COALESCE(?,driver_name),
     location = COALESCE(?,location),
     password_hash = COALESCE(?,password_hash)
     WHERE id = ?`).run(
-    name ?? null, plateNumber ?? null, vendeurId ?? null, driverName ?? null,
+    name ?? null, plateNumber ?? null,
+    phone !== undefined ? (phone || null) : existing.phone,
+    vendeurId ?? null, driverName ?? null,
     location ?? null, password ? hashPassword(password) : null, id);
   const t = db.prepare(`
     SELECT t.*, u.full_name AS vendeur_name FROM trucks t
@@ -109,7 +127,7 @@ router.get("/trucks/me/stock", (req, res) => {
   `).all(truckId);
   res.json(stock.map(s => ({
     productId: s.product_id, productName: s.product_name, quantity: Number(s.quantity),
-    unit: s.unit, imageUrl: s.image_url,
+    unit: s.unit, imageUrl: resolveImageUrl(s.image_url),
     sellingPriceRetail: Number(s.selling_price_retail ?? 0),
     sellingPriceHalfWholesale: Number(s.selling_price_half_wholesale ?? 0),
     sellingPriceWholesale: Number(s.selling_price_wholesale ?? 0),
@@ -378,6 +396,101 @@ router.post("/trucks/me/cash/transfer", (req, res) => {
     .run(truckId, Number(amount), note?.trim() || null);
   const transfer = db.prepare("SELECT * FROM cash_transfers WHERE id = ?").get(info.lastInsertRowid);
   res.status(201).json({ ...transfer, amount: Number(transfer.amount), truckName: truck.name, createdAt: transfer.created_at });
+});
+
+// --- Truck profile (clients, stock, commission summary) ---
+
+router.get("/trucks/:id/profile", (req, res) => {
+  const id = parseInt(req.params.id);
+  const db = getDb();
+
+  const clients = db.prepare(`
+    SELECT DISTINCT c.id, c.name, c.phone
+    FROM clients c
+    INNER JOIN invoices i ON i.client_id = c.id
+    WHERE i.truck_id = ? AND i.is_deleted = 0 AND c.is_deleted = 0
+    ORDER BY c.name
+  `).all(id);
+
+  const stock = db.prepare(`
+    SELECT ts.product_id, p.name AS product_name, ts.quantity
+    FROM truck_stock ts LEFT JOIN products p ON ts.product_id = p.id
+    WHERE ts.truck_id = ? AND ts.is_deleted = 0 AND ts.quantity > 0
+    ORDER BY p.name
+  `).all(id);
+
+  const commissionRow = db.prepare(`
+    SELECT
+      COALESCE(SUM(total_commission), 0) AS total
+    FROM invoices WHERE truck_id = ? AND is_deleted = 0
+  `).get(id);
+
+  const paidRow = db.prepare(`
+    SELECT COALESCE(SUM(amount), 0) AS paid
+    FROM truck_commission_payments WHERE truck_id = ?
+  `).get(id);
+
+  const commissionTotal = Number(commissionRow.total);
+  const commissionPaid = Number(paidRow.paid);
+
+  res.json({
+    clients: clients.map(c => ({ id: c.id, name: c.name, phone: c.phone ?? null })),
+    stock: stock.map(s => ({ productId: s.product_id, productName: s.product_name ?? "", quantity: Number(s.quantity) })),
+    commissionTotal,
+    commissionPaid,
+    commissionBalance: commissionTotal - commissionPaid,
+  });
+});
+
+// --- Commission payments CRUD ---
+
+router.get("/trucks/:id/commission-payments", (req, res) => {
+  const id = parseInt(req.params.id);
+  const db = getDb();
+  const payments = db.prepare(`
+    SELECT * FROM truck_commission_payments WHERE truck_id = ? ORDER BY paid_at DESC
+  `).all(id);
+  res.json(payments.map(p => ({ ...p, amount: Number(p.amount) })));
+});
+
+router.post("/trucks/:id/commission-payments", (req, res) => {
+  const id = parseInt(req.params.id);
+  const { amount, note, paidAt } = req.body;
+  if (!amount || Number(amount) <= 0) return res.status(400).json({ error: "Montant invalide" });
+  const db = getDb();
+  const NOW = `strftime('%Y-%m-%dT%H:%M:%fZ','now')`;
+  const paidAtVal = paidAt ? new Date(paidAt).toISOString() : new Date().toISOString();
+  const info = db.prepare(`
+    INSERT INTO truck_commission_payments (truck_id, amount, note, paid_at)
+    VALUES (?, ?, ?, ?)
+  `).run(id, Number(amount), note || null, paidAtVal);
+  const p = db.prepare("SELECT * FROM truck_commission_payments WHERE id = ?").get(info.lastInsertRowid);
+  res.status(201).json({ ...p, amount: Number(p.amount) });
+});
+
+router.put("/trucks/:id/commission-payments/:paymentId", (req, res) => {
+  const id = parseInt(req.params.id);
+  const paymentId = parseInt(req.params.paymentId);
+  const { amount, note, paidAt } = req.body;
+  const db = getDb();
+  const existing = db.prepare("SELECT * FROM truck_commission_payments WHERE id = ? AND truck_id = ?").get(paymentId, id);
+  if (!existing) return res.status(404).json({ error: "Paiement non trouvé" });
+  const newAmount = amount !== undefined ? Number(amount) : Number(existing.amount);
+  const newNote = note !== undefined ? (note || null) : existing.note;
+  const newPaidAt = paidAt !== undefined ? new Date(paidAt).toISOString() : existing.paid_at;
+  db.prepare(`UPDATE truck_commission_payments SET amount = ?, note = ?, paid_at = ? WHERE id = ? AND truck_id = ?`)
+    .run(newAmount, newNote, newPaidAt, paymentId, id);
+  const p = db.prepare("SELECT * FROM truck_commission_payments WHERE id = ?").get(paymentId);
+  res.json({ ...p, amount: Number(p.amount) });
+});
+
+router.delete("/trucks/:id/commission-payments/:paymentId", (req, res) => {
+  const id = parseInt(req.params.id);
+  const paymentId = parseInt(req.params.paymentId);
+  const db = getDb();
+  const info = db.prepare("DELETE FROM truck_commission_payments WHERE id = ? AND truck_id = ?").run(paymentId, id);
+  if (info.changes === 0) return res.status(404).json({ error: "Paiement non trouvé" });
+  res.status(204).send();
 });
 
 module.exports = router;

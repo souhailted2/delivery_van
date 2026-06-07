@@ -49,6 +49,24 @@ router.get("/storage/uploads/:filename", (req, res) => {
   res.sendFile(filePath);
 });
 
+const CLOUD_BASE = "https://deleveri.alllal.com";
+
+/**
+ * Cloud-synced images are stored as "/api/storage/uploads/<uuid>.jpg".
+ * The desktop server serves its own local uploads, but images uploaded on
+ * the cloud are not present locally. Rewrite to the full cloud URL when the
+ * file is not found in the local uploads directory.
+ */
+function resolveImageUrl(imageUrl) {
+  if (!imageUrl) return imageUrl;
+  if (imageUrl.startsWith("/api/storage/uploads/")) {
+    const filename = path.basename(imageUrl);
+    const localPath = path.join(getUserDataPath(), "uploads", filename);
+    if (!fs.existsSync(localPath)) return `${CLOUD_BASE}${imageUrl}`;
+  }
+  return imageUrl;
+}
+
 function formatProduct(p) {
   return {
     id: p.id, name: p.name, barcode: p.barcode,
@@ -61,7 +79,7 @@ function formatProduct(p) {
     commissionRetail: Number(p.commission_retail ?? 0),
     commissionHalf: Number(p.commission_half ?? 0),
     commissionWholesale: Number(p.commission_wholesale ?? 0),
-    imageUrl: p.image_url, unit: p.unit, createdAt: p.created_at,
+    imageUrl: resolveImageUrl(p.image_url), unit: p.unit, createdAt: p.created_at,
   };
 }
 
