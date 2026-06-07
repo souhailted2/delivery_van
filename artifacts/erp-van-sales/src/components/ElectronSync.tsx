@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import {
   CloudOff, RefreshCw, CheckCircle, AlertCircle,
   X, Download, Upload, CloudCog,
@@ -79,8 +80,10 @@ async function restTrigger(): Promise<void> {
 // ─── Component ───────────────────────────────────────────────────────────────
 
 export function ElectronSyncButton() {
+  const queryClient = useQueryClient();
   const [mode, setMode] = useState<DesktopMode | null>(null);
   const [syncStatus, setSyncStatus] = useState<SyncStatus>(DEFAULT_STATUS);
+  const prevSyncing = useRef(false);
   const [open, setOpen] = useState(false);
 
   const [autoUsername, setAutoUsername] = useState("");
@@ -141,6 +144,14 @@ export function ElectronSyncButton() {
     pollRef.current = setInterval(fetchStatus, 5000);
     return () => { if (pollRef.current) clearInterval(pollRef.current); };
   }, [mode, fetchStatus]);
+
+  // Invalidate all React Query caches when sync transitions syncing → done (no error)
+  useEffect(() => {
+    if (prevSyncing.current && !syncStatus.syncing && !syncStatus.error && syncStatus.lastSync) {
+      queryClient.invalidateQueries();
+    }
+    prevSyncing.current = syncStatus.syncing;
+  }, [syncStatus.syncing, syncStatus.error, syncStatus.lastSync, queryClient]);
 
   // ── Actions ───────────────────────────────────────────────────────────────
   const handleTrigger = useCallback(async () => {
