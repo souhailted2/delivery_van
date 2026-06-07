@@ -167,6 +167,7 @@ export const trucksTable = pgTable("trucks", {
   id: serial("id").primaryKey(),
   name: text("name").notNull(),
   plateNumber: text("plate_number"),
+  phone: text("phone"),
   branchId: integer("branch_id"), // which branch this truck belongs to
   vendeurId: integer("vendeur_id"),
   driverName: text("driver_name"),
@@ -307,6 +308,19 @@ export const companySettingsTable = pgTable("company_settings", {
 export const insertCompanySettingsSchema = createInsertSchema(companySettingsTable).omit({ id: true, updatedAt: true });
 export type InsertCompanySettings = z.infer<typeof insertCompanySettingsSchema>;
 export type CompanySettings = typeof companySettingsTable.$inferSelect;
+
+// Truck commission payments
+export const truckCommissionPaymentsTable = pgTable("truck_commission_payments", {
+  id: serial("id").primaryKey(),
+  truckId: integer("truck_id").notNull().references(() => trucksTable.id),
+  amount: numeric("amount", { precision: 12, scale: 2 }).notNull(),
+  note: text("note"),
+  paidAt: timestamp("paid_at").notNull().defaultNow(),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+});
+export const insertTruckCommissionPaymentSchema = createInsertSchema(truckCommissionPaymentsTable).omit({ id: true, createdAt: true });
+export type InsertTruckCommissionPayment = z.infer<typeof insertTruckCommissionPaymentSchema>;
+export type TruckCommissionPayment = typeof truckCommissionPaymentsTable.$inferSelect;
 
 // Cash transfers
 export const cashTransfersTable = pgTable("cash_transfers", {
