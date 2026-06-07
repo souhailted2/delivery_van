@@ -202,7 +202,9 @@ function upsertRecord(tableName, record) {
   if (!cols.length) return false;
 
   const updateCols = cols.filter(c => c !== "id" && c !== "sync_id" && c !== "created_at");
-  const vals       = cols.map(c => record[c] ?? null);
+  // SQLite doesn't support booleans — convert true/false → 1/0
+  const toSqlite   = v => (typeof v === "boolean" ? (v ? 1 : 0) : (v ?? null));
+  const vals       = cols.map(c => toSqlite(record[c]));
 
   try {
     // Find existing local row by sync_id first, then by id
@@ -220,7 +222,7 @@ function upsertRecord(tableName, record) {
     if (existingId != null) {
       if (!updateCols.length) return true; // already exists, nothing to update
       const setClause = updateCols.map(c => `${c} = ?`).join(", ");
-      const setVals   = updateCols.map(c => record[c] ?? null);
+      const setVals   = updateCols.map(c => toSqlite(record[c]));
       db.prepare(`
         UPDATE ${tableName}
         SET ${setClause}
