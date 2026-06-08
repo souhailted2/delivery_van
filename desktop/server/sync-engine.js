@@ -7,7 +7,10 @@
 
 const https = require("https");
 const http  = require("http");
+const fs    = require("fs");
+const path  = require("path");
 const { getDb, getSyncMeta, setSyncMeta } = require("./db");
+const { getUserDataPath } = require("./config");
 
 const REMOTE_BASE    = "https://deleveri.alllal.com/api";
 const SYNC_INTERVAL  = 30_000;  // 30 seconds
@@ -343,6 +346,64 @@ async function pull() {
   });
 }
 
+// ─── Image upload to cloud ────────────────────────────────────────────────────
+
+/**
+ * Upload a local product image to the cloud server.
+ * Returns the cloud imageUrl string, or null on failure.
+ */
+function uploadImageToCloud(filename) {
+  return new Promise((resolve) => {
+    let uploadsDir;
+    try { uploadsDir = path.join(getUserDataPath(), "uploads"); } catch { resolve(null); return; }
+
+    const filePath = path.join(uploadsDir, filename);
+    if (!fs.existsSync(filePath)) { resolve(null); return; }
+
+    let fileData;
+    try { fileData = fs.readFileSync(filePath); } catch { resolve(null); return; }
+
+    const boundary = "----SyncBoundary" + Date.now();
+    const ext = path.extname(filename).toLowerCase();
+    const mime = ext === ".png" ? "image/png" : ext === ".webp" ? "image/webp" : "image/jpeg";
+
+    const head = Buffer.from(
+      `--${boundary}\r\n` +
+      `Content-Disposition: form-data; name="file"; filename="${filename}"\r\n` +
+      `Content-Type: ${mime}\r\n\r\n`
+    );
+    const tail = Buffer.from(`\r\n--${boundary}--\r\n`);
+    const body = Buffer.concat([head, fileData, tail]);
+
+    const parsed = new URL(`${REMOTE_BASE}/products/upload-image`);
+    const opts = {
+      hostname: parsed.hostname,
+      port:     parsed.port || 443,
+      path:     parsed.pathname,
+      method:   "POST",
+      headers: {
+        "Content-Type":   `multipart/form-data; boundary=${boundary}`,
+        "Content-Length": body.length,
+        ...(sessionCookie ? { Cookie: sessionCookie } : {}),
+      },
+      timeout: 30_000,
+    };
+
+    const lib = parsed.protocol === "https:" ? https : http;
+    const req = lib.request(opts, (res) => {
+      let raw = "";
+      res.on("data", c => (raw += c));
+      res.on("end", () => {
+        try { resolve(JSON.parse(raw).imageUrl || null); } catch { resolve(null); }
+      });
+    });
+    req.on("error",   () => resolve(null));
+    req.on("timeout", () => { req.destroy(); resolve(null); });
+    req.write(body);
+    req.end();
+  });
+}
+
 // ─── PUSH ─────────────────────────────────────────────────────────────────────
 
 async function push() {
@@ -356,6 +417,22 @@ async function push() {
   }
 
   if (!Object.keys(tables).length) return; // nothing to push
+
+  // Upload local product images to cloud before pushing, so the cloud URL
+  // references a real file on the server instead of a local-only path.
+  if (tables.products) {
+    const updated = [];
+    for (const p of tables.products) {
+      if (p.image_url && p.image_url.startsWith("/api/storage/uploads/")) {
+        const filename = path.basename(p.image_url);
+        const cloudUrl = await uploadImageToCloud(filename);
+        updated.push(cloudUrl ? { ...p, image_url: cloudUrl } : p);
+      } else {
+        updated.push(p);
+      }
+    }
+    tables.products = updated;
+  }
 
   const r = await request("POST", `${REMOTE_BASE}/sync/v2/push`, { deviceId, tables }, sessionCookie);
   if (r.status !== 200) {
