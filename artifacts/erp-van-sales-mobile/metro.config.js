@@ -6,16 +6,18 @@ const workspaceRoot = path.resolve(projectRoot, "../..");
 
 const config = getDefaultConfig(projectRoot);
 
-// Force the correct project root.
-// Expo's getDefaultConfig detects pnpm-workspace.yaml and may override
-// projectRoot with the monorepo workspace root, causing Metro to resolve
-// modules from the wrong directory in CI.
+// Keep projectRoot scoped to the mobile artifact.
 config.projectRoot = projectRoot;
 
-// Watch the artifact folder and shared libs.
+// Watch the artifact folder, shared libs, AND the workspace node_modules.
+// The last entry is critical for pnpm monorepos: Expo CLI resolves
+// expo-router/entry to its realpath inside workspaceRoot/node_modules/.pnpm/.
+// Without watching workspaceRoot/node_modules, Metro's hasteFS never indexes
+// those realpath entries and throws "Unable to resolve module … from …".
 config.watchFolders = [
   projectRoot,
   path.resolve(workspaceRoot, "lib"),
+  path.join(workspaceRoot, "node_modules"),
 ];
 
 // Tell the resolver where to find modules: local first, then workspace root.
