@@ -19,4 +19,8 @@ config.resolver.nodeModulesPaths = [
   path.resolve(workspaceRoot, "node_modules"),
 ];
 
+// Required for pnpm monorepos: prevents Metro from walking up the tree
+// and picking up wrong module copies from ancestor node_modules directories.
+config.resolver.disableHierarchicalLookup = true;
+
 module.exports = config;
