@@ -1,0 +1,68 @@
+import * as SecureStore from "expo-secure-store";
+
+export const API_URL =
+  process.env["EXPO_PUBLIC_API_URL"] ?? "https://deleveri.alllal.com";
+
+const SESSION_KEY = "erp_session_sid";
+
+export async function getSessionSid(): Promise<string | null> {
+  return SecureStore.getItemAsync(SESSION_KEY);
+}
+
+export async function saveSession(setCookieHeader: string | null): Promise<void> {
+  if (!setCookieHeader) return;
+  const match = setCookieHeader.match(/connect\.sid=([^;]+)/);
+  if (match?.[1]) {
+    await SecureStore.setItemAsync(SESSION_KEY, match[1]);
+  }
+}
+
+export async function clearSession(): Promise<void> {
+  await SecureStore.deleteItemAsync(SESSION_KEY);
+}
+
+export async function apiFetch(
+  path: string,
+  options: RequestInit = {},
+): Promise<Response> {
+  const sid = await getSessionSid();
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+    ...(options.headers as Record<string, string>),
+  };
+  if (sid) headers["Cookie"] = `connect.sid=${sid}`;
+
+  return fetch(`${API_URL}/api${path}`, { ...options, headers });
+}
+
+export async function apiGet<T>(path: string): Promise<T> {
+  const res = await apiFetch(path);
+  if (res.status === 401) throw new Error("UNAUTHORIZED");
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  return res.json() as Promise<T>;
+}
+
+export async function apiPost<T>(path: string, body: unknown): Promise<T> {
+  const res = await apiFetch(path, {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+  if (res.status === 401) throw new Error("UNAUTHORIZED");
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  return res.json() as Promise<T>;
+}
+
+export async function checkOnline(): Promise<boolean> {
+  try {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 4000);
+    const res = await fetch(`${API_URL}/api/healthz`, {
+      signal: controller.signal,
+      cache: "no-store",
+    });
+    clearTimeout(timeout);
+    return res.ok;
+  } catch {
+    return false;
+  }
+}
