@@ -64,12 +64,23 @@ jobs:
         working-directory: artifacts/erp-van-sales-mobile/android
         run: chmod +x gradlew
 
-      - name: Debug - Verify expo-router entry.js exists
+      - name: Fix - Ensure expo-router/entry.js exists in all pnpm virtual store copies
         run: |
-          echo "=== pnpm version ===" && pnpm --version
-          echo "=== expo-router virtual store entries ===" && ls node_modules/.pnpm/ | grep expo-router || echo "NONE"
-          echo "=== entry.js in virtual store ===" && find node_modules/.pnpm -name "entry.js" -path "*/expo-router/entry.js" 2>/dev/null | head -3 || echo "NONE"
-          echo "=== entry.js via mobile symlink ===" && ls -la artifacts/erp-van-sales-mobile/node_modules/expo-router/entry.js 2>/dev/null || echo "NOT FOUND"
+          # pnpm may skip creating hard links for some files across peer-dep variants.
+          # Find any copy of entry.js and ensure ALL expo-router virtual store dirs have it.
+          ENTRY_SRC=$(find node_modules/.pnpm -name "entry.js" -path "*/expo-router/entry.js" 2>/dev/null | head -1)
+          if [ -z "$ENTRY_SRC" ]; then
+            echo "ERROR: No expo-router/entry.js found in any virtual store copy!" && exit 1
+          fi
+          echo "Source: $ENTRY_SRC"
+          for dir in node_modules/.pnpm/expo-router@6*/node_modules/expo-router/; do
+            if [ ! -f "$dir/entry.js" ]; then
+              echo "Copying entry.js → $dir"
+              cp "$ENTRY_SRC" "$dir/entry.js"
+            else
+              echo "OK: $dir/entry.js"
+            fi
+          done
 
       - name: Bundle JS for Android (pre-bundle before Gradle)
         working-directory: artifacts/erp-van-sales-mobile
