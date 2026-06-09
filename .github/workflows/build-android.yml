@@ -86,7 +86,7 @@ jobs:
         working-directory: artifacts/erp-van-sales-mobile
         run: |
           mkdir -p android/app/src/main/assets
-          npx expo export:embed . \
+          npx expo export:embed \
             --platform android \
             --dev false \
             --bundle-output android/app/src/main/assets/index.android.bundle \
