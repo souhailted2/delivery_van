@@ -1,0 +1,172 @@
+name: Build Android APK
+
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - name: Install workspace dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Set versionCode from run_number
+        working-directory: artifacts/erp-van-sales-mobile
+        run: |
+          node -e "
+            const fs = require('fs');
+            const cfg = JSON.parse(fs.readFileSync('app.json', 'utf8'));
+            cfg.expo.android.versionCode = ${{ github.run_number }};
+            fs.writeFileSync('app.json', JSON.stringify(cfg, null, 2));
+          "
+          echo "versionCode set to ${{ github.run_number }}"
+
+      - name: Setup Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: "temurin"
+          java-version: "17"
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android build tools
+        run: |
+          sdkmanager "platforms;android-35" "build-tools;35.0.0" "ndk;27.1.12297006"
+
+      - name: Generate native Android project (expo prebuild)
+        working-directory: artifacts/erp-van-sales-mobile
+        run: |
+          EXPO_PUBLIC_API_URL=https://deleveri.alllal.com \
+          npx expo prebuild --platform android --clean --no-install
+
+      - name: Set Gradle executable permission
+        working-directory: artifacts/erp-van-sales-mobile/android
+        run: chmod +x gradlew
+
+      - name: Cache Gradle packages
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: ${{ runner.os }}-gradle-${{ hashFiles('artifacts/erp-van-sales-mobile/android/**/*.gradle*') }}
+          restore-keys: |
+            ${{ runner.os }}-gradle-
+
+      - name: Build Release APK
+        working-directory: artifacts/erp-van-sales-mobile/android
+        run: ./gradlew assembleRelease --no-daemon
+        env:
+          GRADLE_OPTS: "-Dorg.gradle.daemon=false -Dorg.gradle.parallel=false"
+
+      - name: Find built APK
+        id: find_apk
+        run: |
+          APK=$(find artifacts/erp-van-sales-mobile/android -name "*.apk" -path "*/release/*" | head -1)
+          echo "apk_path=$APK" >> $GITHUB_OUTPUT
+          echo "Found APK: $APK"
+
+      - name: Rename APK
+        run: |
+          cp "${{ steps.find_apk.outputs.apk_path }}" erp-van-sales.apk
+
+      - name: Upload APK artifact (30-day backup)
+        uses: actions/upload-artifact@v4
+        with:
+          name: erp-van-sales-android
+          path: erp-van-sales.apk
+          retention-days: 30
+
+      - name: Delete old build releases
+        if: "!startsWith(github.ref, 'refs/tags/v')"
+        run: |
+          # Remove legacy "latest" tag release if it exists
+          gh release delete latest --yes --cleanup-tag 2>/dev/null || true
+          # Remove all prior "build-*" releases to avoid accumulation
+          gh release list --limit 50 --json tagName \
+            | jq -r '.[] | select(.tagName | test("^build-[0-9]+$")) | .tagName' \
+            | while read tag; do
+                gh release delete "$tag" --yes --cleanup-tag 2>/dev/null || true
+              done
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Publish build release
+        if: "!startsWith(github.ref, 'refs/tags/v')"
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: build-${{ github.run_number }}
+          name: "ERP Van Sales — build-${{ github.run_number }}"
+          prerelease: false
+          make_latest: true
+          files: erp-van-sales.apk
+          body: |
+            ## تطبيق ERP Van Sales — Android
+
+            > **build-${{ github.run_number }}** — رقم الإصدار الداخلي: `${{ github.run_number }}`
+
+            ### 📥 التثبيت
+            1. حمّل ملف `erp-van-sales.apk` أدناه
+            2. افتحه على هاتف Android
+            3. اقبل تثبيت التطبيقات من مصادر غير معروفة إذا طُلب
+            4. سجّل دخولك بنفس بيانات الويب
+
+            ### 🌐 الخادم
+            يتصل التطبيق تلقائياً بـ `https://deleveri.alllal.com`
+
+            ### ✨ الميزات
+            - وضع Offline مع مزامنة تلقائية عند الاتصال
+            - قاعدة بيانات SQLite محلية
+            - فواتير · مرتجعات · عملاء · منتجات
+
+            ---
+            🕐 الفرع: ${{ github.ref_name }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Create versioned release (tag push only)
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: erp-van-sales.apk
+          name: "ERP Van Sales ${{ github.ref_name }}"
+          make_latest: true
+          body: |
+            ## ERP Van Sales Android — ${{ github.ref_name }}
+
+            ### 📥 التثبيت
+            1. حمّل ملف `erp-van-sales.apk` أدناه
+            2. افتحه على هاتف Android
+            3. اقبل تثبيت التطبيقات من مصادر غير معروفة إذا طُلب
+            4. سجّل دخولك بنفس بيانات الويب
+
+            ### 🌐 الخادم
+            يتصل التطبيق تلقائياً بـ `https://deleveri.alllal.com`
+
+            ### ✨ الميزات
+            - وضع Offline مع مزامنة تلقائية عند الاتصال
+            - قاعدة بيانات SQLite محلية
+            - فواتير · مرتجعات · عملاء · منتجات
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
