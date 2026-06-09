@@ -27,13 +27,8 @@ config.resolver.nodeModulesPaths = [
 ];
 
 // Required for pnpm monorepos: treat symlinks as-is without resolving to
-// real paths. Without this, Metro calls realpath() and looks for the module
-// in the pnpm virtual store (e.g. node_modules/.pnpm/expo-router@6.x.../),
-// which can be missing in CI environments.
+// real paths. Metro then follows symlinks into the pnpm virtual store and
+// uses hierarchical lookup within the store to find peer deps correctly.
 config.resolver.unstable_enableSymlinks = true;
-
-// Prevents Metro from walking up the directory tree to find modules
-// in ancestor node_modules, which picks up wrong copies in pnpm monorepos.
-config.resolver.disableHierarchicalLookup = true;
 
 module.exports = config;
