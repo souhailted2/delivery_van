@@ -85,17 +85,19 @@ jobs:
       - name: Bundle JS for Android (pre-bundle before Gradle)
         working-directory: artifacts/erp-van-sales-mobile
         run: |
+          echo "=== CWD: $(pwd) ==="
+          echo "=== expo bin: $(ls -la node_modules/.bin/expo 2>/dev/null | head -1) ==="
+          echo "=== react-native bin: $(ls -la node_modules/.bin/react-native 2>/dev/null | head -1) ==="
           mkdir -p android/app/src/main/assets
-          # Use the expo binary from the mobile artifact's own node_modules so
-          # that process.cwd() stays in the artifact dir and Metro loads
-          # artifacts/erp-van-sales-mobile/metro.config.js instead of the
-          # workspace-root one that npx resolves when the binary lives in
-          # workspace_root/node_modules/.bin/expo.
-          node node_modules/.bin/expo export:embed \
+          # react-native bundle loads metro.config.js from process.cwd() (= mobileRoot)
+          # without Expo CLI monorepo detection overriding the projectRoot.
+          node_modules/.bin/react-native bundle \
             --platform android \
             --dev false \
+            --entry-file node_modules/expo-router/entry.js \
             --bundle-output android/app/src/main/assets/index.android.bundle \
-            --assets-dest android/app/src/main/res
+            --assets-dest android/app/src/main/res \
+            --config metro.config.js
         env:
           EXPO_PUBLIC_API_URL: https://deleveri.alllal.com
           NODE_ENV: production
