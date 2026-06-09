@@ -7,6 +7,7 @@ export interface Product {
   stock_quantity?: number; purchase_price?: number;
   selling_price_retail?: number; selling_price_half_wholesale?: number;
   selling_price_wholesale?: number; image_url?: string | null;
+  local_image_uri?: string | null;
   unit?: string | null; updated_at?: string; is_deleted?: number; _pending?: number;
 }
 export interface Category {
@@ -49,6 +50,48 @@ export interface Return {
   invoice_id?: number | null; total_amount?: number;
   created_at?: string; updated_at?: string; is_deleted?: number; _pending?: number;
 }
+export interface Supplier {
+  _lid?: number; sync_id: string; id?: number | null;
+  name: string; phone?: string | null; address?: string | null;
+  updated_at?: string; is_deleted?: number; _pending?: number;
+}
+export interface Purchase {
+  _lid?: number; sync_id: string; id?: number | null;
+  supplier_id?: number | null; supplier_sync_id?: string | null;
+  total_amount?: number; status?: string;
+  created_at?: string; updated_at?: string; is_deleted?: number; _pending?: number;
+}
+export interface PurchaseItem {
+  _lid?: number; sync_id: string; id?: number | null;
+  purchase_id?: number | null; purchase_sync_id?: string | null;
+  product_id?: number | null; product_sync_id?: string | null;
+  product_name?: string | null; quantity?: number; unit_price?: number; subtotal?: number;
+  updated_at?: string; _pending?: number;
+}
+export interface MobileUser {
+  _lid?: number; sync_id: string; id?: number | null;
+  username: string; role?: string; full_name?: string | null;
+  branch_id?: number | null; updated_at?: string; is_deleted?: number; _pending?: number;
+}
+export interface CashTransfer {
+  _lid?: number; sync_id: string; id?: number | null;
+  truck_id?: number | null; truck_sync_id?: string | null;
+  amount?: number; direction?: string; note?: string | null;
+  created_at?: string; updated_at?: string; is_deleted?: number; _pending?: number;
+}
+export interface StockTransfer {
+  _lid?: number; sync_id: string; id?: number | null;
+  from_truck_id?: number | null; to_truck_id?: number | null;
+  from_warehouse?: number; note?: string | null;
+  created_at?: string; updated_at?: string; is_deleted?: number; _pending?: number;
+}
+export interface StockTransferItem {
+  _lid?: number; sync_id: string; id?: number | null;
+  stock_transfer_id?: number | null; stock_transfer_sync_id?: string | null;
+  product_id?: number | null; product_sync_id?: string | null;
+  product_name?: string | null; quantity?: number;
+  updated_at?: string; _pending?: number;
+}
 
 let _db: SQLiteDatabase | null = null;
 
@@ -66,7 +109,7 @@ const SCHEMA = `
     selling_price_retail REAL DEFAULT 0, selling_price_half_wholesale REAL DEFAULT 0,
     selling_price_wholesale REAL DEFAULT 0,
     commission_retail REAL DEFAULT 0, commission_half REAL DEFAULT 0, commission_wholesale REAL DEFAULT 0,
-    image_url TEXT, unit TEXT, created_at TEXT, updated_at TEXT,
+    image_url TEXT, local_image_uri TEXT, unit TEXT, created_at TEXT, updated_at TEXT,
     is_deleted INTEGER DEFAULT 0, _pending INTEGER DEFAULT 0
   );
   CREATE TABLE IF NOT EXISTS clients (
@@ -110,6 +153,47 @@ const SCHEMA = `
     product_name TEXT, quantity REAL, unit_price REAL, subtotal REAL,
     updated_at TEXT, _pending INTEGER DEFAULT 0
   );
+  CREATE TABLE IF NOT EXISTS suppliers (
+    _lid INTEGER PRIMARY KEY AUTOINCREMENT, sync_id TEXT UNIQUE, id INTEGER,
+    name TEXT NOT NULL, phone TEXT, address TEXT,
+    updated_at TEXT, is_deleted INTEGER DEFAULT 0, _pending INTEGER DEFAULT 0
+  );
+  CREATE TABLE IF NOT EXISTS purchases (
+    _lid INTEGER PRIMARY KEY AUTOINCREMENT, sync_id TEXT UNIQUE, id INTEGER,
+    supplier_id INTEGER, supplier_sync_id TEXT, total_amount REAL DEFAULT 0,
+    status TEXT DEFAULT 'pending', created_at TEXT, updated_at TEXT,
+    is_deleted INTEGER DEFAULT 0, _pending INTEGER DEFAULT 0
+  );
+  CREATE TABLE IF NOT EXISTS purchase_items (
+    _lid INTEGER PRIMARY KEY AUTOINCREMENT, sync_id TEXT UNIQUE, id INTEGER,
+    purchase_id INTEGER, purchase_sync_id TEXT,
+    product_id INTEGER, product_sync_id TEXT, product_name TEXT,
+    quantity REAL, unit_price REAL, subtotal REAL,
+    updated_at TEXT, _pending INTEGER DEFAULT 0
+  );
+  CREATE TABLE IF NOT EXISTS users (
+    _lid INTEGER PRIMARY KEY AUTOINCREMENT, sync_id TEXT UNIQUE, id INTEGER,
+    username TEXT NOT NULL, role TEXT, full_name TEXT, branch_id INTEGER,
+    updated_at TEXT, is_deleted INTEGER DEFAULT 0, _pending INTEGER DEFAULT 0
+  );
+  CREATE TABLE IF NOT EXISTS cash_transfers (
+    _lid INTEGER PRIMARY KEY AUTOINCREMENT, sync_id TEXT UNIQUE, id INTEGER,
+    truck_id INTEGER, truck_sync_id TEXT, amount REAL DEFAULT 0,
+    direction TEXT, note TEXT, created_at TEXT, updated_at TEXT,
+    is_deleted INTEGER DEFAULT 0, _pending INTEGER DEFAULT 0
+  );
+  CREATE TABLE IF NOT EXISTS stock_transfers (
+    _lid INTEGER PRIMARY KEY AUTOINCREMENT, sync_id TEXT UNIQUE, id INTEGER,
+    from_truck_id INTEGER, to_truck_id INTEGER, from_warehouse INTEGER DEFAULT 0,
+    note TEXT, created_at TEXT, updated_at TEXT,
+    is_deleted INTEGER DEFAULT 0, _pending INTEGER DEFAULT 0
+  );
+  CREATE TABLE IF NOT EXISTS stock_transfer_items (
+    _lid INTEGER PRIMARY KEY AUTOINCREMENT, sync_id TEXT UNIQUE, id INTEGER,
+    stock_transfer_id INTEGER, stock_transfer_sync_id TEXT,
+    product_id INTEGER, product_sync_id TEXT, product_name TEXT,
+    quantity REAL, updated_at TEXT, _pending INTEGER DEFAULT 0
+  );
 `;
 
 export async function getDb(): Promise<SQLiteDatabase | null> {
@@ -118,6 +202,8 @@ export async function getDb(): Promise<SQLiteDatabase | null> {
     const SQLite = await import("expo-sqlite");
     _db = await SQLite.openDatabaseAsync("erp_mobile.db");
     await _db.execAsync(SCHEMA);
+    // Migrations for existing databases
+    try { await _db.runAsync("ALTER TABLE products ADD COLUMN local_image_uri TEXT"); } catch {}
   }
   return _db;
 }
@@ -174,7 +260,13 @@ export async function upsertRecord(
 }
 
 export async function getPendingCount(db: SQLiteDatabase): Promise<number> {
-  const tables = ["invoices", "invoice_items", "returns", "return_items", "clients", "products"];
+  const tables = [
+    "categories", "products", "clients",
+    "invoices", "invoice_items",
+    "returns", "return_items",
+    "cash_transfers",
+    "stock_transfers", "stock_transfer_items",
+  ];
   let total = 0;
   for (const t of tables) {
     const row = await db.getFirstAsync<{ cnt: number }>(
@@ -183,4 +275,50 @@ export async function getPendingCount(db: SQLiteDatabase): Promise<number> {
     total += row?.cnt ?? 0;
   }
   return total;
+}
+
+export const TABLE_LABELS: [string, string][] = [
+  ["categories", "الفئات"],
+  ["products", "المنتجات"],
+  ["suppliers", "الموردون"],
+  ["clients", "العملاء"],
+  ["trucks", "الشاحنات"],
+  ["users", "المستخدمون"],
+  ["truck_stock", "مخزون الشاحنة"],
+  ["purchases", "طلبات الشراء"],
+  ["purchase_items", "بنود الطلبات"],
+  ["invoices", "الفواتير"],
+  ["invoice_items", "بنود الفواتير"],
+  ["returns", "المرتجعات"],
+  ["return_items", "بنود المرتجعات"],
+  ["cash_transfers", "الصندوق"],
+  ["stock_transfers", "تحويلات المخزن"],
+  ["stock_transfer_items", "بنود التحويلات"],
+];
+
+// Tables that have an is_deleted soft-delete column
+const TABLES_WITH_SOFT_DELETE = new Set([
+  "categories", "products", "suppliers", "clients", "trucks", "users",
+  "purchases", "invoices", "returns", "cash_transfers", "stock_transfers",
+]);
+
+export async function getTableCounts(db: SQLiteDatabase): Promise<Record<string, number>> {
+  const counts: Record<string, number> = {};
+  for (const [table] of TABLE_LABELS) {
+    try {
+      const query = TABLES_WITH_SOFT_DELETE.has(table)
+        ? `SELECT COUNT(*) as cnt FROM ${table} WHERE is_deleted = 0 OR is_deleted IS NULL`
+        : `SELECT COUNT(*) as cnt FROM ${table}`;
+      const row = await db.getFirstAsync<{ cnt: number }>(query);
+      counts[table] = row?.cnt ?? 0;
+    } catch {
+      counts[table] = 0;
+    }
+  }
+  return counts;
+}
+
+export async function resetSyncMeta(db: SQLiteDatabase): Promise<void> {
+  // Clear all sync cursors but keep device_id so this device stays identifiable
+  await db.runAsync("DELETE FROM sync_meta WHERE key != 'device_id'");
 }
