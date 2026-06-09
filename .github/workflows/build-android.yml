@@ -86,7 +86,12 @@ jobs:
         working-directory: artifacts/erp-van-sales-mobile
         run: |
           mkdir -p android/app/src/main/assets
-          npx expo export:embed \
+          # Use the expo binary from the mobile artifact's own node_modules so
+          # that process.cwd() stays in the artifact dir and Metro loads
+          # artifacts/erp-van-sales-mobile/metro.config.js instead of the
+          # workspace-root one that npx resolves when the binary lives in
+          # workspace_root/node_modules/.bin/expo.
+          node node_modules/.bin/expo export:embed \
             --platform android \
             --dev false \
             --bundle-output android/app/src/main/assets/index.android.bundle \
@@ -94,7 +99,6 @@ jobs:
         env:
           EXPO_PUBLIC_API_URL: https://deleveri.alllal.com
           NODE_ENV: production
-          EXPO_PROJECT_ROOT: ${{ github.workspace }}/artifacts/erp-van-sales-mobile
 
       - name: Cache Gradle packages
         uses: actions/cache@v4
