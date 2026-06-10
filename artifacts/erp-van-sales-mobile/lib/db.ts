@@ -98,6 +98,12 @@ let _db: SQLiteDatabase | null = null;
 const SCHEMA = `
   CREATE TABLE IF NOT EXISTS sync_meta (key TEXT PRIMARY KEY, value TEXT);
 
+  CREATE TABLE IF NOT EXISTS branches (
+    _lid INTEGER PRIMARY KEY AUTOINCREMENT, sync_id TEXT UNIQUE, id INTEGER,
+    name TEXT NOT NULL, address TEXT, phone TEXT,
+    updated_at TEXT, is_deleted INTEGER DEFAULT 0, _pending INTEGER DEFAULT 0
+  );
+
   CREATE TABLE IF NOT EXISTS categories (
     _lid INTEGER PRIMARY KEY AUTOINCREMENT, sync_id TEXT UNIQUE, id INTEGER,
     name TEXT NOT NULL, updated_at TEXT, is_deleted INTEGER DEFAULT 0, _pending INTEGER DEFAULT 0
@@ -204,6 +210,7 @@ export async function getDb(): Promise<SQLiteDatabase | null> {
     await _db.execAsync(SCHEMA);
     // Migrations for existing databases
     try { await _db.runAsync("ALTER TABLE products ADD COLUMN local_image_uri TEXT"); } catch {}
+    try { await _db.runAsync("CREATE TABLE IF NOT EXISTS branches (_lid INTEGER PRIMARY KEY AUTOINCREMENT, sync_id TEXT UNIQUE, id INTEGER, name TEXT NOT NULL, address TEXT, phone TEXT, updated_at TEXT, is_deleted INTEGER DEFAULT 0, _pending INTEGER DEFAULT 0)"); } catch {}
   }
   return _db;
 }
