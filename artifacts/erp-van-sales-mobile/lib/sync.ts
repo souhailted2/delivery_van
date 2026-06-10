@@ -5,7 +5,7 @@ import { getDb, getSyncMeta, setSyncMeta, upsertRecord, getPendingCount, resetSy
 import { newSyncId } from "./uuid";
 
 const PULL_TABLES = [
-  "categories", "products", "suppliers", "clients", "trucks", "users",
+  "branches", "categories", "products", "suppliers", "clients", "trucks", "users",
   "truck_stock", "purchases", "purchase_items",
   "invoices", "invoice_items", "returns", "return_items",
   "cash_transfers", "stock_transfers", "stock_transfer_items",
