@@ -9,8 +9,10 @@ import { useColors } from "@/hooks/useColors";
 
 function ClassicTabLayout() {
   const colors = useColors();
+  const { user } = useAuth();
   const isIOS = Platform.OS === "ios";
   const isWeb = Platform.OS === "web";
+  const isAdmin = user?.role === "admin";
 
   return (
     <Tabs
@@ -35,18 +37,13 @@ function ClassicTabLayout() {
         },
         tabBarBackground: () =>
           isIOS ? (
-            <BlurView
-              intensity={100}
-              tint="light"
-              style={StyleSheet.absoluteFill}
-            />
+            <BlurView intensity={100} tint="light" style={StyleSheet.absoluteFill} />
           ) : isWeb ? (
-            <View
-              style={[StyleSheet.absoluteFill, { backgroundColor: colors.card }]}
-            />
+            <View style={[StyleSheet.absoluteFill, { backgroundColor: colors.card }]} />
           ) : null,
       }}
     >
+      {/* ── الرئيسية ── */}
       <Tabs.Screen
         name="index"
         options={{
@@ -55,6 +52,8 @@ function ClassicTabLayout() {
           tabBarIcon: ({ color }) => <Feather name="home" size={22} color={color} />,
         }}
       />
+
+      {/* ── المنتجات ── */}
       <Tabs.Screen
         name="products"
         options={{
@@ -63,6 +62,38 @@ function ClassicTabLayout() {
           tabBarIcon: ({ color }) => <Feather name="package" size={22} color={color} />,
         }}
       />
+
+      {/* ── الفئات ── */}
+      <Tabs.Screen
+        name="categories"
+        options={{
+          title: "الفئات",
+          tabBarLabel: "الفئات",
+          tabBarIcon: ({ color }) => <Feather name="tag" size={22} color={color} />,
+        }}
+      />
+
+      {/* ── الموردون ── */}
+      <Tabs.Screen
+        name="suppliers"
+        options={{
+          title: "الموردون",
+          tabBarLabel: "الموردون",
+          tabBarIcon: ({ color }) => <Feather name="briefcase" size={22} color={color} />,
+        }}
+      />
+
+      {/* ── أوامر الشراء ── */}
+      <Tabs.Screen
+        name="purchases"
+        options={{
+          title: "أوامر الشراء",
+          tabBarLabel: "الشراء",
+          tabBarIcon: ({ color }) => <Feather name="shopping-cart" size={22} color={color} />,
+        }}
+      />
+
+      {/* ── العملاء ── */}
       <Tabs.Screen
         name="clients"
         options={{
@@ -71,6 +102,8 @@ function ClassicTabLayout() {
           tabBarIcon: ({ color }) => <Feather name="users" size={22} color={color} />,
         }}
       />
+
+      {/* ── الفواتير ── */}
       <Tabs.Screen
         name="invoices"
         options={{
@@ -79,6 +112,8 @@ function ClassicTabLayout() {
           tabBarIcon: ({ color }) => <Feather name="file-text" size={22} color={color} />,
         }}
       />
+
+      {/* ── المرتجعات ── */}
       <Tabs.Screen
         name="returns"
         options={{
@@ -87,12 +122,86 @@ function ClassicTabLayout() {
           tabBarIcon: ({ color }) => <Feather name="rotate-ccw" size={22} color={color} />,
         }}
       />
+
+      {/* ── المخزن المركزي ── */}
+      <Tabs.Screen
+        name="warehouse"
+        options={{
+          title: "المخزن",
+          tabBarLabel: "المخزن",
+          tabBarIcon: ({ color }) => <Feather name="archive" size={22} color={color} />,
+        }}
+      />
+
+      {/* ── الشاحنات (إدارة) ── */}
+      <Tabs.Screen
+        name="trucks"
+        options={{
+          title: "الشاحنات",
+          tabBarLabel: "الشاحنات",
+          tabBarIcon: ({ color }) => <Feather name="truck" size={22} color={color} />,
+        }}
+      />
+
+      {/* ── شاحنتي (مخزون الشاحنة) ── */}
       <Tabs.Screen
         name="truck"
         options={{
-          title: "الشاحنة",
-          tabBarLabel: "الشاحنة",
-          tabBarIcon: ({ color }) => <Feather name="truck" size={22} color={color} />,
+          title: "شاحنتي",
+          tabBarLabel: "شاحنتي",
+          tabBarIcon: ({ color }) => <Feather name="box" size={22} color={color} />,
+        }}
+      />
+
+      {/* ── الصندوق ── */}
+      <Tabs.Screen
+        name="caisse"
+        options={{
+          title: "الصندوق",
+          tabBarLabel: "الصندوق",
+          tabBarIcon: ({ color }) => <Feather name="dollar-sign" size={22} color={color} />,
+        }}
+      />
+
+      {/* ── التقارير ── */}
+      <Tabs.Screen
+        name="rapports"
+        options={{
+          title: "التقارير",
+          tabBarLabel: "التقارير",
+          tabBarIcon: ({ color }) => <Feather name="bar-chart-2" size={22} color={color} />,
+        }}
+      />
+
+      {/* ── المستخدمون (admin) ── */}
+      <Tabs.Screen
+        name="users"
+        options={{
+          title: "المستخدمون",
+          tabBarLabel: "المستخدمون",
+          tabBarIcon: ({ color }) => <Feather name="user-check" size={22} color={color} />,
+          href: isAdmin ? undefined : null,
+        }}
+      />
+
+      {/* ── الفروع (admin) ── */}
+      <Tabs.Screen
+        name="branches"
+        options={{
+          title: "الفروع",
+          tabBarLabel: "الفروع",
+          tabBarIcon: ({ color }) => <Feather name="map-pin" size={22} color={color} />,
+          href: isAdmin ? undefined : null,
+        }}
+      />
+
+      {/* ── الإعدادات ── */}
+      <Tabs.Screen
+        name="settings"
+        options={{
+          title: "الإعدادات",
+          tabBarLabel: "الإعدادات",
+          tabBarIcon: ({ color }) => <Feather name="settings" size={22} color={color} />,
         }}
       />
     </Tabs>
