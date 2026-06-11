@@ -18,6 +18,13 @@ export async function saveSession(setCookieHeader: string | null): Promise<void>
   }
 }
 
+export async function saveSessionSid(sid: string): Promise<void> {
+  const clean = sid.startsWith("s%3A") || sid.startsWith("s:")
+    ? sid
+    : `s%3A${sid}`;
+  await SecureStore.setItemAsync(SESSION_KEY, clean);
+}
+
 export async function clearSession(): Promise<void> {
   await SecureStore.deleteItemAsync(SESSION_KEY);
 }
