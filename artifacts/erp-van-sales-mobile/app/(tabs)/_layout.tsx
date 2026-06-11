@@ -153,6 +153,17 @@ function ClassicTabLayout() {
         }}
       />
 
+      {/* ── استلام البضاعة (dispatch inbox) ── */}
+      <Tabs.Screen
+        name="dispatch"
+        options={{
+          title: "استلام البضاعة",
+          tabBarLabel: "التحميل",
+          tabBarIcon: ({ color }) => <Feather name="download" size={22} color={color} />,
+          href: user?.role === "admin" ? null : undefined,
+        }}
+      />
+
       {/* ── الصندوق ── */}
       <Tabs.Screen
         name="caisse"
