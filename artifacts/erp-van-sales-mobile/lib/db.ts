@@ -237,31 +237,55 @@ export async function setSyncMeta(
   );
 }
 
+// Cache of local column names per table, used to drop any server-sent columns
+// that don't exist locally (schema drift safety — e.g. server sends `created_at`
+// for a table whose local SQLite schema doesn't define it).
+const _tableColumns: Record<string, Set<string>> = {};
+
+async function getTableColumns(db: SQLiteDatabase, tableName: string): Promise<Set<string>> {
+  const cached = _tableColumns[tableName];
+  if (cached) return cached;
+  const rows = await db.getAllAsync<{ name: string }>(`PRAGMA table_info(${tableName})`);
+  const cols = new Set(rows.map(r => r.name));
+  _tableColumns[tableName] = cols;
+  return cols;
+}
+
 export async function upsertRecord(
   db: SQLiteDatabase,
   tableName: string,
   record: Record<string, unknown>,
 ): Promise<void> {
   if (!record["sync_id"]) return;
+  // Keep only columns that actually exist in the local table. The cloud schema
+  // can have extra columns (e.g. created_at) the mobile schema doesn't track;
+  // including them would make the INSERT/UPDATE fail with "no column named ...".
+  const validCols = await getTableColumns(db, tableName);
+  const clean: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(record)) {
+    if (validCols.has(k)) clean[k] = v;
+  }
+  if (!clean["sync_id"]) return;
+
   const existing = await db.getFirstAsync<{ _lid: number; updated_at?: string }>(
     `SELECT _lid, updated_at FROM ${tableName} WHERE sync_id = ?`,
-    [record["sync_id"] as string],
+    [clean["sync_id"] as string],
   );
   if (existing) {
     const existingTs = existing.updated_at ? new Date(existing.updated_at).getTime() : 0;
-    const incomingTs = record["updated_at"] ? new Date(record["updated_at"] as string).getTime() : 0;
+    const incomingTs = clean["updated_at"] ? new Date(clean["updated_at"] as string).getTime() : 0;
     if (incomingTs >= existingTs) {
-      const { sync_id, ...rest } = record;
+      const { sync_id, ...rest } = clean;
       const cols = Object.keys(rest).map(k => `${k} = ?`).join(", ");
       const vals = [...Object.values(rest), existing._lid] as any[];
       await db.runAsync(`UPDATE ${tableName} SET ${cols}, _pending = 0 WHERE _lid = ?`, vals);
     }
   } else {
-    const cols = Object.keys(record).join(", ");
-    const placeholders = Object.keys(record).map(() => "?").join(", ");
+    const cols = Object.keys(clean).join(", ");
+    const placeholders = Object.keys(clean).map(() => "?").join(", ");
     await db.runAsync(
       `INSERT OR IGNORE INTO ${tableName} (${cols}, _pending) VALUES (${placeholders}, 0)`,
-      [...Object.values(record)] as any[],
+      [...Object.values(clean)] as any[],
     );
   }
 }
