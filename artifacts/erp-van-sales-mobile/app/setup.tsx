@@ -16,7 +16,7 @@ import {
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { getDb, setSyncMeta } from "@/lib/db";
-import { saveServerUrl, saveSession } from "@/lib/api";
+import { saveServerUrl, saveSessionSid } from "@/lib/api";
 import { pullSync } from "@/lib/sync";
 import { useColors } from "@/hooks/useColors";
 import { TABLE_LABELS } from "@/lib/db";
@@ -74,17 +74,17 @@ export default function SetupScreen() {
         return;
       }
 
-      const setCookieHeader = loginRes.headers.get("set-cookie");
-      const match = setCookieHeader?.match(/connect\.sid=([^;]+)/);
-      if (!match?.[1]) {
+      const loginData = await loginRes.json();
+      const sessionId: string | undefined = loginData?.sessionId;
+      if (!sessionId) {
         setPhase("idle");
         Alert.alert("خطأ", "لم يتم استلام جلسة صالحة من السيرفر");
         return;
       }
-      const sid = match[1];
+      const sid = sessionId;
 
       await saveServerUrl(baseUrl);
-      await saveSession(setCookieHeader);
+      await saveSessionSid(sid);
 
       setPhase("pulling");
 
