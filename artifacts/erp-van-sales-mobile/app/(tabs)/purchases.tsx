@@ -19,10 +19,10 @@ interface PurchaseLineItem {
 }
 
 const STATUS_LABELS: Record<string, string> = {
-  pending: "معلق", confirmed: "مؤكد", received: "مستلم",
+  pending: "معلق", partial: "جزئي", paid: "مدفوع", confirmed: "مؤكد", received: "مستلم",
 };
 const STATUS_COLORS: Record<string, string> = {
-  pending: "#f59e0b", confirmed: "#3b82f6", received: "#22c55e",
+  pending: "#f59e0b", partial: "#3b82f6", paid: "#22c55e", confirmed: "#3b82f6", received: "#22c55e",
 };
 
 export default function PurchasesScreen() {

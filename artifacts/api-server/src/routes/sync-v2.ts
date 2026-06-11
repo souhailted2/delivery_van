@@ -17,11 +17,40 @@ import { gt, or, isNull, sql } from "drizzle-orm";
 
 const router = Router();
 
-// Require auth for all sync routes
+// Require auth for all sync routes — accept both user sessions and truck sessions
 function requireAuth(req: any, res: any, next: any) {
-  if (!req.session?.userId) return res.status(401).json({ error: "Non authentifié" });
+  if (!req.session?.userId && !req.session?.truckId) {
+    return res.status(401).json({ error: "Non authentifié" });
+  }
   next();
 }
+
+// Tables a truck session may pull (operational data only).
+// Excluded from truck pull: users (contains auth data), suppliers, purchases, purchase_items.
+const TRUCK_PULL_ALLOWLIST = new Set([
+  "categories", "products", "clients", "trucks",
+  "truck_stock",
+  "invoices", "invoice_items",
+  "returns", "return_items",
+  "cash_transfers",
+  "stock_transfers", "stock_transfer_items",
+]);
+
+// Tables a truck session is allowed to push (operational data only).
+// Admin-only tables (users, suppliers, purchases, purchase_items, truck_stock) are excluded.
+const TRUCK_PUSH_ALLOWLIST = new Set([
+  "categories", "clients",
+  "invoices", "invoice_items",
+  "returns", "return_items",
+  "cash_transfers",
+  "stock_transfers", "stock_transfer_items",
+]);
+
+// Columns to strip from rows before sending to any client (sensitive auth fields)
+const COLUMN_STRIP: Record<string, string[]> = {
+  users: ["password_hash", "passwordHash"],
+  trucks: ["password_hash", "passwordHash"],
+};
 
 // All syncable tables with their drizzle table objects
 const SYNC_TABLES = [
@@ -43,22 +72,37 @@ const SYNC_TABLES = [
   { name: "stock_transfer_items", table: stockTransferItemsTable,  hasUpdatedAt: true },
 ] as const;
 
+// ─── STATUS ───────────────────────────────────────────────────────────────────
+
+router.get("/sync/status", requireAuth, async (_req, res) => {
+  res.json({ ok: true, version: "v2", timestamp: new Date().toISOString() });
+});
+
 // ─── PULL ─────────────────────────────────────────────────────────────────────
 
 router.get("/sync/v2/pull", requireAuth, async (req, res) => {
   const sinceRaw = req.query.since as string | undefined;
   const since = sinceRaw ? new Date(sinceRaw) : new Date(0);
 
+  // Truck sessions receive only operational tables; user sessions receive all
+  const isTruckSession = !!(req as any).session?.truckId && !(req as any).session?.userId;
+
   const result: Record<string, any[]> = {};
 
   for (const { name, table } of SYNC_TABLES) {
+    if (isTruckSession && !TRUCK_PULL_ALLOWLIST.has(name)) continue;
     try {
       const t = table as any;
       if (!t.updatedAt) continue;
       const rows = await db.select().from(t)
         .where(or(gt(t.updatedAt, since), isNull(t.updatedAt)));
-      // Convert timestamps to ISO strings and snake_case for desktop
-      result[name] = rows.map((r: any) => snakeCaseRecord(r));
+      // Convert timestamps to ISO strings and snake_case; strip sensitive columns
+      const strip = COLUMN_STRIP[name] ?? [];
+      result[name] = rows.map((r: any) => {
+        const row = snakeCaseRecord(r);
+        for (const col of strip) delete row[col];
+        return row;
+      });
     } catch {
       result[name] = [];
     }
@@ -76,6 +120,16 @@ router.post("/sync/v2/push", requireAuth, async (req, res): Promise<void> => {
   const { tables } = req.body as { deviceId?: string; tables?: Record<string, any[]> };
   if (!tables || typeof tables !== "object") {
     res.status(400).json({ error: "tables object required" }); return;
+  }
+
+  // Enforce table-level authorization: truck sessions may only push operational tables
+  const isTruckSession = !!(req as any).session?.truckId && !(req as any).session?.userId;
+  if (isTruckSession) {
+    const forbidden = Object.keys(tables).filter(t => !TRUCK_PUSH_ALLOWLIST.has(t));
+    if (forbidden.length > 0) {
+      res.status(403).json({ error: `Forbidden tables for truck session: ${forbidden.join(", ")}` });
+      return;
+    }
   }
 
   const tableMap: Record<string, any> = {};
