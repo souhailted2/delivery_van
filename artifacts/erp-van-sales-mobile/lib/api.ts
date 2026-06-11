@@ -4,6 +4,7 @@ export const API_URL =
   process.env["EXPO_PUBLIC_API_URL"] ?? "https://deleveri.alllal.com";
 
 const SESSION_KEY = "erp_session_sid";
+const SERVER_URL_KEY = "erp_server_url";
 
 export async function getSessionSid(): Promise<string | null> {
   return SecureStore.getItemAsync(SESSION_KEY);
@@ -21,18 +22,27 @@ export async function clearSession(): Promise<void> {
   await SecureStore.deleteItemAsync(SESSION_KEY);
 }
 
+export async function saveServerUrl(url: string): Promise<void> {
+  await SecureStore.setItemAsync(SERVER_URL_KEY, url.replace(/\/$/, ""));
+}
+
+export async function getActiveApiUrl(): Promise<string> {
+  const stored = await SecureStore.getItemAsync(SERVER_URL_KEY);
+  return stored ?? API_URL;
+}
+
 export async function apiFetch(
   path: string,
   options: RequestInit = {},
 ): Promise<Response> {
-  const sid = await getSessionSid();
+  const [sid, baseUrl] = await Promise.all([getSessionSid(), getActiveApiUrl()]);
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
     ...(options.headers as Record<string, string>),
   };
   if (sid) headers["Cookie"] = `connect.sid=${sid}`;
 
-  return fetch(`${API_URL}/api${path}`, { ...options, headers });
+  return fetch(`${baseUrl}/api${path}`, { ...options, headers });
 }
 
 export async function apiGet<T>(path: string): Promise<T> {
@@ -54,9 +64,10 @@ export async function apiPost<T>(path: string, body: unknown): Promise<T> {
 
 export async function checkOnline(): Promise<boolean> {
   try {
+    const baseUrl = await getActiveApiUrl();
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 4000);
-    const res = await fetch(`${API_URL}/api/healthz`, {
+    const res = await fetch(`${baseUrl}/api/healthz`, {
       signal: controller.signal,
       cache: "no-store",
     });
