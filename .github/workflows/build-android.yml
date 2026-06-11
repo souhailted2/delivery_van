@@ -114,7 +114,6 @@ jobs:
           cp "${{ steps.find_apk.outputs.apk_path }}" erp-van-sales.apk
 
       - name: Upload APK artifact (30-day backup)
-        continue-on-error: true
         uses: actions/upload-artifact@v4
         with:
           name: erp-van-sales-android
