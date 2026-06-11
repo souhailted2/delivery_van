@@ -5,9 +5,9 @@ import {
   useFonts,
 } from "@expo-google-fonts/cairo";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { Redirect, Stack } from "expo-router";
+import { Stack, router } from "expo-router";
 import * as SplashScreen from "expo-splash-screen";
-import React, { useEffect } from "react";
+import React, { useEffect, useState } from "react";
 import { I18nManager } from "react-native";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
 import { KeyboardProvider } from "react-native-keyboard-controller";
@@ -17,6 +17,7 @@ import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { AuthProvider, useAuth } from "@/contexts/AuthContext";
 import { SyncProvider } from "@/contexts/SyncContext";
 import { useUpdateCheck } from "@/lib/useUpdateCheck";
+import { getDb, isBootstrapNeeded } from "@/lib/db";
 
 I18nManager.forceRTL(true);
 
@@ -25,16 +26,42 @@ SplashScreen.preventAutoHideAsync();
 const queryClient = new QueryClient();
 
 function RootLayoutNav() {
-  const { user, loading } = useAuth();
+  const { user, loading: authLoading } = useAuth();
+  const [bootstrapChecked, setBootstrapChecked] = useState(false);
+  const [needsBootstrap, setNeedsBootstrap] = useState(false);
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const db = await getDb();
+        if (db) {
+          const needed = await isBootstrapNeeded(db);
+          setNeedsBootstrap(needed);
+        }
+      } catch {
+        // If DB check fails, proceed normally so the app isn't blocked
+      } finally {
+        setBootstrapChecked(true);
+      }
+    })();
+  }, []);
 
   // Auto-check for updates once per day — only when authenticated
   useUpdateCheck(!!user);
 
-  if (loading) return null;
+  useEffect(() => {
+    if (!bootstrapChecked || authLoading) return;
+    if (needsBootstrap) {
+      router.replace("/setup");
+    }
+  }, [bootstrapChecked, authLoading, needsBootstrap]);
+
+  if (!bootstrapChecked || authLoading) return null;
 
   return (
     <Stack screenOptions={{ headerShown: false }}>
-      <Stack.Screen name="(tabs)" redirect={!user} />
+      <Stack.Screen name="setup" />
+      <Stack.Screen name="(tabs)" redirect={!user || needsBootstrap} />
       <Stack.Screen name="login" />
       <Stack.Screen name="invoice/new" options={{ presentation: "modal" }} />
     </Stack>
