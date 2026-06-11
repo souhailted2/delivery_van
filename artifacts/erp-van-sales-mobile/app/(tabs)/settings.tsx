@@ -1,4 +1,5 @@
 import { Feather } from "@expo/vector-icons";
+import { router } from "expo-router";
 import { Alert, ScrollView, StyleSheet, Text, TouchableOpacity, View } from "react-native";
 import { SyncBar } from "@/components/SyncBar";
 import { useAuth } from "@/contexts/AuthContext";
@@ -30,7 +31,7 @@ function SettingRow({ label, sub, icon, color, onPress, danger, colors }: {
 
 export default function SettingsScreen() {
   const colors = useColors();
-  const { user, logout } = useAuth();
+  const { user, logout, resetDevice } = useAuth();
   const { triggerSync, doResetSync, syncing, resetting, lastSync, pending, error } = useSync();
 
   const handleForceSync = () => {
@@ -59,6 +60,24 @@ export default function SettingsScreen() {
       { text: "إلغاء", style: "cancel" },
       { text: "خروج", style: "destructive", onPress: () => logout() },
     ]);
+  };
+
+  const handleResetDevice = () => {
+    Alert.alert(
+      "إعادة تعيين الجهاز",
+      "سيتم مسح بيانات الشاحنة المرتبطة وإعادة الجهاز لشاشة الإعداد. يجب إعادة ربط الجهاز بشاحنة بعد ذلك.",
+      [
+        { text: "إلغاء", style: "cancel" },
+        {
+          text: "إعادة التعيين",
+          style: "destructive",
+          onPress: async () => {
+            await resetDevice();
+            router.replace("/setup");
+          },
+        },
+      ]
+    );
   };
 
   const lastSyncText = lastSync
@@ -129,6 +148,23 @@ export default function SettingsScreen() {
           <SettingRow label="العملة" sub="دينار جزائري (د.ج)" icon="dollar-sign" colors={colors} />
           <SettingRow label="اللغة" sub="العربية" icon="globe" colors={colors} />
         </View>
+
+        {/* Device section — truck devices only */}
+        {user?.role === "truck" && (
+          <>
+            <Text style={[styles.sectionTitle, { color: colors.mutedForeground }]}>الجهاز</Text>
+            <View style={[styles.card, { backgroundColor: colors.card, borderColor: colors.border }]}>
+              <SettingRow
+                label="إعادة تعيين الجهاز"
+                sub="تغيير الشاحنة المرتبطة بهذا الجهاز"
+                icon="refresh-ccw"
+                danger
+                onPress={handleResetDevice}
+                colors={colors}
+              />
+            </View>
+          </>
+        )}
 
         {/* Logout */}
         <TouchableOpacity

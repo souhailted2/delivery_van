@@ -15,11 +15,11 @@ import {
   View,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { getDb, setSyncMeta } from "@/lib/db";
-import { saveServerUrl, saveSessionSid } from "@/lib/api";
+import { getDb, setSyncMeta, TABLE_LABELS } from "@/lib/db";
+import { saveServerUrl, getSessionSid, saveTruckCredentials } from "@/lib/api";
 import { pullSync } from "@/lib/sync";
 import { useColors } from "@/hooks/useColors";
-import { TABLE_LABELS } from "@/lib/db";
+import { useAuth } from "@/contexts/AuthContext";
 
 const TABLE_LABEL_MAP: Record<string, string> = Object.fromEntries(TABLE_LABELS);
 
@@ -33,9 +33,10 @@ interface ProgressEntry {
 export default function SetupScreen() {
   const colors = useColors();
   const insets = useSafeAreaInsets();
+  const { truckLogin } = useAuth();
 
   const [serverUrl, setServerUrl] = useState("https://deleveri.alllal.com");
-  const [username, setUsername] = useState("");
+  const [truckName, setTruckName] = useState("");
   const [password, setPassword] = useState("");
   const [showPass, setShowPass] = useState(false);
 
@@ -49,8 +50,8 @@ export default function SetupScreen() {
       Alert.alert("تنبيه", "يرجى إدخال رابط السيرفر");
       return;
     }
-    if (!username.trim() || !password.trim()) {
-      Alert.alert("تنبيه", "يرجى إدخال اسم المستخدم وكلمة المرور");
+    if (!truckName.trim() || !password.trim()) {
+      Alert.alert("تنبيه", "يرجى إدخال اسم الشاحنة وكلمة المرور");
       return;
     }
 
@@ -62,29 +63,21 @@ export default function SetupScreen() {
       setTotalRecords(0);
       setCurrentTable(null);
 
-      const loginRes = await fetch(`${baseUrl}/api/auth/login`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ username: username.trim(), password: password.trim() }),
-      });
+      // Save server URL first so truckLogin can reach it
+      await saveServerUrl(baseUrl);
 
-      if (!loginRes.ok) {
-        setPhase("idle");
-        Alert.alert("خطأ في تسجيل الدخول", "بيانات الدخول خاطئة أو السيرفر غير متاح");
-        return;
-      }
+      // Authenticate as truck — sets user state in AuthContext + saves session cookie
+      await truckLogin(truckName.trim(), password.trim());
 
-      const loginData = await loginRes.json();
-      const sessionId: string | undefined = loginData?.sessionId;
-      if (!sessionId) {
+      // Save credentials for auto-login on every future app open
+      await saveTruckCredentials(truckName.trim(), password.trim());
+
+      const sid = await getSessionSid();
+      if (!sid) {
         setPhase("idle");
         Alert.alert("خطأ", "لم يتم استلام جلسة صالحة من السيرفر");
         return;
       }
-      const sid = sessionId;
-
-      await saveServerUrl(baseUrl);
-      await saveSessionSid(sid);
 
       setPhase("pulling");
 
@@ -108,13 +101,16 @@ export default function SetupScreen() {
       await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
       setPhase("done");
 
+      // Navigate directly to the app — user is already authenticated
       setTimeout(() => {
-        router.replace("/login");
+        router.replace("/(tabs)");
       }, 1500);
     } catch (err: any) {
       setPhase("idle");
       const msg =
-        err?.message?.includes("Network request failed") || err?.message?.includes("fetch")
+        err?.message === "بيانات الشاحنة خاطئة"
+          ? "اسم الشاحنة أو كلمة المرور غير صحيحة"
+          : err?.message?.includes("Network request failed") || err?.message?.includes("fetch")
           ? "تعذّر الاتصال بالسيرفر. تحقق من الرابط واتصال الإنترنت."
           : err?.message ?? "حدث خطأ غير متوقع";
       Alert.alert("خطأ في الإعداد", msg);
@@ -135,11 +131,11 @@ export default function SetupScreen() {
       >
         <View style={styles.card}>
           <View style={[styles.logoBox, { backgroundColor: colors.primary }]}>
-            <Feather name="download-cloud" size={36} color="#fff" />
+            <Feather name="truck" size={36} color="#fff" />
           </View>
-          <Text style={[styles.title, { color: colors.foreground }]}>الإعداد الأولي</Text>
+          <Text style={[styles.title, { color: colors.foreground }]}>إعداد الجهاز</Text>
           <Text style={[styles.subtitle, { color: colors.mutedForeground }]}>
-            سيتم سحب جميع البيانات من السيرفر مرة واحدة
+            أدخل بيانات الشاحنة لربط هذا الجهاز بها
           </Text>
 
           {phase === "idle" || phase === "login" ? (
@@ -164,15 +160,15 @@ export default function SetupScreen() {
               </View>
 
               <View style={styles.fieldGroup}>
-                <Text style={[styles.label, { color: colors.mutedForeground }]}>اسم المستخدم</Text>
+                <Text style={[styles.label, { color: colors.mutedForeground }]}>اسم الشاحنة</Text>
                 <View style={[styles.inputWrap, { borderColor: colors.border, backgroundColor: colors.card }]}>
-                  <Feather name="user" size={16} color={colors.mutedForeground} style={styles.inputIcon} />
+                  <Feather name="truck" size={16} color={colors.mutedForeground} style={styles.inputIcon} />
                   <TextInput
                     style={[styles.input, { color: colors.foreground }]}
-                    placeholder="admin"
+                    placeholder="مثال: شاحنة 1"
                     placeholderTextColor={colors.mutedForeground}
-                    value={username}
-                    onChangeText={setUsername}
+                    value={truckName}
+                    onChangeText={setTruckName}
                     autoCapitalize="none"
                     autoCorrect={false}
                     textAlign="right"
@@ -216,7 +212,7 @@ export default function SetupScreen() {
                     <Text style={styles.btnText}>جارٍ تسجيل الدخول...</Text>
                   </View>
                 ) : (
-                  <Text style={styles.btnText}>بدء الإعداد</Text>
+                  <Text style={styles.btnText}>ربط الجهاز بالشاحنة</Text>
                 )}
               </TouchableOpacity>
             </>
@@ -259,10 +255,10 @@ export default function SetupScreen() {
             <View style={[styles.doneBox, { borderColor: colors.border, backgroundColor: colors.card }]}>
               <Feather name="check-circle" size={40} color="#22c55e" />
               <Text style={[styles.doneTitle, { color: colors.foreground }]}>
-                اكتمل الإعداد بنجاح!
+                تم ربط الجهاز بنجاح!
               </Text>
               <Text style={[styles.doneSubtitle, { color: colors.mutedForeground }]}>
-                تم استيراد {totalRecords} سجل. جارٍ الانتقال لتسجيل الدخول...
+                تم استيراد {totalRecords} سجل. جارٍ فتح التطبيق...
               </Text>
               <ActivityIndicator color={colors.primary} style={{ marginTop: 12 }} />
             </View>

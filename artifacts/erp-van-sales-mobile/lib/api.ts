@@ -5,6 +5,7 @@ export const API_URL =
 
 const SESSION_KEY = "erp_session_sid";
 const SERVER_URL_KEY = "erp_server_url";
+const TRUCK_CREDENTIALS_KEY = "erp_truck_credentials";
 
 export async function getSessionSid(): Promise<string | null> {
   return SecureStore.getItemAsync(SESSION_KEY);
@@ -27,6 +28,20 @@ export async function saveSessionSid(sid: string): Promise<void> {
 
 export async function clearSession(): Promise<void> {
   await SecureStore.deleteItemAsync(SESSION_KEY);
+}
+
+export async function saveTruckCredentials(truckName: string, password: string): Promise<void> {
+  await SecureStore.setItemAsync(TRUCK_CREDENTIALS_KEY, JSON.stringify({ truckName, password }));
+}
+
+export async function getTruckCredentials(): Promise<{ truckName: string; password: string } | null> {
+  const raw = await SecureStore.getItemAsync(TRUCK_CREDENTIALS_KEY);
+  if (!raw) return null;
+  try { return JSON.parse(raw); } catch { return null; }
+}
+
+export async function clearTruckCredentials(): Promise<void> {
+  await SecureStore.deleteItemAsync(TRUCK_CREDENTIALS_KEY);
 }
 
 export async function saveServerUrl(url: string): Promise<void> {

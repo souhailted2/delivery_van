@@ -1,5 +1,6 @@
 import React, { createContext, useCallback, useContext, useEffect, useState } from "react";
-import { apiFetch, clearSession, getActiveApiUrl, getSessionSid, saveSession } from "@/lib/api";
+import { apiFetch, clearSession, clearTruckCredentials, getActiveApiUrl, getSessionSid, getTruckCredentials, saveSession } from "@/lib/api";
+import { getDb, setSyncMeta } from "@/lib/db";
 
 interface UserInfo {
   id: number;
@@ -16,6 +17,7 @@ interface AuthContextValue {
   login: (username: string, password: string) => Promise<void>;
   truckLogin: (truckName: string, password: string) => Promise<void>;
   logout: () => Promise<void>;
+  resetDevice: () => Promise<void>;
 }
 
 const AuthContext = createContext<AuthContextValue>({
@@ -24,6 +26,7 @@ const AuthContext = createContext<AuthContextValue>({
   login: async () => {},
   truckLogin: async () => {},
   logout: async () => {},
+  resetDevice: async () => {},
 });
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
@@ -34,14 +37,32 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     (async () => {
       try {
         const sid = await getSessionSid();
-        if (!sid) { setLoading(false); return; }
-        const res = await apiFetch("/auth/me");
-        if (res.ok) {
-          const data = await res.json();
-          setUser({ id: data.id, username: data.username, role: data.role, truckId: data.truckId, branchId: data.branchId, fullName: data.fullName });
+        if (sid) {
+          const res = await apiFetch("/auth/me");
+          if (res.ok) {
+            const data = await res.json();
+            setUser({ id: data.id, username: data.username, role: data.role, truckId: data.truckId, branchId: data.branchId, fullName: data.fullName });
+            return;
+          }
+        }
+        // Session missing or expired — try auto truck login with saved credentials
+        const creds = await getTruckCredentials();
+        if (creds) {
+          const baseUrl = await getActiveApiUrl();
+          const res = await fetch(`${baseUrl}/api/auth/truck-login`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ truckName: creds.truckName, password: creds.password }),
+          });
+          if (res.ok) {
+            const setCookie = res.headers.get("set-cookie");
+            await saveSession(setCookie);
+            const data = await res.json();
+            setUser({ id: data.user?.id ?? 0, username: data.user?.username ?? creds.truckName, role: "truck", truckId: data.user?.truckId, branchId: data.user?.branchId, fullName: data.user?.fullName });
+          }
         }
       } catch {
-        // no session
+        // Network error or no session — stay logged out
       } finally {
         setLoading(false);
       }
@@ -82,8 +103,19 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     setUser(null);
   }, []);
 
+  const resetDevice = useCallback(async () => {
+    try { await apiFetch("/auth/logout", { method: "POST" }); } catch {}
+    await clearSession();
+    await clearTruckCredentials();
+    try {
+      const db = await getDb();
+      if (db) await setSyncMeta(db, "bootstrap_done", "0");
+    } catch {}
+    setUser(null);
+  }, []);
+
   return (
-    <AuthContext.Provider value={{ user, loading, login, truckLogin, logout }}>
+    <AuthContext.Provider value={{ user, loading, login, truckLogin, logout, resetDevice }}>
       {children}
     </AuthContext.Provider>
   );

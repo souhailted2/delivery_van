@@ -61,7 +61,7 @@ function RootLayoutNav() {
   return (
     <Stack screenOptions={{ headerShown: false }}>
       <Stack.Screen name="setup" />
-      <Stack.Screen name="(tabs)" redirect={!user || needsBootstrap} />
+      <Stack.Screen name="(tabs)" redirect={!user} />
       <Stack.Screen name="login" />
       <Stack.Screen name="invoice/new" options={{ presentation: "modal" }} />
     </Stack>
