@@ -251,6 +251,17 @@ async function getTableColumns(db: SQLiteDatabase, tableName: string): Promise<S
   return cols;
 }
 
+// Server→local column renames. The cloud schema names a few business-data columns
+// differently from the local mobile schema. Without these the values would be
+// silently dropped by the column filter even though the data IS needed locally:
+//   - clients.balance (cloud) → credit_balance (mobile, shown as client debt)
+//   - purchases.payment_status (cloud) → status (mobile, status badge)
+// Map BEFORE filtering so the real data lands in the right local column.
+const COLUMN_ALIASES: Record<string, Record<string, string>> = {
+  clients: { balance: "credit_balance" },
+  purchases: { payment_status: "status" },
+};
+
 export async function upsertRecord(
   db: SQLiteDatabase,
   tableName: string,
@@ -261,9 +272,19 @@ export async function upsertRecord(
   // can have extra columns (e.g. created_at) the mobile schema doesn't track;
   // including them would make the INSERT/UPDATE fail with "no column named ...".
   const validCols = await getTableColumns(db, tableName);
+  const aliases = COLUMN_ALIASES[tableName];
   const clean: Record<string, unknown> = {};
   for (const [k, v] of Object.entries(record)) {
     if (validCols.has(k)) clean[k] = v;
+  }
+  // Apply server→local renames for columns that didn't match directly, so
+  // important data (e.g. client balance) is stored instead of dropped.
+  if (aliases) {
+    for (const [serverCol, localCol] of Object.entries(aliases)) {
+      if (serverCol in record && validCols.has(localCol) && !(localCol in clean)) {
+        clean[localCol] = record[serverCol];
+      }
+    }
   }
   if (!clean["sync_id"]) return;
 
