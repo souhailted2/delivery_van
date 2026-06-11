@@ -64,10 +64,20 @@ jobs:
           script: |
             set -e
             echo "=== Extracting ==="
-            mkdir -p /var/www/erp-api
-            cd /var/www/erp-api
+            mkdir -p /tmp/erp-deploy
+            cd /tmp/erp-deploy
             tar -xzf /tmp/deploy.tar.gz
             rm -f /tmp/deploy.tar.gz
+
+            echo "=== Copying API dist ==="
+            mkdir -p /var/www/erp-van-sales/api-server/dist
+            cp -r artifacts/api-server/dist/* /var/www/erp-van-sales/api-server/dist/
+
+            echo "=== Copying frontend dist ==="
+            mkdir -p /var/www/erp-van-sales/frontend
+            cp -r artifacts/erp-van-sales/dist/public/. /var/www/erp-van-sales/frontend/ 2>/dev/null || true
+            cd /
+            rm -rf /tmp/erp-deploy
 
             echo "=== Reloading PM2 ==="
             pm2 reload erp-api --update-env || pm2 restart erp-api
