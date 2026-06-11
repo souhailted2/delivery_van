@@ -1,5 +1,5 @@
 import React, { createContext, useCallback, useContext, useEffect, useState } from "react";
-import { apiFetch, API_URL, clearSession, getSessionSid, saveSession } from "@/lib/api";
+import { apiFetch, clearSession, getActiveApiUrl, getSessionSid, saveSession } from "@/lib/api";
 
 interface UserInfo {
   id: number;
@@ -14,7 +14,7 @@ interface AuthContextValue {
   user: UserInfo | null;
   loading: boolean;
   login: (username: string, password: string) => Promise<void>;
-  truckLogin: (truckId: number, password: string) => Promise<void>;
+  truckLogin: (truckName: string, password: string) => Promise<void>;
   logout: () => Promise<void>;
 }
 
@@ -49,7 +49,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const login = useCallback(async (username: string, password: string) => {
-    const res = await fetch(`${API_URL}/api/auth/login`, {
+    const baseUrl = await getActiveApiUrl();
+    const res = await fetch(`${baseUrl}/api/auth/login`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ username, password }),
@@ -61,17 +62,18 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     setUser({ id: data.user?.id ?? 0, username: data.user?.username ?? username, role: data.user?.role ?? "vendeur", truckId: data.user?.truckId, branchId: data.user?.branchId, fullName: data.user?.fullName });
   }, []);
 
-  const truckLogin = useCallback(async (truckId: number, password: string) => {
-    const res = await fetch(`${API_URL}/api/auth/truck-login`, {
+  const truckLogin = useCallback(async (truckName: string, password: string) => {
+    const baseUrl = await getActiveApiUrl();
+    const res = await fetch(`${baseUrl}/api/auth/truck-login`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ truckId, password }),
+      body: JSON.stringify({ truckName, password }),
     });
     if (!res.ok) throw new Error("بيانات الشاحنة خاطئة");
     const setCookie = res.headers.get("set-cookie");
     await saveSession(setCookie);
     const data = await res.json();
-    setUser({ id: data.user?.id ?? 0, username: data.user?.username ?? `truck-${truckId}`, role: "truck", truckId: data.user?.truckId ?? truckId, branchId: data.user?.branchId, fullName: data.user?.fullName });
+    setUser({ id: data.user?.id ?? 0, username: data.user?.username ?? truckName, role: "truck", truckId: data.user?.truckId, branchId: data.user?.branchId, fullName: data.user?.fullName });
   }, []);
 
   const logout = useCallback(async () => {
