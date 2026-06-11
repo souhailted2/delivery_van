@@ -329,3 +329,24 @@ export async function resetSyncMeta(db: SQLiteDatabase): Promise<void> {
   // Clear all sync cursors but keep device_id so this device stays identifiable
   await db.runAsync("DELETE FROM sync_meta WHERE key != 'device_id'");
 }
+
+export async function isBootstrapNeeded(db: SQLiteDatabase): Promise<boolean> {
+  // Explicitly marked done — no setup needed (normal operation after first install)
+  const done = await getSyncMeta(db, "bootstrap_done");
+  if (done === "1") return false;
+
+  // Data already exists → this is an existing install being upgraded; auto-mark done
+  // so the user is never forced through setup on an already-working device.
+  try {
+    const row = await db.getFirstAsync<{ cnt: number }>(
+      "SELECT COUNT(*) as cnt FROM users",
+    );
+    if ((row?.cnt ?? 0) > 0) {
+      await setSyncMeta(db, "bootstrap_done", "1");
+      return false;
+    }
+  } catch {}
+
+  // Truly empty DB → first install → show setup screen
+  return true;
+}
