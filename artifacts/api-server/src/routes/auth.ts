@@ -1,6 +1,6 @@
 import { Router } from "express";
 import { db } from "@workspace/db";
-import { usersTable, trucksTable } from "@workspace/db";
+import { usersTable, trucksTable, branchesTable } from "@workspace/db";
 import { eq } from "drizzle-orm";
 import crypto from "crypto";
 
@@ -22,7 +22,15 @@ router.post("/auth/login", async (req, res) => {
   (req.session as any).userId = user.id;
   (req.session as any).truckId = undefined;
   const { passwordHash: _, ...safeUser } = user;
-  res.json({ user: safeUser });
+
+  // Attach branch name if user has a branch
+  let branchName: string | null = null;
+  if (safeUser.branchId) {
+    const [branch] = await db.select().from(branchesTable).where(eq(branchesTable.id, safeUser.branchId)).limit(1);
+    branchName = branch?.name ?? null;
+  }
+
+  res.json({ user: { ...safeUser, branchName }, sessionId: req.session.id });
 });
 
 router.post("/auth/truck-login", async (req, res) => {
@@ -36,11 +44,20 @@ router.post("/auth/truck-login", async (req, res) => {
   }
   (req.session as any).truckId = truck.id;
   (req.session as any).userId = undefined;
+
+  let branchName: string | null = null;
+  if (truck.branchId) {
+    const [branch] = await db.select().from(branchesTable).where(eq(branchesTable.id, truck.branchId)).limit(1);
+    branchName = branch?.name ?? null;
+  }
+
   const truckUser = {
     id: truck.id,
     username: truck.name,
     fullName: truck.driverName || truck.name,
     role: "truck",
+    branchId: truck.branchId ?? null,
+    branchName,
     truckId: truck.id,
     canDeleteInvoice: false,
     canEditPrice: false,
@@ -62,11 +79,20 @@ router.get("/auth/me", async (req, res) => {
   if (truckId) {
     const [truck] = await db.select().from(trucksTable).where(eq(trucksTable.id, truckId)).limit(1);
     if (!truck) return res.status(401).json({ error: "Camion non trouvé" });
+
+    let branchName: string | null = null;
+    if (truck.branchId) {
+      const [branch] = await db.select().from(branchesTable).where(eq(branchesTable.id, truck.branchId)).limit(1);
+      branchName = branch?.name ?? null;
+    }
+
     return res.json({
       id: truck.id,
       username: truck.name,
       fullName: truck.driverName || truck.name,
       role: "truck",
+      branchId: truck.branchId ?? null,
+      branchName,
       truckId: truck.id,
       canDeleteInvoice: false,
       canEditPrice: false,
@@ -80,7 +106,14 @@ router.get("/auth/me", async (req, res) => {
   const [user] = await db.select().from(usersTable).where(eq(usersTable.id, userId)).limit(1);
   if (!user) return res.status(401).json({ error: "Utilisateur non trouvé" });
   const { passwordHash: _, ...safeUser } = user;
-  res.json(safeUser);
+
+  let branchName: string | null = null;
+  if (safeUser.branchId) {
+    const [branch] = await db.select().from(branchesTable).where(eq(branchesTable.id, safeUser.branchId)).limit(1);
+    branchName = branch?.name ?? null;
+  }
+
+  res.json({ ...safeUser, branchName });
 });
 
 export default router;
