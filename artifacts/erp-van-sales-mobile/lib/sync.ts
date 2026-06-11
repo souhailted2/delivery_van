@@ -1,6 +1,6 @@
 import type { SQLiteDatabase } from "expo-sqlite";
 import { Directory, File, Paths } from "expo-file-system";
-import { API_URL } from "./api";
+import { API_URL, getActiveApiUrl } from "./api";
 import { getDb, getSyncMeta, setSyncMeta, upsertRecord, getPendingCount, resetSyncMeta } from "./db";
 import { newSyncId } from "./uuid";
 
@@ -29,12 +29,23 @@ async function getDeviceId(db: SQLiteDatabase): Promise<string> {
   return id;
 }
 
-export async function pullSync(cookie: string): Promise<void> {
+export async function pullSync(
+  cookie: string,
+  options?: {
+    since?: string;
+    apiUrl?: string;
+    onProgress?: (tableName: string, count: number) => void;
+  },
+): Promise<void> {
   const db = await getDb();
   if (!db) return;
-  const since = await getSyncMeta(db, "last_pull_at") ?? "1970-01-01T00:00:00.000Z";
+  const baseUrl = options?.apiUrl ?? (await getActiveApiUrl());
+  const since =
+    options?.since ??
+    (await getSyncMeta(db, "last_pull_at")) ??
+    "1970-01-01T00:00:00.000Z";
   const res = await fetch(
-    `${API_URL}/api/sync/v2/pull?since=${encodeURIComponent(since)}`,
+    `${baseUrl}/api/sync/v2/pull?since=${encodeURIComponent(since)}`,
     { headers: { Cookie: `connect.sid=${cookie}` } },
   );
   if (!res.ok) throw new Error(`Pull ${res.status}`);
@@ -43,6 +54,9 @@ export async function pullSync(cookie: string): Promise<void> {
     if (!PULL_TABLES.includes(tableName) || !Array.isArray(records)) continue;
     for (const rec of records) {
       await upsertRecord(db, tableName, rec as Record<string, unknown>);
+    }
+    if (options?.onProgress) {
+      options.onProgress(tableName, records.length);
     }
   }
   await setSyncMeta(db, "last_pull_at", new Date().toISOString());
@@ -59,7 +73,8 @@ async function uploadPendingProductImages(db: SQLiteDatabase, cookie: string): P
     try {
       const formData = new FormData();
       formData.append("file", { uri: local_image_uri, type: "image/jpeg", name: "product.jpg" } as any);
-      const res = await fetch(`${API_URL}/api/products/upload-image`, {
+      const uploadUrl = await getActiveApiUrl();
+      const res = await fetch(`${uploadUrl}/api/products/upload-image`, {
         method: "POST",
         headers: { Cookie: `connect.sid=${cookie}` },
         body: formData,
@@ -74,6 +89,8 @@ async function uploadPendingProductImages(db: SQLiteDatabase, cookie: string): P
     } catch {}
   }
 }
+
+
 
 export async function pushSync(cookie: string): Promise<void> {
   const db = await getDb();
@@ -101,7 +118,8 @@ export async function pushSync(cookie: string): Promise<void> {
   }
   if (!Object.keys(tables).length) return;
   const deviceId = await getDeviceId(db);
-  const res = await fetch(`${API_URL}/api/sync/v2/push`, {
+  const pushUrl = await getActiveApiUrl();
+  const res = await fetch(`${pushUrl}/api/sync/v2/push`, {
     method: "POST",
     headers: { "Content-Type": "application/json", Cookie: `connect.sid=${cookie}` },
     body: JSON.stringify({ deviceId, tables }),
@@ -132,7 +150,8 @@ async function preCacheImages(db: SQLiteDatabase, cookie: string): Promise<void>
         const filename = image_url.replace(/[^a-zA-Z0-9._-]/g, "_");
         const localFile = new File(cacheDir, filename);
         if (!localFile.exists) {
-          const fullUrl = image_url.startsWith("http") ? image_url : `${API_URL}${image_url}`;
+          const cacheBase = await getActiveApiUrl();
+          const fullUrl = image_url.startsWith("http") ? image_url : `${cacheBase}${image_url}`;
           await File.downloadFileAsync(fullUrl, localFile, {
             headers: { Cookie: `connect.sid=${cookie}` },
           });
