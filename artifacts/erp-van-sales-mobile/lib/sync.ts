@@ -49,14 +49,42 @@ export async function pullSync(
     { headers: { Cookie: `connect.sid=${cookie}` } },
   );
   if (!res.ok) throw new Error(`Pull ${res.status}`);
-  const { tables } = await res.json();
-  for (const [tableName, records] of Object.entries(tables as Record<string, unknown[]>)) {
+  const payload = await res.json();
+  const tables = payload.tables as Record<string, unknown[]>;
+  // authoritativeTables: tables where the server sent the FULL set (not an incremental delta).
+  // For these tables we prune any local committed row whose sync_id wasn't in the response,
+  // which handles reassignment (e.g. a client moved from this truck to another).
+  const authoritativeTables: string[] = Array.isArray(payload.authoritativeTables)
+    ? payload.authoritativeTables
+    : [];
+
+  for (const [tableName, records] of Object.entries(tables)) {
     if (!PULL_TABLES.includes(tableName) || !Array.isArray(records)) continue;
     for (const rec of records) {
       await upsertRecord(db, tableName, rec as Record<string, unknown>);
     }
     if (options?.onProgress) {
       options.onProgress(tableName, records.length);
+    }
+    // Prune stale local rows for authoritative tables:
+    // Any committed row (pending=0) whose sync_id isn't in the server's complete set
+    // is no longer owned by this session and should be soft-deleted locally.
+    if (authoritativeTables.includes(tableName)) {
+      const receivedIds = records
+        .map((r) => (r as Record<string, unknown>).sync_id as string)
+        .filter(Boolean);
+      if (receivedIds.length > 0) {
+        const placeholders = receivedIds.map(() => "?").join(", ");
+        await db.runAsync(
+          `UPDATE ${tableName} SET is_deleted = 1 WHERE is_deleted = 0 AND _pending = 0 AND sync_id NOT IN (${placeholders})`,
+          receivedIds,
+        );
+      } else {
+        // Server returned an empty authoritative set → soft-delete all committed local rows
+        await db.runAsync(
+          `UPDATE ${tableName} SET is_deleted = 1 WHERE is_deleted = 0 AND _pending = 0`,
+        );
+      }
     }
   }
   await setSyncMeta(db, "last_pull_at", new Date().toISOString());

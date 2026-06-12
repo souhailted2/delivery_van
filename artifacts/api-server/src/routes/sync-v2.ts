@@ -102,12 +102,11 @@ router.get("/sync/v2/pull", requireAuth, async (req, res) => {
       if (name === "truck_stock") {
         rows = await db.select().from(t);
       } else if (name === "clients" && sessionTruckId !== null) {
-        // Truck sessions only receive their own clients (truck_id = this truck)
+        // Truck sessions receive ALL of their own clients (no since-cursor filter).
+        // Sending the complete authoritative set allows the mobile to prune stale
+        // local rows when a client is reassigned to a different truck.
         rows = await db.select().from(t)
-          .where(and(
-            eq(t.truckId, sessionTruckId),
-            or(gt(t.updatedAt, since), isNull(t.updatedAt)),
-          ));
+          .where(eq(t.truckId, sessionTruckId));
       } else {
         rows = await db.select().from(t)
           .where(or(gt(t.updatedAt, since), isNull(t.updatedAt)));
@@ -124,9 +123,15 @@ router.get("/sync/v2/pull", requireAuth, async (req, res) => {
     }
   }
 
+  // Tell the mobile which tables were returned as a complete authoritative set
+  // (vs. incremental delta). Mobile uses this to prune stale local rows.
+  const authoritativeTables: string[] = ["truck_stock"];
+  if (sessionTruckId !== null) authoritativeTables.push("clients");
+
   res.json({
     tables: result,
     cursor: new Date().toISOString(),
+    authoritativeTables,
   });
 });
 
