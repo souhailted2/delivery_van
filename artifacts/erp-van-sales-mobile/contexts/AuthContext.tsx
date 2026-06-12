@@ -2,6 +2,22 @@ import React, { createContext, useCallback, useContext, useEffect, useState } fr
 import { apiFetch, clearSession, clearTruckCredentials, getActiveApiUrl, getSessionSid, getTruckCredentials, saveSession } from "@/lib/api";
 import { getDb, setSyncMeta } from "@/lib/db";
 
+async function readTruckCanSellOnCredit(truckId: number | null | undefined): Promise<boolean> {
+  if (!truckId) return true;
+  try {
+    const db = await getDb();
+    if (!db) return true;
+    const row = await db.getFirstAsync<{ can_sell_on_credit: number }>(
+      "SELECT can_sell_on_credit FROM trucks WHERE id = ? LIMIT 1",
+      [truckId]
+    );
+    if (row == null) return true;
+    return row.can_sell_on_credit !== 0;
+  } catch {
+    return true;
+  }
+}
+
 interface UserInfo {
   id: number;
   username: string;
@@ -9,6 +25,7 @@ interface UserInfo {
   truckId?: number | null;
   branchId?: number | null;
   fullName?: string;
+  truckCanSellOnCredit?: boolean;
 }
 
 interface AuthContextValue {
@@ -58,7 +75,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
             const setCookie = res.headers.get("set-cookie");
             await saveSession(setCookie);
             const data = await res.json();
-            setUser({ id: data.user?.id ?? 0, username: data.user?.username ?? creds.truckName, role: "truck", truckId: data.user?.truckId, branchId: data.user?.branchId, fullName: data.user?.fullName });
+            const truckId = data.user?.truckId;
+            const truckCanSellOnCredit = await readTruckCanSellOnCredit(truckId);
+            setUser({ id: data.user?.id ?? 0, username: data.user?.username ?? creds.truckName, role: "truck", truckId, branchId: data.user?.branchId, fullName: data.user?.fullName, truckCanSellOnCredit });
           }
         }
       } catch {
@@ -94,7 +113,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     const setCookie = res.headers.get("set-cookie");
     await saveSession(setCookie);
     const data = await res.json();
-    setUser({ id: data.user?.id ?? 0, username: data.user?.username ?? truckName, role: "truck", truckId: data.user?.truckId, branchId: data.user?.branchId, fullName: data.user?.fullName });
+    const truckId = data.user?.truckId;
+    const truckCanSellOnCredit = await readTruckCanSellOnCredit(truckId);
+    setUser({ id: data.user?.id ?? 0, username: data.user?.username ?? truckName, role: "truck", truckId, branchId: data.user?.branchId, fullName: data.user?.fullName, truckCanSellOnCredit });
   }, []);
 
   const logout = useCallback(async () => {

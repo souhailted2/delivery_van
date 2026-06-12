@@ -482,7 +482,9 @@ export default function NewInvoiceScreen() {
 
           <Text style={[styles.sectionTitle, { color: colors.foreground }]}>طريقة الدفع</Text>
           <View style={styles.paymentRow}>
-            {(["cash", "credit"] as const).map(pt => (
+            {(["cash", "credit"] as const)
+              .filter(pt => pt === "cash" || (user?.truckCanSellOnCredit !== false))
+              .map(pt => (
               <TouchableOpacity
                 key={pt}
                 style={[

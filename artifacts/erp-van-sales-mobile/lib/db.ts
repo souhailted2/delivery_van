@@ -22,7 +22,7 @@ export interface Client {
 export interface Truck {
   _lid?: number; sync_id: string; id?: number | null; name: string;
   plate_number?: string | null; cash_balance?: number; vendeur_id?: number | null;
-  updated_at?: string; is_deleted?: number; _pending?: number;
+  can_sell_on_credit?: number; updated_at?: string; is_deleted?: number; _pending?: number;
 }
 export interface TruckStock {
   _lid?: number; sync_id: string; id?: number | null;
@@ -127,7 +127,8 @@ const SCHEMA = `
   CREATE TABLE IF NOT EXISTS trucks (
     _lid INTEGER PRIMARY KEY AUTOINCREMENT, sync_id TEXT UNIQUE, id INTEGER,
     name TEXT NOT NULL, plate_number TEXT, cash_balance REAL DEFAULT 0,
-    vendeur_id INTEGER, updated_at TEXT, is_deleted INTEGER DEFAULT 0, _pending INTEGER DEFAULT 0
+    vendeur_id INTEGER, can_sell_on_credit INTEGER DEFAULT 1,
+    updated_at TEXT, is_deleted INTEGER DEFAULT 0, _pending INTEGER DEFAULT 0
   );
   CREATE TABLE IF NOT EXISTS truck_stock (
     _lid INTEGER PRIMARY KEY AUTOINCREMENT, sync_id TEXT UNIQUE, id INTEGER,
@@ -212,6 +213,7 @@ export async function getDb(): Promise<SQLiteDatabase | null> {
     try { await _db.runAsync("ALTER TABLE products ADD COLUMN local_image_uri TEXT"); } catch {}
     try { await _db.runAsync("ALTER TABLE cash_transfers ADD COLUMN status TEXT DEFAULT 'pending'"); } catch {}
     try { await _db.runAsync("CREATE TABLE IF NOT EXISTS branches (_lid INTEGER PRIMARY KEY AUTOINCREMENT, sync_id TEXT UNIQUE, id INTEGER, name TEXT NOT NULL, address TEXT, phone TEXT, updated_at TEXT, is_deleted INTEGER DEFAULT 0, _pending INTEGER DEFAULT 0)"); } catch {}
+    try { await _db.runAsync("ALTER TABLE trucks ADD COLUMN can_sell_on_credit INTEGER DEFAULT 1"); } catch {}
   }
   return _db;
 }
