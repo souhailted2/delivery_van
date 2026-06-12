@@ -13,6 +13,7 @@ function ClassicTabLayout() {
   const isIOS = Platform.OS === "ios";
   const isWeb = Platform.OS === "web";
   const isAdmin = user?.role === "admin";
+  const isTruck = user?.role === "truck";
 
   return (
     <Tabs
@@ -43,13 +44,25 @@ function ClassicTabLayout() {
           ) : null,
       }}
     >
-      {/* ── الرئيسية ── */}
+      {/* ── الرئيسية (لوحة الشاحنة) ── */}
+      <Tabs.Screen
+        name="truck-dashboard"
+        options={{
+          title: "ALLAL Delivery",
+          tabBarLabel: "الرئيسية",
+          tabBarIcon: ({ color }) => <Feather name="home" size={22} color={color} />,
+          href: isTruck ? undefined : null,
+        }}
+      />
+
+      {/* ── الرئيسية (لوحة الأدمن/البائع) ── */}
       <Tabs.Screen
         name="index"
         options={{
           title: "لوحة التحكم",
           tabBarLabel: "الرئيسية",
           tabBarIcon: ({ color }) => <Feather name="home" size={22} color={color} />,
+          href: isTruck ? null : undefined,
         }}
       />
 
@@ -60,6 +73,7 @@ function ClassicTabLayout() {
           title: "المنتجات",
           tabBarLabel: "المنتجات",
           tabBarIcon: ({ color }) => <Feather name="package" size={22} color={color} />,
+          href: isTruck ? null : undefined,
         }}
       />
 
@@ -70,6 +84,7 @@ function ClassicTabLayout() {
           title: "الفئات",
           tabBarLabel: "الفئات",
           tabBarIcon: ({ color }) => <Feather name="tag" size={22} color={color} />,
+          href: isTruck ? null : undefined,
         }}
       />
 
@@ -80,6 +95,7 @@ function ClassicTabLayout() {
           title: "الموردون",
           tabBarLabel: "الموردون",
           tabBarIcon: ({ color }) => <Feather name="briefcase" size={22} color={color} />,
+          href: isTruck ? null : undefined,
         }}
       />
 
@@ -90,6 +106,7 @@ function ClassicTabLayout() {
           title: "أوامر الشراء",
           tabBarLabel: "الشراء",
           tabBarIcon: ({ color }) => <Feather name="shopping-cart" size={22} color={color} />,
+          href: isTruck ? null : undefined,
         }}
       />
 
@@ -100,6 +117,7 @@ function ClassicTabLayout() {
           title: "العملاء",
           tabBarLabel: "العملاء",
           tabBarIcon: ({ color }) => <Feather name="users" size={22} color={color} />,
+          href: isTruck ? null : undefined,
         }}
       />
 
@@ -110,6 +128,7 @@ function ClassicTabLayout() {
           title: "الفواتير",
           tabBarLabel: "الفواتير",
           tabBarIcon: ({ color }) => <Feather name="file-text" size={22} color={color} />,
+          href: isTruck ? null : undefined,
         }}
       />
 
@@ -120,6 +139,7 @@ function ClassicTabLayout() {
           title: "المرتجعات",
           tabBarLabel: "المرتجعات",
           tabBarIcon: ({ color }) => <Feather name="rotate-ccw" size={22} color={color} />,
+          href: isTruck ? null : undefined,
         }}
       />
 
@@ -130,6 +150,7 @@ function ClassicTabLayout() {
           title: "المخزن",
           tabBarLabel: "المخزن",
           tabBarIcon: ({ color }) => <Feather name="archive" size={22} color={color} />,
+          href: isTruck ? null : undefined,
         }}
       />
 
@@ -140,6 +161,7 @@ function ClassicTabLayout() {
           title: "الشاحنات",
           tabBarLabel: "الشاحنات",
           tabBarIcon: ({ color }) => <Feather name="truck" size={22} color={color} />,
+          href: isTruck ? null : undefined,
         }}
       />
 
@@ -150,6 +172,7 @@ function ClassicTabLayout() {
           title: "شاحنتي",
           tabBarLabel: "شاحنتي",
           tabBarIcon: ({ color }) => <Feather name="box" size={22} color={color} />,
+          href: isTruck ? null : undefined,
         }}
       />
 
@@ -160,7 +183,7 @@ function ClassicTabLayout() {
           title: "استلام البضاعة",
           tabBarLabel: "التحميل",
           tabBarIcon: ({ color }) => <Feather name="download" size={22} color={color} />,
-          href: user?.role === "admin" ? null : undefined,
+          href: isAdmin || isTruck ? null : undefined,
         }}
       />
 
@@ -171,6 +194,7 @@ function ClassicTabLayout() {
           title: "الصندوق",
           tabBarLabel: "الصندوق",
           tabBarIcon: ({ color }) => <Feather name="dollar-sign" size={22} color={color} />,
+          href: isTruck ? null : undefined,
         }}
       />
 
@@ -181,6 +205,7 @@ function ClassicTabLayout() {
           title: "التقارير",
           tabBarLabel: "التقارير",
           tabBarIcon: ({ color }) => <Feather name="bar-chart-2" size={22} color={color} />,
+          href: isTruck ? null : undefined,
         }}
       />
 

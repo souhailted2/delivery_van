@@ -1,6 +1,7 @@
 import { Feather } from "@expo/vector-icons";
 import Constants from "expo-constants";
 import * as Linking from "expo-linking";
+import { Redirect } from "expo-router";
 import { useEffect, useState } from "react";
 import {
   ActivityIndicator,
@@ -244,6 +245,10 @@ export default function DashboardScreen() {
   }, [pending]);
 
   const fmt = (n: number) => n.toLocaleString("fr-DZ") + " د.ج";
+
+  if (user?.role === "truck") {
+    return <Redirect href="/(tabs)/truck-dashboard" />;
+  }
 
   if (loading) {
     return (
