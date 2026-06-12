@@ -94,8 +94,13 @@ router.get("/sync/v2/pull", requireAuth, async (req, res) => {
     try {
       const t = table as any;
       if (!t.updatedAt) continue;
-      const rows = await db.select().from(t)
-        .where(or(gt(t.updatedAt, since), isNull(t.updatedAt)));
+      // truck_stock is tiny and must never be missed due to device-clock skew in
+      // the incremental `since` cursor, so always return all of its rows. The
+      // mobile upsert is idempotent, so re-sending every pull is safe and cheap.
+      const rows = name === "truck_stock"
+        ? await db.select().from(t)
+        : await db.select().from(t)
+            .where(or(gt(t.updatedAt, since), isNull(t.updatedAt)));
       // Convert timestamps to ISO strings and snake_case; strip sensitive columns
       const strip = COLUMN_STRIP[name] ?? [];
       result[name] = rows.map((r: any) => {
