@@ -3,6 +3,7 @@ import * as Haptics from "expo-haptics";
 import { router } from "expo-router";
 import { useCallback, useEffect, useState } from "react";
 import { FlatList, Image, RefreshControl, StyleSheet, Text, TouchableOpacity, View } from "react-native";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { SyncBar } from "@/components/SyncBar";
 import { useAuth } from "@/contexts/AuthContext";
 import { useSync } from "@/contexts/SyncContext";
@@ -139,6 +140,7 @@ function StatCard({ label, value, icon, colors }: { label: string; value: string
 
 export default function TruckDashboardScreen() {
   const colors = useColors();
+  const insets = useSafeAreaInsets();
   const { user } = useAuth();
   const { triggerSync } = useSync();
 
@@ -231,8 +233,20 @@ export default function TruckDashboardScreen() {
   const data: any[] = tab === "invoices" ? invoices : tab === "clients" ? clients : stock;
 
   const renderItem = ({ item }: { item: any }) => {
-    if (tab === "invoices") return <InvoiceCard item={item} colors={colors} />;
-    if (tab === "clients") return <ClientCard item={item} colors={colors} />;
+    if (tab === "invoices") {
+      return (
+        <TouchableOpacity activeOpacity={0.7} onPress={() => router.push(`/invoice/${item.sync_id}`)}>
+          <InvoiceCard item={item} colors={colors} />
+        </TouchableOpacity>
+      );
+    }
+    if (tab === "clients") {
+      return (
+        <TouchableOpacity activeOpacity={0.7} onPress={() => router.push(`/client/${item.sync_id}`)}>
+          <ClientCard item={item} colors={colors} />
+        </TouchableOpacity>
+      );
+    }
     return <StockCard item={item} colors={colors} />;
   };
 
@@ -253,10 +267,20 @@ export default function TruckDashboardScreen() {
         </View>
         <Text style={styles.truckName}>{truck?.name ?? "—"}</Text>
         {truck?.plate_number ? <Text style={styles.plate}>{truck.plate_number}</Text> : null}
-        <View style={styles.cashBox}>
-          <Text style={styles.cashLabel}>رصيد الصندوق</Text>
+        <TouchableOpacity
+          style={styles.cashBox}
+          activeOpacity={0.7}
+          onPress={() => router.push("/(tabs)/caisse")}
+        >
+          <View style={{ alignItems: "flex-end" }}>
+            <Text style={styles.cashLabel}>رصيد الصندوق</Text>
+            <View style={styles.cashHint}>
+              <Feather name="chevron-left" size={13} color="#ffffffcc" />
+              <Text style={styles.cashHintText}>إدارة الصندوق والتسليم</Text>
+            </View>
+          </View>
           <Text style={styles.cashVal}>{fmt(truck?.cash_balance ?? 0)}</Text>
-        </View>
+        </TouchableOpacity>
       </View>
 
       <View style={styles.statsRow}>
@@ -305,7 +329,7 @@ export default function TruckDashboardScreen() {
         showsVerticalScrollIndicator={false}
       />
       <TouchableOpacity
-        style={[styles.fab, { backgroundColor: colors.primary }]}
+        style={[styles.fab, { backgroundColor: colors.primary, bottom: insets.bottom + 74 }]}
         onPress={handleNew}
         activeOpacity={0.85}
       >
@@ -338,6 +362,8 @@ const styles = StyleSheet.create({
     marginTop: 10, paddingTop: 12, borderTopWidth: 1, borderTopColor: "#ffffff33",
   },
   cashLabel: { color: "#ffffffcc", fontSize: 13, fontFamily: "Cairo_600SemiBold" },
+  cashHint: { flexDirection: "row-reverse", alignItems: "center", gap: 2, marginTop: 2 },
+  cashHintText: { color: "#ffffffcc", fontSize: 10, fontFamily: "Cairo_400Regular" },
   cashVal: { color: "#fff", fontSize: 22, fontFamily: "Cairo_700Bold" },
 
   statsRow: { flexDirection: "row-reverse", gap: 8, marginBottom: 12 },

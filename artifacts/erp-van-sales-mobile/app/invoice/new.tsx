@@ -1,30 +1,58 @@
 import { Feather } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
 import { router } from "expo-router";
-import { useCallback, useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
-  Alert, FlatList, Modal, ScrollView, StyleSheet, Text,
+  Alert, Dimensions, FlatList, ScrollView, StyleSheet, Text,
   TextInput, TouchableOpacity, View,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { ProductImage } from "@/components/ProductImage";
 import { useAuth } from "@/contexts/AuthContext";
 import { useSync } from "@/contexts/SyncContext";
 import { Client, getDb, Product } from "@/lib/db";
+import { printInvoiceReceipt, ReceiptInvoice } from "@/lib/receipt";
 import { newSyncId } from "@/lib/uuid";
 import { useColors } from "@/hooks/useColors";
+
+type Tier = "retail" | "half_wholesale" | "wholesale";
 
 interface InvoiceItem {
   product: Product;
   quantity: number;
-  priceType: "retail" | "half_wholesale" | "wholesale";
+  priceType: Tier;
   unitPrice: number;
+  overridden?: boolean;
 }
 
-function priceByType(p: Product, t: string): number {
+const TIER_LABEL: Record<Tier, string> = {
+  retail: "تجزئة",
+  half_wholesale: "نصف جملة",
+  wholesale: "جملة",
+};
+const TIER_SHORT: Record<Tier, string> = {
+  retail: "تجزئة",
+  half_wholesale: "نصف",
+  wholesale: "جملة",
+};
+
+function priceByType(p: Product, t: Tier): number {
   if (t === "half_wholesale") return Number(p.selling_price_half_wholesale ?? 0);
   if (t === "wholesale") return Number(p.selling_price_wholesale ?? 0);
   return Number(p.selling_price_retail ?? 0);
 }
+
+function resolveTier(client: Client | null): Tier {
+  const t = client?.client_type;
+  if (t === "half_wholesale" || t === "wholesale") return t;
+  return "retail";
+}
+
+const COLS = 2;
+const H_PAD = 12;
+const GAP = 10;
+const CARD_W = (Dimensions.get("window").width - H_PAD * 2 - GAP * (COLS - 1)) / COLS;
+const IMG_SIZE = CARD_W - 16;
 
 export default function NewInvoiceScreen() {
   const colors = useColors();
@@ -42,7 +70,8 @@ export default function NewInvoiceScreen() {
   const [products, setProducts] = useState<Product[]>([]);
   const [clientSearch, setClientSearch] = useState("");
   const [productSearch, setProductSearch] = useState("");
-  const [showProductPicker, setShowProductPicker] = useState(false);
+
+  const clientTier = resolveTier(selectedClient);
 
   useEffect(() => {
     (async () => {
@@ -56,6 +85,15 @@ export default function NewInvoiceScreen() {
       setProducts(pr);
     })();
   }, []);
+
+  // Re-price cart items to the selected customer's tier (unless manually overridden).
+  useEffect(() => {
+    if (!selectedClient) return;
+    const tier = resolveTier(selectedClient);
+    setItems(prev => prev.map(i =>
+      i.overridden ? i : { ...i, priceType: tier, unitPrice: priceByType(i.product, tier) }
+    ));
+  }, [selectedClient]);
 
   const filteredClients = clients.filter(c =>
     c.name.includes(clientSearch) || (c.phone ?? "").includes(clientSearch)
@@ -71,20 +109,24 @@ export default function NewInvoiceScreen() {
     } else {
       setItems([...items, {
         product, quantity: 1,
-        priceType: "retail",
-        unitPrice: Number(product.selling_price_retail ?? 0),
+        priceType: clientTier,
+        unitPrice: priceByType(product, clientTier),
       }]);
     }
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-    setShowProductPicker(false);
-    setProductSearch("");
   };
 
-  const changePriceType = (index: number, pt: "retail" | "half_wholesale" | "wholesale") => {
-    setItems(items.map((i, idx) => {
-      if (idx !== index) return i;
-      return { ...i, priceType: pt, unitPrice: priceByType(i.product, pt) };
-    }));
+  const setQty = (syncId: string, qty: number) => {
+    if (qty <= 0) { removeItem(syncId); return; }
+    setItems(items.map(i => i.product.sync_id === syncId ? { ...i, quantity: qty } : i));
+  };
+
+  const setTier = (syncId: string, pt: Tier) => {
+    setItems(items.map(i =>
+      i.product.sync_id === syncId
+        ? { ...i, priceType: pt, unitPrice: priceByType(i.product, pt), overridden: true }
+        : i
+    ));
   };
 
   const removeItem = (syncId: string) => {
@@ -92,6 +134,7 @@ export default function NewInvoiceScreen() {
   };
 
   const total = items.reduce((s, i) => s + i.quantity * i.unitPrice, 0);
+  const totalUnits = items.reduce((s, i) => s + i.quantity, 0);
 
   const saveInvoice = async () => {
     if (!selectedClient) return;
@@ -104,10 +147,10 @@ export default function NewInvoiceScreen() {
       const invSyncId = newSyncId();
       const now = new Date().toISOString();
 
-      const truckRow = await db.getFirstAsync<{ id: number }>(
+      const truckRow = await db.getFirstAsync<{ id: number; name: string }>(
         user?.truckId
-          ? "SELECT id FROM trucks WHERE id = ?"
-          : "SELECT id FROM trucks WHERE is_deleted = 0 LIMIT 1",
+          ? "SELECT id, name FROM trucks WHERE id = ?"
+          : "SELECT id, name FROM trucks WHERE is_deleted = 0 LIMIT 1",
         user?.truckId ? [user.truckId] : []
       );
 
@@ -137,14 +180,113 @@ export default function NewInvoiceScreen() {
         }
       }
 
+      const receipt: ReceiptInvoice = {
+        invoiceNumber: `MOB-${invSyncId.slice(-6).toUpperCase()}`,
+        createdAt: now,
+        clientName: selectedClient.name,
+        truckName: truckRow?.name ?? "—",
+        paymentType,
+        totalAmount: total,
+        items: items.map(i => ({
+          productName: i.product.name,
+          priceType: i.priceType,
+          quantity: i.quantity,
+          unitPrice: i.unitPrice,
+          subtotal: i.quantity * i.unitPrice,
+        })),
+      };
+
       await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
       triggerSync();
-      Alert.alert("تم", "تم حفظ الفاتورة بنجاح", [{ text: "موافق", onPress: () => router.back() }]);
+      Alert.alert("تم", "تم حفظ الفاتورة بنجاح", [
+        {
+          text: "طباعة الإيصال",
+          onPress: async () => {
+            try { await printInvoiceReceipt(receipt); }
+            catch (e: any) { Alert.alert("خطأ", e?.message ?? "تعذّرت الطباعة"); }
+            finally { router.back(); }
+          },
+        },
+        { text: "إغلاق", style: "cancel", onPress: () => router.back() },
+      ]);
     } catch (e: any) {
       Alert.alert("خطأ", e?.message ?? "فشل حفظ الفاتورة");
     } finally {
       setSaving(false);
     }
+  };
+
+  const cartMap = useMemo(() => {
+    const m = new Map<string, InvoiceItem>();
+    for (const i of items) m.set(i.product.sync_id, i);
+    return m;
+  }, [items]);
+
+  const renderProduct = ({ item: product }: { item: Product }) => {
+    const cartItem = cartMap.get(product.sync_id);
+    const inCart = !!cartItem;
+    const tier = cartItem?.priceType ?? clientTier;
+    const price = cartItem?.unitPrice ?? priceByType(product, clientTier);
+    return (
+      <View style={[styles.catCard, { width: CARD_W, backgroundColor: colors.card, borderColor: inCart ? colors.primary : colors.border }]}>
+        <ProductImage
+          imageUrl={product.image_url}
+          localUri={product.local_image_uri}
+          size={IMG_SIZE}
+          radius={12}
+          colors={colors}
+        />
+        <Text style={[styles.catName, { color: colors.foreground }]} numberOfLines={2}>{product.name}</Text>
+        <View style={styles.catPriceRow}>
+          <View style={[styles.tierBadge, { backgroundColor: colors.secondary }]}>
+            <Text style={[styles.tierBadgeText, { color: colors.mutedForeground }]}>{TIER_LABEL[tier]}</Text>
+          </View>
+          <Text style={[styles.catPrice, { color: colors.primary }]}>{price.toLocaleString("fr-DZ")} د.ج</Text>
+        </View>
+
+        {!inCart ? (
+          <TouchableOpacity
+            style={[styles.addBtn, { backgroundColor: colors.primary }]}
+            onPress={() => addProduct(product)}
+            activeOpacity={0.85}
+          >
+            <Feather name="plus" size={16} color="#fff" />
+            <Text style={styles.addBtnText}>إضافة</Text>
+          </TouchableOpacity>
+        ) : (
+          <View style={{ gap: 6, width: "100%" }}>
+            <View style={[styles.qtyRow, { borderColor: colors.border }]}>
+              <TouchableOpacity onPress={() => setQty(product.sync_id, cartItem!.quantity - 1)} hitSlop={8}>
+                <Feather name="minus-circle" size={24} color={colors.destructive} />
+              </TouchableOpacity>
+              <Text style={[styles.qtyVal, { color: colors.foreground }]}>{cartItem!.quantity}</Text>
+              <TouchableOpacity onPress={() => setQty(product.sync_id, cartItem!.quantity + 1)} hitSlop={8}>
+                <Feather name="plus-circle" size={24} color={colors.primary} />
+              </TouchableOpacity>
+            </View>
+            <View style={styles.tierChips}>
+              {(["retail", "half_wholesale", "wholesale"] as Tier[]).map(pt => {
+                const active = cartItem!.priceType === pt;
+                return (
+                  <TouchableOpacity
+                    key={pt}
+                    style={[styles.tierChip, {
+                      backgroundColor: active ? colors.primary : colors.secondary,
+                      borderColor: active ? colors.primary : colors.border,
+                    }]}
+                    onPress={() => setTier(product.sync_id, pt)}
+                  >
+                    <Text style={[styles.tierChipText, { color: active ? "#fff" : colors.mutedForeground }]}>
+                      {TIER_SHORT[pt]}
+                    </Text>
+                  </TouchableOpacity>
+                );
+              })}
+            </View>
+          </View>
+        )}
+      </View>
+    );
   };
 
   return (
@@ -206,7 +348,9 @@ export default function NewInvoiceScreen() {
                 <Feather name="check" size={16} color={selectedClient?.sync_id === item.sync_id ? colors.primary : "transparent"} />
                 <View style={{ flex: 1, alignItems: "flex-end" }}>
                   <Text style={[styles.clientName, { color: colors.foreground }]}>{item.name}</Text>
-                  {item.phone && <Text style={[styles.clientPhone, { color: colors.mutedForeground }]}>{item.phone}</Text>}
+                  <Text style={[styles.clientPhone, { color: colors.mutedForeground }]}>
+                    {TIER_LABEL[resolveTier(item)]}{item.phone ? ` • ${item.phone}` : ""}
+                  </Text>
                 </View>
               </TouchableOpacity>
             )}
@@ -217,62 +361,42 @@ export default function NewInvoiceScreen() {
 
       {step === "products" && (
         <View style={{ flex: 1 }}>
-          <TouchableOpacity
-            style={[styles.addProductBtn, { borderColor: colors.primary }]}
-            onPress={() => setShowProductPicker(true)}
-          >
-            <Feather name="plus-circle" size={18} color={colors.primary} />
-            <Text style={[styles.addProductText, { color: colors.primary }]}>إضافة منتج</Text>
-          </TouchableOpacity>
+          <View style={[styles.clientPill, { backgroundColor: colors.primary + "12", borderColor: colors.primary + "33" }]}>
+            <View style={[styles.tierBadge, { backgroundColor: colors.primary }]}>
+              <Text style={[styles.tierBadgeText, { color: "#fff" }]}>{TIER_LABEL[clientTier]}</Text>
+            </View>
+            <Text style={[styles.clientPillText, { color: colors.foreground }]} numberOfLines={1}>
+              {selectedClient?.name} — الأسعار حسب فئة العميل
+            </Text>
+          </View>
+          <View style={[styles.searchBar, { backgroundColor: colors.card, borderColor: colors.border }]}>
+            <Feather name="search" size={16} color={colors.mutedForeground} />
+            <TextInput
+              style={[styles.searchInput, { color: colors.foreground }]}
+              placeholder="ابحث عن منتج..."
+              placeholderTextColor={colors.mutedForeground}
+              value={productSearch}
+              onChangeText={setProductSearch}
+              textAlign="right"
+            />
+          </View>
           <FlatList
-            data={items}
-            keyExtractor={i => i.product.sync_id}
-            renderItem={({ item, index }) => (
-              <View style={[styles.itemRow, { backgroundColor: colors.card, borderColor: colors.border }]}>
-                <TouchableOpacity onPress={() => removeItem(item.product.sync_id)}>
-                  <Feather name="trash-2" size={16} color={colors.destructive} />
-                </TouchableOpacity>
-                <View style={styles.itemQtyRow}>
-                  <TouchableOpacity onPress={() => {
-                    if (item.quantity > 1) setItems(items.map((i, idx) => idx === index ? { ...i, quantity: i.quantity - 1 } : i));
-                    else removeItem(item.product.sync_id);
-                  }}>
-                    <Feather name="minus-circle" size={20} color={colors.mutedForeground} />
-                  </TouchableOpacity>
-                  <Text style={[styles.qty, { color: colors.foreground }]}>{item.quantity}</Text>
-                  <TouchableOpacity onPress={() => setItems(items.map((i, idx) => idx === index ? { ...i, quantity: i.quantity + 1 } : i))}>
-                    <Feather name="plus-circle" size={20} color={colors.primary} />
-                  </TouchableOpacity>
-                </View>
-                <View style={{ flex: 1, alignItems: "flex-end", gap: 6 }}>
-                  <Text style={[styles.itemName, { color: colors.foreground }]}>{item.product.name}</Text>
-                  <Text style={[styles.itemPrice, { color: colors.mutedForeground }]}>
-                    {item.unitPrice.toLocaleString("fr-DZ")} × {item.quantity}
-                  </Text>
-                  <View style={styles.priceTierRow}>
-                    {(["retail", "half_wholesale", "wholesale"] as const).map(pt => (
-                      <TouchableOpacity
-                        key={pt}
-                        style={[
-                          styles.tierBtn,
-                          { backgroundColor: item.priceType === pt ? colors.primary : colors.secondary,
-                            borderColor: item.priceType === pt ? colors.primary : colors.border }
-                        ]}
-                        onPress={() => changePriceType(index, pt)}
-                      >
-                        <Text style={[styles.tierText, { color: item.priceType === pt ? "#fff" : colors.mutedForeground }]}>
-                          {pt === "retail" ? "تجزئة" : pt === "half_wholesale" ? "نصف" : "جملة"}
-                        </Text>
-                      </TouchableOpacity>
-                    ))}
-                  </View>
-                </View>
+            data={filteredProducts}
+            keyExtractor={i => i.sync_id}
+            renderItem={renderProduct}
+            numColumns={COLS}
+            columnWrapperStyle={{ gap: GAP, paddingHorizontal: H_PAD }}
+            contentContainerStyle={{ paddingVertical: 12, gap: GAP, paddingBottom: 110 }}
+            ListEmptyComponent={
+              <View style={styles.empty}>
+                <Feather name="package" size={40} color={colors.muted} />
+                <Text style={[styles.emptyText, { color: colors.mutedForeground }]}>لا توجد منتجات</Text>
               </View>
-            )}
-            contentContainerStyle={{ padding: 12, gap: 6 }}
+            }
+            showsVerticalScrollIndicator={false}
           />
           {items.length > 0 && (
-            <View style={[styles.totalBar, { backgroundColor: colors.card, borderTopColor: colors.border }]}>
+            <View style={[styles.cartBar, { backgroundColor: colors.card, borderTopColor: colors.border, paddingBottom: insets.bottom + 12 }]}>
               <TouchableOpacity
                 style={[styles.nextBtn, { backgroundColor: colors.primary }]}
                 onPress={() => setStep("payment")}
@@ -280,62 +404,31 @@ export default function NewInvoiceScreen() {
                 <Text style={styles.nextBtnText}>التالي</Text>
                 <Feather name="arrow-left" size={18} color="#fff" />
               </TouchableOpacity>
-              <Text style={[styles.totalText, { color: colors.foreground }]}>
-                المجموع: {total.toLocaleString("fr-DZ")} د.ج
-              </Text>
+              <View style={{ alignItems: "flex-end" }}>
+                <Text style={[styles.totalText, { color: colors.foreground }]}>{total.toLocaleString("fr-DZ")} د.ج</Text>
+                <Text style={[styles.cartSub, { color: colors.mutedForeground }]}>{items.length} صنف • {totalUnits} وحدة</Text>
+              </View>
             </View>
           )}
-
-          <Modal visible={showProductPicker} animationType="slide" presentationStyle="pageSheet">
-            <View style={[styles.modal, { backgroundColor: colors.background }]}>
-              <View style={[styles.modalHeader, { borderBottomColor: colors.border }]}>
-                <TouchableOpacity onPress={() => { setShowProductPicker(false); setProductSearch(""); }}>
-                  <Feather name="x" size={22} color={colors.foreground} />
-                </TouchableOpacity>
-                <Text style={[styles.modalTitle, { color: colors.foreground }]}>اختر منتجاً</Text>
-                <View style={{ width: 22 }} />
-              </View>
-              <View style={[styles.searchBar, { backgroundColor: colors.card, borderColor: colors.border, margin: 12 }]}>
-                <Feather name="search" size={16} color={colors.mutedForeground} />
-                <TextInput
-                  style={[styles.searchInput, { color: colors.foreground }]}
-                  placeholder="ابحث..."
-                  placeholderTextColor={colors.mutedForeground}
-                  value={productSearch}
-                  onChangeText={setProductSearch}
-                  textAlign="right"
-                  autoFocus
-                />
-              </View>
-              <FlatList
-                data={filteredProducts}
-                keyExtractor={i => i.sync_id}
-                renderItem={({ item }) => (
-                  <TouchableOpacity
-                    style={[styles.productRow, { backgroundColor: colors.card, borderColor: colors.border }]}
-                    onPress={() => addProduct(item)}
-                  >
-                    <Text style={[styles.productPrice, { color: colors.primary }]}>
-                      {Number(item.selling_price_retail ?? 0).toLocaleString("fr-DZ")} د.ج
-                    </Text>
-                    <Text style={[styles.itemName, { color: colors.foreground }]}>{item.name}</Text>
-                  </TouchableOpacity>
-                )}
-                contentContainerStyle={{ padding: 12, gap: 6 }}
-              />
-            </View>
-          </Modal>
         </View>
       )}
 
       {step === "payment" && (
-        <ScrollView contentContainerStyle={{ padding: 16, gap: 16 }}>
+        <ScrollView contentContainerStyle={{ padding: 16, gap: 16, paddingBottom: insets.bottom + 24 }}>
           <View style={[styles.summaryCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
             <Text style={[styles.summaryLabel, { color: colors.mutedForeground }]}>العميل</Text>
-            <Text style={[styles.summaryVal, { color: colors.foreground }]}>{selectedClient?.name}</Text>
+            <Text style={[styles.summaryVal, { color: colors.foreground }]}>{selectedClient?.name} ({TIER_LABEL[clientTier]})</Text>
             <View style={[styles.divider, { backgroundColor: colors.border }]} />
-            <Text style={[styles.summaryLabel, { color: colors.mutedForeground }]}>المنتجات</Text>
-            <Text style={[styles.summaryVal, { color: colors.foreground }]}>{items.length} صنف</Text>
+            {items.map(i => (
+              <View key={i.product.sync_id} style={styles.lineRow}>
+                <Text style={[styles.lineAmount, { color: colors.foreground }]}>
+                  {(i.quantity * i.unitPrice).toLocaleString("fr-DZ")}
+                </Text>
+                <Text style={[styles.lineName, { color: colors.mutedForeground }]} numberOfLines={1}>
+                  {i.product.name} ({i.quantity} × {i.unitPrice.toLocaleString("fr-DZ")})
+                </Text>
+              </View>
+            ))}
             <View style={[styles.divider, { backgroundColor: colors.border }]} />
             <Text style={[styles.summaryLabel, { color: colors.mutedForeground }]}>الإجمالي</Text>
             <Text style={[styles.summaryTotal, { color: colors.primary }]}>{total.toLocaleString("fr-DZ")} د.ج</Text>
@@ -408,45 +501,56 @@ const styles = StyleSheet.create({
   },
   clientName: { fontSize: 15, fontFamily: "Cairo_600SemiBold" },
   clientPhone: { fontSize: 12, fontFamily: "Cairo_400Regular" },
-  addProductBtn: {
+
+  clientPill: {
     flexDirection: "row-reverse", alignItems: "center", gap: 8,
-    margin: 12, padding: 12, borderRadius: 12, borderWidth: 1.5, borderStyle: "dashed",
-    justifyContent: "center",
+    marginHorizontal: 12, marginTop: 10, paddingHorizontal: 12, paddingVertical: 8,
+    borderRadius: 12, borderWidth: 1,
   },
-  addProductText: { fontSize: 15, fontFamily: "Cairo_600SemiBold" },
-  itemRow: {
-    flexDirection: "row-reverse", alignItems: "center", gap: 10,
-    padding: 12, borderRadius: 12, borderWidth: 1,
+  clientPillText: { flex: 1, fontSize: 13, fontFamily: "Cairo_600SemiBold", textAlign: "right" },
+
+  catCard: {
+    borderRadius: 14, borderWidth: 1.5, padding: 8, gap: 6, alignItems: "center",
   },
-  itemQtyRow: { flexDirection: "row", alignItems: "center", gap: 8 },
-  qty: { fontSize: 16, fontFamily: "Cairo_700Bold", minWidth: 28, textAlign: "center" },
-  itemName: { fontSize: 14, fontFamily: "Cairo_600SemiBold" },
-  itemPrice: { fontSize: 12, fontFamily: "Cairo_400Regular" },
-  priceTierRow: { flexDirection: "row-reverse", gap: 4 },
-  tierBtn: { paddingHorizontal: 8, paddingVertical: 3, borderRadius: 6, borderWidth: 1 },
-  tierText: { fontSize: 10, fontFamily: "Cairo_600SemiBold" },
-  totalBar: {
+  catName: { fontSize: 13, fontFamily: "Cairo_600SemiBold", textAlign: "center", minHeight: 36 },
+  catPriceRow: { flexDirection: "row-reverse", alignItems: "center", gap: 6, flexWrap: "wrap", justifyContent: "center" },
+  catPrice: { fontSize: 14, fontFamily: "Cairo_700Bold" },
+  tierBadge: { paddingHorizontal: 7, paddingVertical: 2, borderRadius: 6 },
+  tierBadgeText: { fontSize: 10, fontFamily: "Cairo_600SemiBold" },
+  addBtn: {
+    flexDirection: "row-reverse", alignItems: "center", justifyContent: "center", gap: 6,
+    width: "100%", paddingVertical: 9, borderRadius: 10,
+  },
+  addBtnText: { color: "#fff", fontSize: 14, fontFamily: "Cairo_700Bold" },
+  qtyRow: {
     flexDirection: "row-reverse", alignItems: "center", justifyContent: "space-between",
-    padding: 16, borderTopWidth: 1,
+    borderWidth: 1, borderRadius: 10, paddingHorizontal: 12, paddingVertical: 5,
   },
-  totalText: { fontSize: 15, fontFamily: "Cairo_700Bold" },
-  nextBtn: { flexDirection: "row-reverse", alignItems: "center", gap: 6, paddingHorizontal: 16, paddingVertical: 10, borderRadius: 12 },
-  nextBtnText: { color: "#fff", fontSize: 14, fontFamily: "Cairo_700Bold" },
-  modal: { flex: 1 },
-  modalHeader: {
+  qtyVal: { fontSize: 17, fontFamily: "Cairo_700Bold", minWidth: 28, textAlign: "center" },
+  tierChips: { flexDirection: "row-reverse", gap: 4, justifyContent: "space-between" },
+  tierChip: { flex: 1, alignItems: "center", paddingVertical: 4, borderRadius: 7, borderWidth: 1 },
+  tierChipText: { fontSize: 10, fontFamily: "Cairo_600SemiBold" },
+
+  cartBar: {
+    position: "absolute", left: 0, right: 0, bottom: 0,
     flexDirection: "row-reverse", alignItems: "center", justifyContent: "space-between",
-    padding: 16, borderBottomWidth: 1,
+    paddingHorizontal: 16, paddingTop: 12, borderTopWidth: 1,
   },
-  modalTitle: { fontSize: 16, fontFamily: "Cairo_700Bold" },
-  productRow: {
-    flexDirection: "row-reverse", alignItems: "center", justifyContent: "space-between",
-    padding: 14, borderRadius: 12, borderWidth: 1,
-  },
-  productPrice: { fontSize: 14, fontFamily: "Cairo_700Bold" },
+  totalText: { fontSize: 17, fontFamily: "Cairo_700Bold" },
+  cartSub: { fontSize: 11, fontFamily: "Cairo_400Regular" },
+  nextBtn: { flexDirection: "row-reverse", alignItems: "center", gap: 6, paddingHorizontal: 20, paddingVertical: 12, borderRadius: 12 },
+  nextBtnText: { color: "#fff", fontSize: 15, fontFamily: "Cairo_700Bold" },
+
+  empty: { alignItems: "center", paddingVertical: 60, gap: 12 },
+  emptyText: { fontSize: 14, fontFamily: "Cairo_400Regular" },
+
   summaryCard: { borderRadius: 14, borderWidth: 1, padding: 16, gap: 8 },
   summaryLabel: { fontSize: 12, fontFamily: "Cairo_400Regular" },
   summaryVal: { fontSize: 15, fontFamily: "Cairo_600SemiBold", textAlign: "right" },
   summaryTotal: { fontSize: 20, fontFamily: "Cairo_700Bold", textAlign: "right" },
+  lineRow: { flexDirection: "row-reverse", alignItems: "center", justifyContent: "space-between", gap: 8 },
+  lineName: { flex: 1, fontSize: 12, fontFamily: "Cairo_400Regular", textAlign: "right" },
+  lineAmount: { fontSize: 13, fontFamily: "Cairo_600SemiBold" },
   divider: { height: 1 },
   sectionTitle: { fontSize: 15, fontFamily: "Cairo_700Bold", textAlign: "right" },
   paymentRow: { flexDirection: "row-reverse", gap: 10 },

@@ -5,6 +5,7 @@ import {
   TextInput, TouchableOpacity, View,
 } from "react-native";
 import { SyncBar } from "@/components/SyncBar";
+import { useAuth } from "@/contexts/AuthContext";
 import { useSync } from "@/contexts/SyncContext";
 import { CashTransfer, getDb } from "@/lib/db";
 import { newSyncId } from "@/lib/uuid";
@@ -15,6 +16,8 @@ interface TruckRow { id: number; name: string; cash_balance: number; }
 
 export default function CaisseScreen() {
   const colors = useColors();
+  const { user } = useAuth();
+  const isTruck = user?.role === "truck";
   const { triggerSync } = useSync();
   const [transfers, setTransfers] = useState<CashRow[]>([]);
   const [trucks, setTrucks] = useState<TruckRow[]>([]);
@@ -32,16 +35,21 @@ export default function CaisseScreen() {
     const rows = await db.getAllAsync<CashRow>(
       `SELECT ct.*, t.name as truck_name FROM cash_transfers ct
        LEFT JOIN trucks t ON ct.truck_id = t.id
-       WHERE ct.is_deleted = 0 ORDER BY ct.created_at DESC LIMIT 200`
+       WHERE ct.is_deleted = 0 ${isTruck && user?.truckId ? "AND ct.truck_id = ?" : ""}
+       ORDER BY ct.created_at DESC LIMIT 200`,
+      isTruck && user?.truckId ? [user.truckId] : []
     );
     setTransfers(rows);
     const truckRows = await db.getAllAsync<TruckRow>(
-      "SELECT id, name, cash_balance FROM trucks WHERE is_deleted = 0 ORDER BY name"
+      `SELECT id, name, cash_balance FROM trucks WHERE is_deleted = 0 ${isTruck && user?.truckId ? "AND id = ?" : ""} ORDER BY name`,
+      isTruck && user?.truckId ? [user.truckId] : []
     );
     setTrucks(truckRows);
-  }, []);
+  }, [isTruck, user?.truckId]);
 
   useEffect(() => { load(); }, [load]);
+
+  const myTruck = isTruck ? trucks.find(t => t.id === user?.truckId) ?? trucks[0] : undefined;
 
   const onRefresh = async () => {
     setRefreshing(true);
@@ -51,12 +59,14 @@ export default function CaisseScreen() {
   };
 
   const openModal = () => {
-    setFormTruckId(""); setFormAmount(""); setFormDirection("in"); setFormNote("");
+    setFormTruckId(isTruck && user?.truckId ? String(user.truckId) : "");
+    setFormAmount(""); setFormDirection("in"); setFormNote("");
     setShowModal(true);
   };
 
   const handleSave = async () => {
-    if (!formTruckId) { Alert.alert("تنبيه", "اختر الشاحنة"); return; }
+    const truckId = isTruck && user?.truckId ? String(user.truckId) : formTruckId;
+    if (!truckId) { Alert.alert("تنبيه", "اختر الشاحنة"); return; }
     const amount = parseFloat(formAmount);
     if (!amount || amount <= 0) { Alert.alert("تنبيه", "أدخل مبلغاً صحيحاً"); return; }
     setSaving(true);
@@ -64,16 +74,18 @@ export default function CaisseScreen() {
       const db = await getDb();
       if (!db) return;
       const now = new Date().toISOString();
+      // For truck users the only movement is delivering cash to management ("in").
+      const direction = isTruck ? "in" : formDirection;
       await db.runAsync(
         `INSERT INTO cash_transfers (sync_id, truck_id, amount, direction, note, created_at, updated_at, is_deleted, _pending)
          VALUES (?, ?, ?, ?, ?, ?, ?, 0, 1)`,
-        [newSyncId(), Number(formTruckId), amount, formDirection, formNote.trim() || null, now, now]
+        [newSyncId(), Number(truckId), amount, direction, formNote.trim() || null, now, now]
       );
-      // تحديث رصيد الشاحنة محلياً: تحصيل = يُنقص من الشاحنة, صرف = يزيد للشاحنة
-      const delta = formDirection === "in" ? -amount : amount;
+      // تحديث رصيد الشاحنة محلياً: تحصيل/تسليم = يُنقص من الشاحنة, صرف = يزيد للشاحنة
+      const delta = direction === "in" ? -amount : amount;
       await db.runAsync(
         "UPDATE trucks SET cash_balance = cash_balance + ?, updated_at = ?, _pending = 1 WHERE id = ?",
-        [delta, now, Number(formTruckId)]
+        [delta, now, Number(truckId)]
       );
       setShowModal(false);
       triggerSync();
@@ -94,23 +106,39 @@ export default function CaisseScreen() {
       <SyncBar />
 
       <View style={[styles.summary, { backgroundColor: colors.primary }]}>
-        <View style={styles.summaryItem}>
-          <Text style={styles.summaryVal}>{fmt(totalIn)}</Text>
-          <Text style={styles.summaryLabel}>إجمالي التحصيل</Text>
-        </View>
-        <View style={styles.summaryDivider} />
-        <View style={styles.summaryItem}>
-          <Text style={styles.summaryVal}>{fmt(totalOut)}</Text>
-          <Text style={styles.summaryLabel}>إجمالي الصرف</Text>
-        </View>
+        {isTruck ? (
+          <>
+            <View style={styles.summaryItem}>
+              <Text style={styles.summaryVal}>{fmt(Number(myTruck?.cash_balance ?? 0))}</Text>
+              <Text style={styles.summaryLabel}>رصيد الصندوق الحالي</Text>
+            </View>
+            <View style={styles.summaryDivider} />
+            <View style={styles.summaryItem}>
+              <Text style={styles.summaryVal}>{fmt(totalIn)}</Text>
+              <Text style={styles.summaryLabel}>إجمالي ما سُلّم</Text>
+            </View>
+          </>
+        ) : (
+          <>
+            <View style={styles.summaryItem}>
+              <Text style={styles.summaryVal}>{fmt(totalIn)}</Text>
+              <Text style={styles.summaryLabel}>إجمالي التحصيل</Text>
+            </View>
+            <View style={styles.summaryDivider} />
+            <View style={styles.summaryItem}>
+              <Text style={styles.summaryVal}>{fmt(totalOut)}</Text>
+              <Text style={styles.summaryLabel}>إجمالي الصرف</Text>
+            </View>
+          </>
+        )}
       </View>
 
       <View style={[styles.topBar, { borderBottomColor: colors.border }]}>
         <TouchableOpacity style={[styles.addBtn, { backgroundColor: colors.primary }]} onPress={openModal}>
-          <Feather name="plus" size={16} color="#fff" />
-          <Text style={styles.addBtnText}>حركة جديدة</Text>
+          <Feather name={isTruck ? "send" : "plus"} size={16} color="#fff" />
+          <Text style={styles.addBtnText}>{isTruck ? "تسليم دفعة" : "حركة جديدة"}</Text>
         </TouchableOpacity>
-        <Text style={[styles.pageTitle, { color: colors.foreground }]}>الصندوق</Text>
+        <Text style={[styles.pageTitle, { color: colors.foreground }]}>{isTruck ? "صندوقي" : "الصندوق"}</Text>
       </View>
 
       <FlatList
@@ -156,7 +184,7 @@ export default function CaisseScreen() {
               <TouchableOpacity onPress={() => setShowModal(false)}>
                 <Feather name="x" size={22} color={colors.foreground} />
               </TouchableOpacity>
-              <Text style={[styles.sheetTitle, { color: colors.foreground }]}>حركة جديدة</Text>
+              <Text style={[styles.sheetTitle, { color: colors.foreground }]}>{isTruck ? "تسليم دفعة للإدارة" : "حركة جديدة"}</Text>
               <TouchableOpacity
                 style={[styles.saveBtn, { backgroundColor: saving ? colors.muted : colors.primary }]}
                 onPress={handleSave} disabled={saving}
@@ -165,40 +193,51 @@ export default function CaisseScreen() {
               </TouchableOpacity>
             </View>
             <ScrollView style={{ padding: 16 }} keyboardShouldPersistTaps="handled">
-              <Text style={[styles.fieldLabel, { color: colors.mutedForeground }]}>الشاحنة</Text>
-              <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.chips}>
-                {trucks.map(t => (
-                  <TouchableOpacity
-                    key={t.id}
-                    style={[styles.chip, {
-                      backgroundColor: formTruckId === String(t.id) ? colors.primary : colors.card,
-                      borderColor: formTruckId === String(t.id) ? colors.primary : colors.border,
-                    }]}
-                    onPress={() => setFormTruckId(String(t.id))}
-                  >
-                    <Text style={[styles.chipText, { color: formTruckId === String(t.id) ? "#fff" : colors.foreground }]}>
-                      {t.name}
-                    </Text>
-                  </TouchableOpacity>
-                ))}
-              </ScrollView>
-              <Text style={[styles.fieldLabel, { color: colors.mutedForeground, marginTop: 14 }]}>نوع الحركة</Text>
-              <View style={styles.directionRow}>
-                <TouchableOpacity
-                  style={[styles.dirBtn, { backgroundColor: formDirection === "in" ? "#22c55e" : colors.card, borderColor: colors.border }]}
-                  onPress={() => setFormDirection("in")}
-                >
-                  <Feather name="arrow-down-circle" size={16} color={formDirection === "in" ? "#fff" : colors.foreground} />
-                  <Text style={[styles.dirBtnText, { color: formDirection === "in" ? "#fff" : colors.foreground }]}>تحصيل من شاحنة</Text>
-                </TouchableOpacity>
-                <TouchableOpacity
-                  style={[styles.dirBtn, { backgroundColor: formDirection === "out" ? colors.destructive : colors.card, borderColor: colors.border }]}
-                  onPress={() => setFormDirection("out")}
-                >
-                  <Feather name="arrow-up-circle" size={16} color={formDirection === "out" ? "#fff" : colors.foreground} />
-                  <Text style={[styles.dirBtnText, { color: formDirection === "out" ? "#fff" : colors.foreground }]}>صرف للشاحنة</Text>
-                </TouchableOpacity>
-              </View>
+              {isTruck ? (
+                <View style={[styles.truckNote, { backgroundColor: colors.primary + "12", borderColor: colors.primary + "33" }]}>
+                  <Feather name="truck" size={16} color={colors.primary} />
+                  <Text style={[styles.truckNoteText, { color: colors.foreground }]}>
+                    {myTruck?.name ?? "شاحنتي"} — تسليم مبلغ نقدي للإدارة (يُخصم من رصيد صندوقك)
+                  </Text>
+                </View>
+              ) : (
+                <>
+                  <Text style={[styles.fieldLabel, { color: colors.mutedForeground }]}>الشاحنة</Text>
+                  <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.chips}>
+                    {trucks.map(t => (
+                      <TouchableOpacity
+                        key={t.id}
+                        style={[styles.chip, {
+                          backgroundColor: formTruckId === String(t.id) ? colors.primary : colors.card,
+                          borderColor: formTruckId === String(t.id) ? colors.primary : colors.border,
+                        }]}
+                        onPress={() => setFormTruckId(String(t.id))}
+                      >
+                        <Text style={[styles.chipText, { color: formTruckId === String(t.id) ? "#fff" : colors.foreground }]}>
+                          {t.name}
+                        </Text>
+                      </TouchableOpacity>
+                    ))}
+                  </ScrollView>
+                  <Text style={[styles.fieldLabel, { color: colors.mutedForeground, marginTop: 14 }]}>نوع الحركة</Text>
+                  <View style={styles.directionRow}>
+                    <TouchableOpacity
+                      style={[styles.dirBtn, { backgroundColor: formDirection === "in" ? "#22c55e" : colors.card, borderColor: colors.border }]}
+                      onPress={() => setFormDirection("in")}
+                    >
+                      <Feather name="arrow-down-circle" size={16} color={formDirection === "in" ? "#fff" : colors.foreground} />
+                      <Text style={[styles.dirBtnText, { color: formDirection === "in" ? "#fff" : colors.foreground }]}>تحصيل من شاحنة</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                      style={[styles.dirBtn, { backgroundColor: formDirection === "out" ? colors.destructive : colors.card, borderColor: colors.border }]}
+                      onPress={() => setFormDirection("out")}
+                    >
+                      <Feather name="arrow-up-circle" size={16} color={formDirection === "out" ? "#fff" : colors.foreground} />
+                      <Text style={[styles.dirBtnText, { color: formDirection === "out" ? "#fff" : colors.foreground }]}>صرف للشاحنة</Text>
+                    </TouchableOpacity>
+                  </View>
+                </>
+              )}
               <Text style={[styles.fieldLabel, { color: colors.mutedForeground, marginTop: 14 }]}>المبلغ (د.ج) *</Text>
               <TextInput
                 style={[styles.input, { backgroundColor: colors.card, borderColor: colors.border, color: colors.foreground }]}
@@ -249,6 +288,8 @@ const styles = StyleSheet.create({
   sheetTitle: { fontSize: 17, fontFamily: "Cairo_600SemiBold" },
   saveBtn: { paddingHorizontal: 18, paddingVertical: 7, borderRadius: 10 },
   saveBtnText: { color: "#fff", fontSize: 14, fontFamily: "Cairo_600SemiBold" },
+  truckNote: { flexDirection: "row-reverse", alignItems: "center", gap: 8, padding: 12, borderRadius: 12, borderWidth: 1, marginBottom: 4 },
+  truckNoteText: { flex: 1, fontSize: 13, fontFamily: "Cairo_600SemiBold", textAlign: "right" },
   fieldLabel: { fontSize: 12, fontFamily: "Cairo_400Regular", marginBottom: 8, textAlign: "right" },
   chips: { flexDirection: "row-reverse", gap: 8, paddingVertical: 4, marginBottom: 4 },
   chip: { paddingHorizontal: 14, paddingVertical: 8, borderRadius: 20, borderWidth: 1 },

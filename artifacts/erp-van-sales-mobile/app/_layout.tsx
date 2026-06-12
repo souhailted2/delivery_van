@@ -64,6 +64,8 @@ function RootLayoutNav() {
       <Stack.Screen name="(tabs)" redirect={!user} />
       <Stack.Screen name="login" />
       <Stack.Screen name="invoice/new" options={{ presentation: "modal" }} />
+      <Stack.Screen name="invoice/[syncId]" />
+      <Stack.Screen name="client/[syncId]" />
     </Stack>
   );
 }
