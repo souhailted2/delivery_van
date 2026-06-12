@@ -3,8 +3,9 @@ import * as Haptics from "expo-haptics";
 import { router } from "expo-router";
 import { useEffect, useMemo, useState } from "react";
 import {
-  Alert, Dimensions, FlatList, Pressable, ScrollView, StyleSheet, Text,
-  TextInput, TouchableOpacity, TouchableWithoutFeedback, View,
+  Alert, Dimensions, FlatList, KeyboardAvoidingView, Modal, Platform,
+  Pressable, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity,
+  TouchableWithoutFeedback, View,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { ProductImage } from "@/components/ProductImage";
@@ -43,6 +44,12 @@ const GAP = 10;
 const CARD_W = (Dimensions.get("window").width - H_PAD * 2 - GAP * (COLS - 1)) / COLS;
 const IMG_SIZE = CARD_W - 16;
 
+const TIER_OPTIONS: { value: Tier; label: string }[] = [
+  { value: "retail", label: "تجزئة" },
+  { value: "half_wholesale", label: "نصف جملة" },
+  { value: "wholesale", label: "جملة" },
+];
+
 export default function NewInvoiceScreen() {
   const colors = useColors();
   const insets = useSafeAreaInsets();
@@ -64,6 +71,13 @@ export default function NewInvoiceScreen() {
   const [products, setProducts] = useState<Product[]>([]);
   const [clientSearch, setClientSearch] = useState("");
   const [productSearch, setProductSearch] = useState("");
+
+  // ── Add-client modal state ─────────────────────────────────────────────────
+  const [addClientOpen, setAddClientOpen] = useState(false);
+  const [newClientName, setNewClientName] = useState("");
+  const [newClientPhone, setNewClientPhone] = useState("");
+  const [newClientType, setNewClientType] = useState<Tier>("retail");
+  const [savingNewClient, setSavingNewClient] = useState(false);
 
   // Inline quantity card state
   const [activeProductId, setActiveProductId] = useState<string | null>(null);
@@ -108,6 +122,57 @@ export default function NewInvoiceScreen() {
   );
   const filteredProducts = products.filter(p => p.name.includes(productSearch));
 
+  // ── Save new client to SQLite ──────────────────────────────────────────────
+  const saveNewClient = async () => {
+    const name = newClientName.trim();
+    if (!name) return;
+    setSavingNewClient(true);
+    try {
+      const db = await getDb();
+      if (!db) return;
+      const syncId = newSyncId();
+      const now = new Date().toISOString();
+      const truckId = user?.truckId ?? null;
+      await db.runAsync(
+        `INSERT INTO clients (sync_id, name, phone, client_type, truck_id, credit_balance,
+           created_at, updated_at, is_deleted, _pending)
+         VALUES (?, ?, ?, ?, ?, 0, ?, ?, 0, 1)`,
+        [syncId, name, newClientPhone.trim() || null, newClientType,
+          truckId, now, now] as any[]
+      );
+      const newClient: Client = {
+        sync_id: syncId,
+        name,
+        phone: newClientPhone.trim() || null,
+        client_type: newClientType,
+        truck_id: truckId,
+        credit_balance: 0,
+        updated_at: now,
+        is_deleted: 0,
+        _pending: 1,
+      };
+      setClients(prev => [newClient, ...prev]);
+      setSelectedClient(newClient);
+      setAddClientOpen(false);
+      setNewClientName("");
+      setNewClientPhone("");
+      setNewClientType("retail");
+      triggerSync();
+      setStep("products");
+    } catch (e: any) {
+      Alert.alert("خطأ", e?.message ?? "فشل حفظ الزبون");
+    } finally {
+      setSavingNewClient(false);
+    }
+  };
+
+  const resetAddClientModal = () => {
+    setAddClientOpen(false);
+    setNewClientName("");
+    setNewClientPhone("");
+    setNewClientType("retail");
+  };
+
   // Open the inline quantity card for a product
   const openQtyCard = (product: Product, currentQty?: number) => {
     setActiveProductId(product.sync_id);
@@ -133,10 +198,8 @@ export default function NewInvoiceScreen() {
         }]);
       }
     } else if ((!isNaN(qty) && qty === 0) || raw === "0") {
-      // Explicit zero → remove from cart
       setItems(prev => prev.filter(i => i.product.sync_id !== product.sync_id));
     }
-    // else: empty or invalid → no change
     setActiveProductId(null);
     setInputQty("");
   };
@@ -246,7 +309,6 @@ export default function NewInvoiceScreen() {
     const price = cartItem?.unitPrice ?? priceByType(product, clientTier);
 
     return (
-      // Entire card is pressable — tapping anywhere on it opens the qty card
       <Pressable
         style={[
           styles.catCard,
@@ -276,7 +338,6 @@ export default function NewInvoiceScreen() {
         )}
 
         {isActive ? (
-          // ── Inline quantity card ──────────────────────────────────
           <View style={[styles.qtyCard, { backgroundColor: colors.background, borderColor: colors.primary + "44" }]}>
             <TextInput
               style={[styles.qtyInput, { color: colors.foreground, backgroundColor: colors.card, borderColor: colors.border }]}
@@ -311,7 +372,6 @@ export default function NewInvoiceScreen() {
             )}
           </View>
         ) : inCart ? (
-          // ── In cart: qty badge (card tap = edit) ─────────────────
           <View style={[styles.inCartBadge, { borderColor: colors.primary + "55", backgroundColor: colors.primary + "10" }]}>
             <Feather name="edit-2" size={12} color={colors.primary} />
             <Text style={[styles.inCartQty, { color: colors.primary }]}>
@@ -319,7 +379,6 @@ export default function NewInvoiceScreen() {
             </Text>
           </View>
         ) : (
-          // ── Not in cart: add hint (card tap = open qty card) ─────
           <View style={[styles.addBtn, { backgroundColor: colors.primary }]}>
             <Feather name="plus" size={16} color="#fff" />
             <Text style={styles.addBtnText}>إضافة</Text>
@@ -364,17 +423,27 @@ export default function NewInvoiceScreen() {
 
       {step === "client" && (
         <View style={{ flex: 1 }}>
-          <View style={[styles.searchBar, { backgroundColor: colors.card, borderColor: colors.border }]}>
-            <Feather name="search" size={16} color={colors.mutedForeground} />
-            <TextInput
-              style={[styles.searchInput, { color: colors.foreground }]}
-              placeholder="ابحث عن عميل..."
-              placeholderTextColor={colors.mutedForeground}
-              value={clientSearch}
-              onChangeText={setClientSearch}
-              textAlign="right"
-            />
+          {/* Search bar + add-client button */}
+          <View style={styles.clientSearchRow}>
+            <View style={[styles.searchBar, { flex: 1, backgroundColor: colors.card, borderColor: colors.border }]}>
+              <Feather name="search" size={16} color={colors.mutedForeground} />
+              <TextInput
+                style={[styles.searchInput, { color: colors.foreground }]}
+                placeholder="ابحث عن عميل..."
+                placeholderTextColor={colors.mutedForeground}
+                value={clientSearch}
+                onChangeText={setClientSearch}
+                textAlign="right"
+              />
+            </View>
+            <TouchableOpacity
+              style={[styles.addClientBtn, { backgroundColor: colors.primary }]}
+              onPress={() => setAddClientOpen(true)}
+            >
+              <Feather name="plus" size={20} color="#fff" />
+            </TouchableOpacity>
           </View>
+
           <FlatList
             data={filteredClients}
             keyExtractor={i => i.sync_id}
@@ -396,6 +465,19 @@ export default function NewInvoiceScreen() {
               </TouchableOpacity>
             )}
             contentContainerStyle={{ padding: 12, gap: 6 }}
+            ListEmptyComponent={
+              <View style={styles.empty}>
+                <Feather name="users" size={40} color={colors.muted} />
+                <Text style={[styles.emptyText, { color: colors.mutedForeground }]}>لا يوجد عملاء</Text>
+                <TouchableOpacity
+                  style={[styles.addClientEmptyBtn, { backgroundColor: colors.primary }]}
+                  onPress={() => setAddClientOpen(true)}
+                >
+                  <Feather name="plus" size={16} color="#fff" />
+                  <Text style={styles.addClientEmptyBtnText}>إضافة زبون جديد</Text>
+                </TouchableOpacity>
+              </View>
+            }
           />
         </View>
       )}
@@ -419,12 +501,6 @@ export default function NewInvoiceScreen() {
               textAlign="right"
             />
           </View>
-          {/*
-            TouchableWithoutFeedback wrapping the FlatList:
-            - Taps on a product card are consumed by the Pressable inside → openQtyCard fires
-            - Taps in padding/empty areas (outside any card) bubble up → dismissCard fires
-            This is the React Native pattern for "tap outside to close" without a blocking overlay
-          */}
           <TouchableWithoutFeedback onPress={() => activeProductId !== null && dismissCard()}>
             <View style={{ flex: 1 }}>
               <FlatList
@@ -525,6 +601,108 @@ export default function NewInvoiceScreen() {
           </TouchableOpacity>
         </ScrollView>
       )}
+
+      {/* ── Add-client modal ──────────────────────────────────────────────── */}
+      <Modal
+        visible={addClientOpen}
+        transparent
+        animationType="slide"
+        onRequestClose={resetAddClientModal}
+      >
+        <TouchableWithoutFeedback onPress={resetAddClientModal}>
+          <View style={styles.modalOverlay} />
+        </TouchableWithoutFeedback>
+        <KeyboardAvoidingView
+          behavior={Platform.OS === "ios" ? "padding" : "height"}
+          style={styles.modalKav}
+        >
+          <View style={[styles.modalSheet, { backgroundColor: colors.card, borderColor: colors.border, paddingBottom: insets.bottom + 16 }]}>
+            {/* Handle */}
+            <View style={[styles.modalHandle, { backgroundColor: colors.border }]} />
+
+            <Text style={[styles.modalTitle, { color: colors.foreground }]}>زبون جديد</Text>
+
+            {/* Name */}
+            <View style={styles.modalField}>
+              <Text style={[styles.modalLabel, { color: colors.mutedForeground }]}>الاسم *</Text>
+              <TextInput
+                style={[styles.modalInput, { color: colors.foreground, backgroundColor: colors.background, borderColor: colors.border }]}
+                value={newClientName}
+                onChangeText={setNewClientName}
+                placeholder="اسم الزبون"
+                placeholderTextColor={colors.mutedForeground}
+                textAlign="right"
+                autoFocus
+                returnKeyType="next"
+              />
+            </View>
+
+            {/* Phone */}
+            <View style={styles.modalField}>
+              <Text style={[styles.modalLabel, { color: colors.mutedForeground }]}>الهاتف (اختياري)</Text>
+              <TextInput
+                style={[styles.modalInput, { color: colors.foreground, backgroundColor: colors.background, borderColor: colors.border }]}
+                value={newClientPhone}
+                onChangeText={setNewClientPhone}
+                placeholder="0555 000 000"
+                placeholderTextColor={colors.mutedForeground}
+                keyboardType="phone-pad"
+                textAlign="right"
+                returnKeyType="done"
+              />
+            </View>
+
+            {/* Client type selector */}
+            <View style={styles.modalField}>
+              <Text style={[styles.modalLabel, { color: colors.mutedForeground }]}>نوع العميل</Text>
+              <View style={styles.tierRow}>
+                {TIER_OPTIONS.map(opt => (
+                  <TouchableOpacity
+                    key={opt.value}
+                    style={[
+                      styles.tierBtn,
+                      {
+                        backgroundColor: newClientType === opt.value ? colors.primary : colors.background,
+                        borderColor: newClientType === opt.value ? colors.primary : colors.border,
+                      },
+                    ]}
+                    onPress={() => setNewClientType(opt.value)}
+                  >
+                    <Text style={[
+                      styles.tierBtnText,
+                      { color: newClientType === opt.value ? "#fff" : colors.foreground },
+                    ]}>
+                      {opt.label}
+                    </Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+            </View>
+
+            {/* Actions */}
+            <View style={styles.modalActions}>
+              <TouchableOpacity
+                style={[styles.modalCancelBtn, { backgroundColor: colors.background, borderColor: colors.border }]}
+                onPress={resetAddClientModal}
+              >
+                <Text style={[styles.modalCancelText, { color: colors.foreground }]}>إلغاء</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[
+                  styles.modalSaveBtn,
+                  { backgroundColor: savingNewClient || !newClientName.trim() ? colors.muted : colors.primary },
+                ]}
+                onPress={saveNewClient}
+                disabled={savingNewClient || !newClientName.trim()}
+              >
+                <Text style={styles.modalSaveText}>
+                  {savingNewClient ? "جاري الحفظ..." : "حفظ وتحديد"}
+                </Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </KeyboardAvoidingView>
+      </Modal>
     </View>
   );
 }
@@ -542,6 +720,17 @@ const styles = StyleSheet.create({
   },
   stepLabel: { fontSize: 13, fontFamily: "Cairo_600SemiBold", paddingVertical: 4, paddingHorizontal: 12 },
   stepActive: { borderBottomWidth: 2, borderBottomColor: "#f97316" } as any,
+
+  // Client search row with + button
+  clientSearchRow: {
+    flexDirection: "row-reverse", alignItems: "center",
+    gap: 8, marginHorizontal: 12, marginTop: 10,
+  },
+  addClientBtn: {
+    width: 44, height: 44, borderRadius: 12,
+    alignItems: "center", justifyContent: "center",
+  },
+
   searchBar: {
     flexDirection: "row-reverse", alignItems: "center", gap: 8,
     marginHorizontal: 12, marginTop: 10, paddingHorizontal: 14, height: 44,
@@ -576,14 +765,12 @@ const styles = StyleSheet.create({
   },
   addBtnText: { color: "#fff", fontSize: 14, fontFamily: "Cairo_700Bold" },
 
-  // In-cart badge (tap to edit)
   inCartBadge: {
     flexDirection: "row-reverse", alignItems: "center", justifyContent: "center", gap: 6,
     width: "100%", paddingVertical: 8, borderRadius: 10, borderWidth: 1,
   },
   inCartQty: { fontSize: 13, fontFamily: "Cairo_700Bold" },
 
-  // Inline quantity card
   qtyCard: {
     width: "100%", borderRadius: 10, borderWidth: 1,
     padding: 8, gap: 6, alignItems: "center",
@@ -616,6 +803,11 @@ const styles = StyleSheet.create({
 
   empty: { alignItems: "center", paddingVertical: 60, gap: 12 },
   emptyText: { fontSize: 14, fontFamily: "Cairo_400Regular" },
+  addClientEmptyBtn: {
+    flexDirection: "row-reverse", alignItems: "center", gap: 6,
+    paddingHorizontal: 20, paddingVertical: 10, borderRadius: 12,
+  },
+  addClientEmptyBtnText: { color: "#fff", fontSize: 14, fontFamily: "Cairo_700Bold" },
 
   summaryCard: { borderRadius: 14, borderWidth: 1, padding: 16, gap: 8 },
   summaryLabel: { fontSize: 12, fontFamily: "Cairo_400Regular" },
@@ -637,4 +829,46 @@ const styles = StyleSheet.create({
     gap: 10, paddingVertical: 16, borderRadius: 14, marginTop: 8,
   },
   saveBtnText: { color: "#fff", fontSize: 17, fontFamily: "Cairo_700Bold" },
+
+  // ── Add-client modal ──────────────────────────────────────────────────────
+  modalOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: "rgba(0,0,0,0.45)",
+  },
+  modalKav: {
+    position: "absolute", left: 0, right: 0, bottom: 0,
+  },
+  modalSheet: {
+    borderTopLeftRadius: 24, borderTopRightRadius: 24,
+    borderWidth: 1, paddingHorizontal: 20, paddingTop: 12,
+    gap: 14,
+  },
+  modalHandle: {
+    width: 40, height: 4, borderRadius: 2,
+    alignSelf: "center", marginBottom: 4,
+  },
+  modalTitle: { fontSize: 17, fontFamily: "Cairo_700Bold", textAlign: "right" },
+  modalField: { gap: 6 },
+  modalLabel: { fontSize: 12, fontFamily: "Cairo_400Regular", textAlign: "right" },
+  modalInput: {
+    height: 46, borderRadius: 10, borderWidth: 1,
+    paddingHorizontal: 14, fontSize: 15, fontFamily: "Cairo_400Regular",
+  },
+  tierRow: { flexDirection: "row-reverse", gap: 8 },
+  tierBtn: {
+    flex: 1, paddingVertical: 10, borderRadius: 10, borderWidth: 1,
+    alignItems: "center", justifyContent: "center",
+  },
+  tierBtnText: { fontSize: 13, fontFamily: "Cairo_600SemiBold" },
+  modalActions: { flexDirection: "row-reverse", gap: 10, marginTop: 4 },
+  modalCancelBtn: {
+    flex: 1, paddingVertical: 13, borderRadius: 12, borderWidth: 1,
+    alignItems: "center", justifyContent: "center",
+  },
+  modalCancelText: { fontSize: 15, fontFamily: "Cairo_600SemiBold" },
+  modalSaveBtn: {
+    flex: 2, paddingVertical: 13, borderRadius: 12,
+    alignItems: "center", justifyContent: "center",
+  },
+  modalSaveText: { color: "#fff", fontSize: 15, fontFamily: "Cairo_700Bold" },
 });
