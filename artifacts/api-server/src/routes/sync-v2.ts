@@ -13,7 +13,7 @@ import {
   invoicesTable, invoiceItemsTable, returnsTable, returnItemsTable,
   cashTransfersTable, truckStockTable, stockTransfersTable, stockTransferItemsTable,
 } from "@workspace/db";
-import { gt, or, isNull, sql } from "drizzle-orm";
+import { and, eq, gt, or, isNull, sql } from "drizzle-orm";
 
 const router = Router();
 
@@ -86,6 +86,7 @@ router.get("/sync/v2/pull", requireAuth, async (req, res) => {
 
   // Truck sessions receive only operational tables; user sessions receive all
   const isTruckSession = !!(req as any).session?.truckId && !(req as any).session?.userId;
+  const sessionTruckId: number | null = isTruckSession ? ((req as any).session.truckId ?? null) : null;
 
   const result: Record<string, any[]> = {};
 
@@ -94,8 +95,23 @@ router.get("/sync/v2/pull", requireAuth, async (req, res) => {
     try {
       const t = table as any;
       if (!t.updatedAt) continue;
-      const rows = await db.select().from(t)
-        .where(or(gt(t.updatedAt, since), isNull(t.updatedAt)));
+      // truck_stock is tiny and must never be missed due to device-clock skew in
+      // the incremental `since` cursor, so always return all of its rows. The
+      // mobile upsert is idempotent, so re-sending every pull is safe and cheap.
+      let rows;
+      if (name === "truck_stock") {
+        rows = await db.select().from(t);
+      } else if (name === "clients" && sessionTruckId !== null) {
+        // Truck sessions only receive their own clients (truck_id = this truck)
+        rows = await db.select().from(t)
+          .where(and(
+            eq(t.truckId, sessionTruckId),
+            or(gt(t.updatedAt, since), isNull(t.updatedAt)),
+          ));
+      } else {
+        rows = await db.select().from(t)
+          .where(or(gt(t.updatedAt, since), isNull(t.updatedAt)));
+      }
       // Convert timestamps to ISO strings and snake_case; strip sensitive columns
       const strip = COLUMN_STRIP[name] ?? [];
       result[name] = rows.map((r: any) => {

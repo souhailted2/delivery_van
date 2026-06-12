@@ -6,6 +6,7 @@ import {
   TextInput, TouchableOpacity, View,
 } from "react-native";
 import { SyncBar } from "@/components/SyncBar";
+import { useAuth } from "@/contexts/AuthContext";
 import { useSync } from "@/contexts/SyncContext";
 import { Client, getDb } from "@/lib/db";
 import { newSyncId } from "@/lib/uuid";
@@ -47,6 +48,7 @@ function ClientCard({ item, colors }: { item: Client; colors: any }) {
 
 export default function ClientsScreen() {
   const colors = useColors();
+  const { user } = useAuth();
   const { triggerSync } = useSync();
   const [clients, setClients] = useState<Client[]>([]);
   const [search, setSearch] = useState("");
@@ -61,12 +63,21 @@ export default function ClientsScreen() {
     const db = await getDb();
     if (!db) return;
     const q = search.trim();
-    const rows = await db.getAllAsync<Client>(
-      `SELECT * FROM clients WHERE is_deleted = 0 ${q ? "AND (name LIKE ? OR phone LIKE ?)" : ""} ORDER BY name`,
-      q ? [`%${q}%`, `%${q}%`] : []
-    );
+    const truckId = user?.truckId ?? null;
+    let rows: Client[];
+    if (truckId !== null) {
+      rows = await db.getAllAsync<Client>(
+        `SELECT * FROM clients WHERE is_deleted = 0 AND truck_id = ? ${q ? "AND (name LIKE ? OR phone LIKE ?)" : ""} ORDER BY name`,
+        q ? [truckId, `%${q}%`, `%${q}%`] : [truckId]
+      );
+    } else {
+      rows = await db.getAllAsync<Client>(
+        `SELECT * FROM clients WHERE is_deleted = 0 ${q ? "AND (name LIKE ? OR phone LIKE ?)" : ""} ORDER BY name`,
+        q ? [`%${q}%`, `%${q}%`] : []
+      );
+    }
     setClients(rows);
-  }, [search]);
+  }, [search, user?.truckId]);
 
   useEffect(() => { load(); }, [load]);
 
@@ -83,10 +94,11 @@ export default function ClientsScreen() {
     const db = await getDb();
     if (!db) return;
     await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    const truckId = user?.truckId ?? null;
     await db.runAsync(
-      `INSERT INTO clients (sync_id, name, phone, client_type, is_deleted, _pending, updated_at, created_at)
-       VALUES (?, ?, ?, ?, 0, 1, ?, ?)`,
-      [newSyncId(), newName.trim(), newPhone.trim() || null, newTier, new Date().toISOString(), new Date().toISOString()]
+      `INSERT INTO clients (sync_id, name, phone, client_type, truck_id, is_deleted, _pending, updated_at, created_at)
+       VALUES (?, ?, ?, ?, ?, 0, 1, ?, ?)`,
+      [newSyncId(), newName.trim(), newPhone.trim() || null, newTier, truckId, new Date().toISOString(), new Date().toISOString()]
     );
     setShowAddModal(false);
     triggerSync();

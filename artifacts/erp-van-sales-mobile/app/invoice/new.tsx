@@ -25,11 +25,6 @@ interface InvoiceItem {
   overridden?: boolean;
 }
 
-const TIER_LABEL: Record<Tier, string> = {
-  retail: "تجزئة",
-  half_wholesale: "نصف جملة",
-  wholesale: "جملة",
-};
 function priceByType(p: Product, t: Tier): number {
   if (t === "half_wholesale") return Number(p.selling_price_half_wholesale ?? 0);
   if (t === "wholesale") return Number(p.selling_price_wholesale ?? 0);
@@ -71,14 +66,24 @@ export default function NewInvoiceScreen() {
     (async () => {
       const db = await getDb();
       if (!db) return;
+      const truckId = user?.truckId ?? null;
       const [cl, pr] = await Promise.all([
-        db.getAllAsync<Client>("SELECT * FROM clients WHERE is_deleted = 0 ORDER BY name"),
-        db.getAllAsync<Product>("SELECT * FROM products WHERE is_deleted = 0 ORDER BY name"),
+        truckId !== null
+          ? db.getAllAsync<Client>("SELECT * FROM clients WHERE is_deleted = 0 AND truck_id = ? ORDER BY name", [truckId])
+          : db.getAllAsync<Client>("SELECT * FROM clients WHERE is_deleted = 0 ORDER BY name"),
+        truckId !== null
+          ? db.getAllAsync<Product>(
+              `SELECT p.* FROM products p
+               INNER JOIN truck_stock ts ON ts.product_id = p.id AND ts.truck_id = ? AND ts.quantity > 0
+               WHERE p.is_deleted = 0 ORDER BY p.name`,
+              [truckId]
+            )
+          : db.getAllAsync<Product>("SELECT * FROM products WHERE is_deleted = 0 ORDER BY name"),
       ]);
       setClients(cl);
       setProducts(pr);
     })();
-  }, []);
+  }, [user?.truckId]);
 
   // Re-price cart items to the selected customer's tier (unless manually overridden).
   useEffect(() => {
@@ -224,9 +229,6 @@ export default function NewInvoiceScreen() {
         />
         <Text style={[styles.catName, { color: colors.foreground }]} numberOfLines={2}>{product.name}</Text>
         <View style={styles.catPriceRow}>
-          <View style={[styles.tierBadge, { backgroundColor: colors.secondary }]}>
-            <Text style={[styles.tierBadgeText, { color: colors.mutedForeground }]}>{TIER_LABEL[tier]}</Text>
-          </View>
           <Text style={[styles.catPrice, { color: colors.primary }]}>{price.toLocaleString("fr-DZ")} د.ج</Text>
         </View>
 
@@ -315,9 +317,9 @@ export default function NewInvoiceScreen() {
                 <Feather name="check" size={16} color={selectedClient?.sync_id === item.sync_id ? colors.primary : "transparent"} />
                 <View style={{ flex: 1, alignItems: "flex-end" }}>
                   <Text style={[styles.clientName, { color: colors.foreground }]}>{item.name}</Text>
-                  <Text style={[styles.clientPhone, { color: colors.mutedForeground }]}>
-                    {TIER_LABEL[resolveTier(item)]}{item.phone ? ` • ${item.phone}` : ""}
-                  </Text>
+                  {item.phone ? (
+                    <Text style={[styles.clientPhone, { color: colors.mutedForeground }]}>{item.phone}</Text>
+                  ) : null}
                 </View>
               </TouchableOpacity>
             )}
@@ -329,11 +331,9 @@ export default function NewInvoiceScreen() {
       {step === "products" && (
         <View style={{ flex: 1 }}>
           <View style={[styles.clientPill, { backgroundColor: colors.primary + "12", borderColor: colors.primary + "33" }]}>
-            <View style={[styles.tierBadge, { backgroundColor: colors.primary }]}>
-              <Text style={[styles.tierBadgeText, { color: "#fff" }]}>{TIER_LABEL[clientTier]}</Text>
-            </View>
+            <Feather name="user" size={14} color={colors.primary} />
             <Text style={[styles.clientPillText, { color: colors.foreground }]} numberOfLines={1}>
-              {selectedClient?.name} — الأسعار حسب فئة العميل
+              {selectedClient?.name}
             </Text>
           </View>
           <View style={[styles.searchBar, { backgroundColor: colors.card, borderColor: colors.border }]}>
@@ -384,7 +384,7 @@ export default function NewInvoiceScreen() {
         <ScrollView contentContainerStyle={{ padding: 16, gap: 16, paddingBottom: insets.bottom + 24 }}>
           <View style={[styles.summaryCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
             <Text style={[styles.summaryLabel, { color: colors.mutedForeground }]}>العميل</Text>
-            <Text style={[styles.summaryVal, { color: colors.foreground }]}>{selectedClient?.name} ({TIER_LABEL[clientTier]})</Text>
+            <Text style={[styles.summaryVal, { color: colors.foreground }]}>{selectedClient?.name}</Text>
             <View style={[styles.divider, { backgroundColor: colors.border }]} />
             {items.map(i => (
               <View key={i.product.sync_id} style={styles.lineRow}>
