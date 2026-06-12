@@ -329,6 +329,13 @@ router.post("/trucks/me/cash", async (req, res) => {
   if (!truckId) return res.status(401).json({ error: "Non authentifié comme camion" });
   const { amount, note } = req.body;
   if (!amount || Number(amount) <= 0) return res.status(400).json({ error: "Montant invalide" });
+  // Guard: amount must not exceed current cash balance
+  const [truck] = await db.select({ cashBalance: trucksTable.cashBalance })
+    .from(trucksTable).where(eq(trucksTable.id, truckId)).limit(1);
+  const balance = Number(truck?.cashBalance ?? 0);
+  if (Number(amount) > balance) {
+    return res.status(400).json({ error: `المبلغ يتجاوز رصيد الصندوق (${balance} د.ج)` });
+  }
   const [transfer] = await db.insert(cashTransfersTable).values({
     truckId, amount: String(amount), note: note || null,
   }).returning();
