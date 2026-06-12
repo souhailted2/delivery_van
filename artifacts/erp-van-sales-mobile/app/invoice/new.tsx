@@ -3,8 +3,8 @@ import * as Haptics from "expo-haptics";
 import { router } from "expo-router";
 import { useEffect, useMemo, useState } from "react";
 import {
-  Alert, Dimensions, FlatList, ScrollView, StyleSheet, Text,
-  TextInput, TouchableOpacity, View,
+  Alert, Dimensions, FlatList, Pressable, ScrollView, StyleSheet, Text,
+  TextInput, TouchableOpacity, TouchableWithoutFeedback, View,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { ProductImage } from "@/components/ProductImage";
@@ -241,11 +241,18 @@ export default function NewInvoiceScreen() {
     const price = cartItem?.unitPrice ?? priceByType(product, clientTier);
 
     return (
-      <View style={[
-        styles.catCard,
-        { width: CARD_W, backgroundColor: colors.card, borderColor: inCart ? colors.primary : colors.border },
-        isActive && { borderColor: colors.primary, borderWidth: 2 },
-      ]}>
+      // Entire card is pressable — tapping anywhere on it opens the qty card
+      <Pressable
+        style={[
+          styles.catCard,
+          { width: CARD_W, backgroundColor: colors.card, borderColor: inCart ? colors.primary : colors.border },
+          isActive && { borderColor: colors.primary, borderWidth: 2 },
+        ]}
+        onPress={() => {
+          if (isActive) return;
+          openQtyCard(product, cartItem?.quantity);
+        }}
+      >
         <ProductImage
           imageUrl={product.image_url}
           localUri={product.local_image_uri}
@@ -279,51 +286,41 @@ export default function NewInvoiceScreen() {
               onSubmitEditing={() => confirmQty(product, cartItem)}
             />
             <View style={styles.qtyCardActions}>
-              <TouchableOpacity
+              <Pressable
                 style={[styles.qtyConfirmBtn, { backgroundColor: colors.primary }]}
                 onPress={() => confirmQty(product, cartItem)}
-                activeOpacity={0.85}
               >
                 <Text style={styles.qtyConfirmText}>{inCart ? "تحديث" : "أضف"}</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
+              </Pressable>
+              <Pressable
                 style={[styles.qtyCancelBtn, { backgroundColor: colors.muted }]}
                 onPress={dismissCard}
-                activeOpacity={0.85}
               >
                 <Feather name="x" size={15} color={colors.foreground} />
-              </TouchableOpacity>
+              </Pressable>
             </View>
             {inCart && (
-              <TouchableOpacity onPress={() => { removeItem(product.sync_id); dismissCard(); }}>
+              <Pressable onPress={() => { removeItem(product.sync_id); dismissCard(); }}>
                 <Text style={[styles.removeHint, { color: colors.destructive }]}>إزالة من السلة</Text>
-              </TouchableOpacity>
+              </Pressable>
             )}
           </View>
         ) : inCart ? (
-          // ── In cart: show qty badge, tap to edit ─────────────────
-          <TouchableOpacity
-            style={[styles.inCartBadge, { borderColor: colors.primary + "55", backgroundColor: colors.primary + "10" }]}
-            onPress={() => openQtyCard(product, cartItem!.quantity)}
-            activeOpacity={0.75}
-          >
+          // ── In cart: qty badge (card tap = edit) ─────────────────
+          <View style={[styles.inCartBadge, { borderColor: colors.primary + "55", backgroundColor: colors.primary + "10" }]}>
             <Feather name="edit-2" size={12} color={colors.primary} />
             <Text style={[styles.inCartQty, { color: colors.primary }]}>
               {cartItem!.quantity % 1 === 0 ? cartItem!.quantity : cartItem!.quantity.toFixed(2)} وحدة
             </Text>
-          </TouchableOpacity>
+          </View>
         ) : (
-          // ── Not in cart: add button ───────────────────────────────
-          <TouchableOpacity
-            style={[styles.addBtn, { backgroundColor: colors.primary }]}
-            onPress={() => openQtyCard(product)}
-            activeOpacity={0.85}
-          >
+          // ── Not in cart: add hint (card tap = open qty card) ─────
+          <View style={[styles.addBtn, { backgroundColor: colors.primary }]}>
             <Feather name="plus" size={16} color="#fff" />
             <Text style={styles.addBtnText}>إضافة</Text>
-          </TouchableOpacity>
+          </View>
         )}
-      </View>
+      </Pressable>
     );
   };
 
@@ -417,22 +414,33 @@ export default function NewInvoiceScreen() {
               textAlign="right"
             />
           </View>
-          <FlatList
-            data={filteredProducts}
-            keyExtractor={i => i.sync_id}
-            renderItem={renderProduct}
-            numColumns={COLS}
-            columnWrapperStyle={{ gap: GAP, paddingHorizontal: H_PAD }}
-            contentContainerStyle={{ paddingVertical: 12, gap: GAP, paddingBottom: 110 }}
-            keyboardShouldPersistTaps="handled"
-            ListEmptyComponent={
-              <View style={styles.empty}>
-                <Feather name="package" size={40} color={colors.muted} />
-                <Text style={[styles.emptyText, { color: colors.mutedForeground }]}>لا توجد منتجات</Text>
-              </View>
-            }
-            showsVerticalScrollIndicator={false}
-          />
+          {/*
+            TouchableWithoutFeedback wrapping the FlatList:
+            - Taps on a product card are consumed by the Pressable inside → openQtyCard fires
+            - Taps in padding/empty areas (outside any card) bubble up → dismissCard fires
+            This is the React Native pattern for "tap outside to close" without a blocking overlay
+          */}
+          <TouchableWithoutFeedback onPress={() => activeProductId !== null && dismissCard()}>
+            <View style={{ flex: 1 }}>
+              <FlatList
+                data={filteredProducts}
+                keyExtractor={i => i.sync_id}
+                renderItem={renderProduct}
+                numColumns={COLS}
+                columnWrapperStyle={{ gap: GAP, paddingHorizontal: H_PAD }}
+                contentContainerStyle={{ paddingVertical: 12, gap: GAP, paddingBottom: 110 }}
+                keyboardShouldPersistTaps="handled"
+                onScrollBeginDrag={dismissCard}
+                ListEmptyComponent={
+                  <View style={styles.empty}>
+                    <Feather name="package" size={40} color={colors.muted} />
+                    <Text style={[styles.emptyText, { color: colors.mutedForeground }]}>لا توجد منتجات</Text>
+                  </View>
+                }
+                showsVerticalScrollIndicator={false}
+              />
+            </View>
+          </TouchableWithoutFeedback>
           {items.length > 0 && (
             <View style={[styles.cartBar, { backgroundColor: colors.card, borderTopColor: colors.border, paddingBottom: insets.bottom + 12 }]}>
               <TouchableOpacity
