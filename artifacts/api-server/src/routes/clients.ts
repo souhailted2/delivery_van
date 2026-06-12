@@ -83,10 +83,19 @@ router.get("/clients/:id/profile", async (req, res) => {
 
   const yearStart = new Date(new Date().getFullYear(), 0, 1);
 
-  // إجمالي المشتريات هذا العام + عدد الفواتير + عدد فواتير الآجل
+  // إجمالي المشتريات هذا العام (مُصفّى بالسنة)
+  const [yearRow] = await db
+    .select({ totalYear: sum(invoicesTable.totalAmount) })
+    .from(invoicesTable)
+    .where(and(
+      eq(invoicesTable.clientId, id),
+      eq(invoicesTable.isDeleted, false),
+      sql`${invoicesTable.createdAt} >= ${yearStart}`,
+    ));
+
+  // عدد الفواتير الإجمالي + عدد فواتير الآجل (كل الأوقات)
   const [statsRow] = await db
     .select({
-      totalYear: sum(invoicesTable.totalAmount),
       invoiceCount: count(invoicesTable.id),
       creditCount: sql<number>`COUNT(*) FILTER (WHERE ${invoicesTable.paymentType} = 'credit')`,
     })
@@ -94,7 +103,6 @@ router.get("/clients/:id/profile", async (req, res) => {
     .where(and(
       eq(invoicesTable.clientId, id),
       eq(invoicesTable.isDeleted, false),
-      sql`${invoicesTable.createdAt} >= ${yearStart}`,
     ));
 
   // آخر فاتورة
@@ -131,7 +139,7 @@ router.get("/clients/:id/profile", async (req, res) => {
 
   res.json({
     client: { ...client, balance: Number(client.balance) },
-    totalYearPurchases: Number(statsRow?.totalYear ?? 0),
+    totalYearPurchases: Number(yearRow?.totalYear ?? 0),
     invoiceCount: Number(statsRow?.invoiceCount ?? 0),
     creditInvoiceCount: Number(statsRow?.creditCount ?? 0),
     debtBalance: Number(client.balance),

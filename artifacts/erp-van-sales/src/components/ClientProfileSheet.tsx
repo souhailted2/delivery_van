@@ -64,12 +64,14 @@ function ClientProfileContent({ client }: { client: ClientInfo }) {
 
   const [editingType, setEditingType] = useState(false);
   const [typeValue, setTypeValue] = useState<ClientType>(client.clientType);
+  const [displayType, setDisplayType] = useState<ClientType>(client.clientType);
 
   const handleSaveType = () => {
     updateClient.mutate(
       { id: client.id, data: { name: client.name, clientType: typeValue } },
       {
         onSuccess: () => {
+          setDisplayType(typeValue);
           setEditingType(false);
           queryClient.invalidateQueries({ queryKey: ["/api/clients"] });
           toast.success("تم تحديث نوع العميل");
@@ -125,7 +127,7 @@ function ClientProfileContent({ client }: { client: ClientInfo }) {
                       size="icon"
                       variant="ghost"
                       className="h-5 w-5"
-                      onClick={() => { setTypeValue(client.clientType); setEditingType(false); }}
+                      onClick={() => { setTypeValue(displayType); setEditingType(false); }}
                     >
                       <X className="h-3 w-3 text-red-500" />
                     </Button>
@@ -136,8 +138,8 @@ function ClientProfileContent({ client }: { client: ClientInfo }) {
                     onClick={() => setEditingType(true)}
                     title="تغيير نوع العميل"
                   >
-                    <Badge variant={typeBadgeVariant(client.clientType)}>
-                      {CLIENT_TYPE_LABELS[client.clientType] ?? client.clientType}
+                    <Badge variant={typeBadgeVariant(displayType)}>
+                      {CLIENT_TYPE_LABELS[displayType] ?? displayType}
                     </Badge>
                   </button>
                 )}
