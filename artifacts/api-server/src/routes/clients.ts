@@ -1,58 +1,96 @@
 import { Router } from "express";
 import { db } from "@workspace/db";
-import { clientsTable, usersTable, invoicesTable, invoiceItemsTable, productsTable } from "@workspace/db";
+import { clientsTable, usersTable, invoicesTable, invoiceItemsTable } from "@workspace/db";
 import { eq, like, and, sum, count, desc, sql } from "drizzle-orm";
 
 const router = Router();
 
-async function getSessionBranchId(req: any): Promise<number | null> {
+type SessionInfo = { branchId: number | null; isSuperAdmin: boolean };
+
+async function getSessionInfo(req: any): Promise<SessionInfo | null> {
   const userId = req.session?.userId;
   if (!userId) return null;
-  const [user] = await db.select({ branchId: usersTable.branchId, role: usersTable.role })
-    .from(usersTable).where(eq(usersTable.id, userId)).limit(1);
+  const [user] = await db
+    .select({ branchId: usersTable.branchId, role: usersTable.role })
+    .from(usersTable)
+    .where(eq(usersTable.id, userId))
+    .limit(1);
   if (!user) return null;
-  if (user.role === "admin" && !user.branchId) return null; // super admin
-  return user.branchId ?? null;
+  const isSuperAdmin = user.role === "admin" && !user.branchId;
+  return { branchId: user.branchId ?? null, isSuperAdmin };
+}
+
+/** Returns the client only if the session is authorised to access it. */
+async function getAuthorizedClient(clientId: number, session: SessionInfo) {
+  const conditions = [eq(clientsTable.id, clientId)];
+  if (!session.isSuperAdmin && session.branchId !== null) {
+    conditions.push(eq(clientsTable.branchId, session.branchId));
+  }
+  const [client] = await db
+    .select()
+    .from(clientsTable)
+    .where(and(...conditions))
+    .limit(1);
+  return client ?? null;
 }
 
 router.get("/clients", async (req, res) => {
   const { search } = req.query;
-  const branchId = await getSessionBranchId(req);
+  const session = await getSessionInfo(req);
 
   const conditions = [];
-  if (branchId !== null) conditions.push(eq(clientsTable.branchId, branchId));
+  if (session && !session.isSuperAdmin && session.branchId !== null) {
+    conditions.push(eq(clientsTable.branchId, session.branchId));
+  }
   if (search) conditions.push(like(clientsTable.name, `%${search}%`));
 
-  const clients = await db.select().from(clientsTable)
+  const clients = await db
+    .select()
+    .from(clientsTable)
     .where(conditions.length > 0 ? and(...conditions) : undefined)
     .orderBy(clientsTable.name);
-  res.json(clients.map(c => ({ ...c, balance: Number(c.balance) })));
+  res.json(clients.map((c) => ({ ...c, balance: Number(c.balance) })));
 });
 
 router.post("/clients", async (req, res) => {
   const { name, phone, clientType, latitude, longitude, branchId: bodyBranchId } = req.body;
   if (!name) return res.status(400).json({ error: "Nom requis" });
-  const sessionBranchId = await getSessionBranchId(req);
+  const session = await getSessionInfo(req);
   const validTypes = ["retail", "half_wholesale", "wholesale"];
-  const [client] = await db.insert(clientsTable).values({
-    name, phone: phone || null,
-    clientType: validTypes.includes(clientType) ? clientType : "retail",
-    branchId: sessionBranchId ?? (bodyBranchId ? parseInt(bodyBranchId) : null),
-    latitude: latitude || null, longitude: longitude || null,
-    balance: "0",
-  }).returning();
+  const effectiveBranchId = session && !session.isSuperAdmin
+    ? session.branchId
+    : (bodyBranchId ? parseInt(bodyBranchId) : null);
+  const [client] = await db
+    .insert(clientsTable)
+    .values({
+      name,
+      phone: phone || null,
+      clientType: validTypes.includes(clientType) ? clientType : "retail",
+      branchId: effectiveBranchId,
+      latitude: latitude || null,
+      longitude: longitude || null,
+      balance: "0",
+    })
+    .returning();
   res.status(201).json({ ...client, balance: Number(client.balance) });
 });
 
 router.get("/clients/:id", async (req, res) => {
   const id = parseInt(req.params.id);
-  const [client] = await db.select().from(clientsTable).where(eq(clientsTable.id, id)).limit(1);
+  const session = await getSessionInfo(req);
+  if (!session) return res.status(401).json({ error: "Non authentifié" });
+  const client = await getAuthorizedClient(id, session);
   if (!client) return res.status(404).json({ error: "Client non trouvé" });
   res.json({ ...client, balance: Number(client.balance) });
 });
 
 router.put("/clients/:id", async (req, res) => {
   const id = parseInt(req.params.id);
+  const session = await getSessionInfo(req);
+  if (!session) return res.status(401).json({ error: "Non authentifié" });
+  const existing = await getAuthorizedClient(id, session);
+  if (!existing) return res.status(404).json({ error: "Client non trouvé" });
+
   const { name, phone, clientType, latitude, longitude, balance, branchId } = req.body;
   const validTypes = ["retail", "half_wholesale", "wholesale"];
   const updates: Record<string, unknown> = {};
@@ -62,23 +100,34 @@ router.put("/clients/:id", async (req, res) => {
   if (latitude !== undefined) updates.latitude = latitude;
   if (longitude !== undefined) updates.longitude = longitude;
   if (balance !== undefined) updates.balance = String(balance);
-  if (branchId !== undefined) updates.branchId = branchId || null;
-  const [client] = await db.update(clientsTable).set(updates).where(eq(clientsTable.id, id)).returning();
+  if (branchId !== undefined && session.isSuperAdmin) updates.branchId = branchId || null;
+
+  const [client] = await db
+    .update(clientsTable)
+    .set(updates)
+    .where(eq(clientsTable.id, id))
+    .returning();
   if (!client) return res.status(404).json({ error: "Client non trouvé" });
   res.json({ ...client, balance: Number(client.balance) });
 });
 
 router.delete("/clients/:id", async (req, res) => {
   const id = parseInt(req.params.id);
+  const session = await getSessionInfo(req);
+  if (!session) return res.status(401).json({ error: "Non authentifié" });
+  const existing = await getAuthorizedClient(id, session);
+  if (!existing) return res.status(404).json({ error: "Client non trouvé" });
   await db.delete(clientsTable).where(eq(clientsTable.id, id));
   res.status(204).send();
 });
 
-// GET /clients/:id/profile — إحصائيات الزبون
+// GET /clients/:id/profile — إحصائيات الزبون مع تحقق من الفرع
 router.get("/clients/:id/profile", async (req, res) => {
   const id = parseInt(req.params.id);
+  const session = await getSessionInfo(req);
+  if (!session) return res.status(401).json({ error: "Non authentifié" });
 
-  const [client] = await db.select().from(clientsTable).where(eq(clientsTable.id, id)).limit(1);
+  const client = await getAuthorizedClient(id, session);
   if (!client) return res.status(404).json({ error: "العميل غير موجود" });
 
   const yearStart = new Date(new Date().getFullYear(), 0, 1);
@@ -87,11 +136,13 @@ router.get("/clients/:id/profile", async (req, res) => {
   const [yearRow] = await db
     .select({ totalYear: sum(invoicesTable.totalAmount) })
     .from(invoicesTable)
-    .where(and(
-      eq(invoicesTable.clientId, id),
-      eq(invoicesTable.isDeleted, false),
-      sql`${invoicesTable.createdAt} >= ${yearStart}`,
-    ));
+    .where(
+      and(
+        eq(invoicesTable.clientId, id),
+        eq(invoicesTable.isDeleted, false),
+        sql`${invoicesTable.createdAt} >= ${yearStart}`,
+      ),
+    );
 
   // عدد الفواتير الإجمالي + عدد فواتير الآجل (كل الأوقات)
   const [statsRow] = await db
@@ -100,10 +151,7 @@ router.get("/clients/:id/profile", async (req, res) => {
       creditCount: sql<number>`COUNT(*) FILTER (WHERE ${invoicesTable.paymentType} = 'credit')`,
     })
     .from(invoicesTable)
-    .where(and(
-      eq(invoicesTable.clientId, id),
-      eq(invoicesTable.isDeleted, false),
-    ));
+    .where(and(eq(invoicesTable.clientId, id), eq(invoicesTable.isDeleted, false)));
 
   // آخر فاتورة
   const [lastInvoice] = await db
@@ -127,11 +175,14 @@ router.get("/clients/:id/profile", async (req, res) => {
       totalValue: sum(invoiceItemsTable.subtotal),
     })
     .from(invoiceItemsTable)
-    .innerJoin(invoicesTable, and(
-      eq(invoiceItemsTable.invoiceId, invoicesTable.id),
-      eq(invoicesTable.clientId, id),
-      eq(invoicesTable.isDeleted, false),
-    ))
+    .innerJoin(
+      invoicesTable,
+      and(
+        eq(invoiceItemsTable.invoiceId, invoicesTable.id),
+        eq(invoicesTable.clientId, id),
+        eq(invoicesTable.isDeleted, false),
+      ),
+    )
     .where(eq(invoiceItemsTable.isDeleted, false))
     .groupBy(invoiceItemsTable.productId, invoiceItemsTable.productName)
     .orderBy(desc(sum(invoiceItemsTable.subtotal)))
@@ -146,7 +197,7 @@ router.get("/clients/:id/profile", async (req, res) => {
     lastInvoice: lastInvoice
       ? { ...lastInvoice, totalAmount: Number(lastInvoice.totalAmount) }
       : null,
-    topProducts: topProducts.map(p => ({
+    topProducts: topProducts.map((p) => ({
       productId: p.productId,
       productName: p.productName,
       totalQty: Number(p.totalQty ?? 0),
