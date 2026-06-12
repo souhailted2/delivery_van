@@ -53,6 +53,11 @@ export default function NewInvoiceScreen() {
   const [selectedClient, setSelectedClient] = useState<Client | null>(null);
   const [items, setItems] = useState<InvoiceItem[]>([]);
   const [paymentType, setPaymentType] = useState<"cash" | "credit">("cash");
+
+  // Enforce cash-only when truck is not permitted to sell on credit
+  useEffect(() => {
+    if (user?.truckCanSellOnCredit === false) setPaymentType("cash");
+  }, [user?.truckCanSellOnCredit]);
   const [saving, setSaving] = useState(false);
 
   const [clients, setClients] = useState<Client[]>([]);

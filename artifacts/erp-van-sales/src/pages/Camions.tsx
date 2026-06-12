@@ -21,6 +21,7 @@ type Truck = {
   driverName?: string | null;
   location?: string | null;
   cashBalance: number;
+  canSellOnCredit?: boolean | null;
 };
 
 type TruckForm = {

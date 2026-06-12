@@ -58,7 +58,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           const res = await apiFetch("/auth/me");
           if (res.ok) {
             const data = await res.json();
-            setUser({ id: data.id, username: data.username, role: data.role, truckId: data.truckId, branchId: data.branchId, fullName: data.fullName });
+            const truckId = data.truckId;
+            const truckCanSellOnCredit = data.role === "truck"
+              ? await readTruckCanSellOnCredit(truckId)
+              : undefined;
+            setUser({ id: data.id, username: data.username, role: data.role, truckId, branchId: data.branchId, fullName: data.fullName, truckCanSellOnCredit });
             return;
           }
         }
