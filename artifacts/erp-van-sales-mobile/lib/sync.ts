@@ -1,7 +1,7 @@
 import type { SQLiteDatabase } from "expo-sqlite";
 import { Directory, File, Paths } from "expo-file-system";
 import { API_URL, getActiveApiUrl } from "./api";
-import { getDb, getSyncMeta, setSyncMeta, upsertRecord, getPendingCount, resetSyncMeta } from "./db";
+import { getDb, getSyncMeta, setSyncMeta, upsertRecord, getPendingCount, resetSyncMeta, TABLES_WITH_SOFT_DELETE } from "./db";
 import { newSyncId } from "./uuid";
 
 const PULL_TABLES = [
@@ -66,24 +66,48 @@ export async function pullSync(
     if (options?.onProgress) {
       options.onProgress(tableName, records.length);
     }
-    // Prune stale local rows for authoritative tables:
-    // Any committed row (pending=0) whose sync_id isn't in the server's complete set
-    // is no longer owned by this session and should be soft-deleted locally.
+    // Prune stale local rows for authoritative tables.
+    // The server's response is the complete set — any local committed row
+    // (pending=0) not in it has been reassigned/removed and should be pruned.
+    // • Tables WITH is_deleted: soft-delete (set is_deleted=1) so foreign-key
+    //   references remain intact and the app doesn't crash on stale joins.
+    // • Tables WITHOUT is_deleted (e.g. truck_stock): hard-delete the missing rows
+    //   since they are server-managed and have no FK dependents on mobile.
+    // Wrapped in try/catch so one table failure never aborts the whole pull.
     if (authoritativeTables.includes(tableName)) {
-      const receivedIds = records
-        .map((r) => (r as Record<string, unknown>).sync_id as string)
-        .filter(Boolean);
-      if (receivedIds.length > 0) {
-        const placeholders = receivedIds.map(() => "?").join(", ");
-        await db.runAsync(
-          `UPDATE ${tableName} SET is_deleted = 1 WHERE is_deleted = 0 AND _pending = 0 AND sync_id NOT IN (${placeholders})`,
-          receivedIds,
-        );
-      } else {
-        // Server returned an empty authoritative set → soft-delete all committed local rows
-        await db.runAsync(
-          `UPDATE ${tableName} SET is_deleted = 1 WHERE is_deleted = 0 AND _pending = 0`,
-        );
+      try {
+        const receivedIds = records
+          .map((r) => (r as Record<string, unknown>).sync_id as string)
+          .filter(Boolean);
+        const hasSoftDelete = TABLES_WITH_SOFT_DELETE.has(tableName);
+
+        if (receivedIds.length > 0) {
+          const placeholders = receivedIds.map(() => "?").join(", ");
+          if (hasSoftDelete) {
+            await db.runAsync(
+              `UPDATE ${tableName} SET is_deleted = 1 WHERE is_deleted = 0 AND _pending = 0 AND sync_id NOT IN (${placeholders})`,
+              receivedIds,
+            );
+          } else {
+            await db.runAsync(
+              `DELETE FROM ${tableName} WHERE _pending = 0 AND sync_id NOT IN (${placeholders})`,
+              receivedIds,
+            );
+          }
+        } else {
+          // Server returned an empty authoritative set → prune all committed local rows
+          if (hasSoftDelete) {
+            await db.runAsync(
+              `UPDATE ${tableName} SET is_deleted = 1 WHERE is_deleted = 0 AND _pending = 0`,
+            );
+          } else {
+            await db.runAsync(
+              `DELETE FROM ${tableName} WHERE _pending = 0`,
+            );
+          }
+        }
+      } catch {
+        // Prune failure is non-fatal — stale rows will be pruned on the next pull
       }
     }
   }

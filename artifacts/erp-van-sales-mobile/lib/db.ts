@@ -350,7 +350,7 @@ export const TABLE_LABELS: [string, string][] = [
 ];
 
 // Tables that have an is_deleted soft-delete column
-const TABLES_WITH_SOFT_DELETE = new Set([
+export const TABLES_WITH_SOFT_DELETE = new Set([
   "categories", "products", "suppliers", "clients", "trucks", "users",
   "purchases", "invoices", "returns", "cash_transfers", "stock_transfers",
 ]);
