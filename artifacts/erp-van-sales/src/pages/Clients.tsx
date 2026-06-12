@@ -1,5 +1,8 @@
 import { useState } from "react";
 import { useListClients, useCreateClient, useUpdateClient } from "@workspace/api-client-react";
+import { usePwaSync } from "@/contexts/PwaSyncContext";
+import { useLocalClients, createLocalClient, updateLocalClient } from "@/lib/use-local-data";
+import { WifiOff } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { formatCurrency } from "@/lib/utils";
@@ -12,6 +15,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Plus, Pencil, Search, X } from "lucide-react";
 import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
+import { ClientProfileSheet } from "@/components/ClientProfileSheet";
 
 type ClientType = "retail" | "half_wholesale" | "wholesale";
 type Client = { id: number; name: string; phone?: string | null; clientType: ClientType; balance: number };
@@ -25,8 +29,18 @@ const CLIENT_TYPE_LABELS: Record<ClientType, string> = {
 const emptyForm = { name: "", phone: "", clientType: "retail" as ClientType };
 
 export default function Clients() {
+  const { online } = usePwaSync();
   const { data, isLoading } = useListClients();
-  const clients = Array.isArray(data) ? data : [];
+  const apiClients = Array.isArray(data) ? data : [];
+  const localClientRows = useLocalClients() ?? [];
+  const clients = apiClients.length > 0 ? apiClients : localClientRows.map(lc => ({
+    id: lc.id ?? 0,
+    name: lc.name,
+    phone: lc.phone ?? null,
+    clientType: (lc.client_type ?? "retail") as ClientType,
+    balance: lc.credit_balance ?? 0,
+    _syncId: lc.sync_id,
+  }));
   const queryClient = useQueryClient();
 
   const [search, setSearch] = useState("");
@@ -36,12 +50,21 @@ export default function Clients() {
 
   const [editOpen, setEditOpen] = useState(false);
   const [editId, setEditId] = useState<number | null>(null);
+  const [editSyncId, setEditSyncId] = useState<string | null>(null);
   const [editForm, setEditForm] = useState(emptyForm);
+
+  const [profileClient, setProfileClient] = useState<Client | null>(null);
+  const [profileOpen, setProfileOpen] = useState(false);
+
+  const openProfile = (c: Client) => {
+    setProfileClient(c);
+    setProfileOpen(true);
+  };
 
   const invalidate = () => queryClient.invalidateQueries({ queryKey: ["/api/clients"] });
 
   const filtered = search.trim()
-    ? clients.filter((c) => {
+    ? (clients as Client[]).filter((c) => {
         const q = search.trim().toLowerCase();
         return (
           c.name.toLowerCase().includes(q) ||
@@ -64,8 +87,9 @@ export default function Clients() {
     },
   });
 
-  const openEdit = (c: Client) => {
+  const openEdit = (c: Client & { _syncId?: string }) => {
     setEditId(c.id);
+    setEditSyncId(c._syncId ?? null);
     setEditForm({ name: c.name, phone: c.phone ?? "", clientType: (c.clientType as ClientType) || "retail" });
     setEditOpen(true);
   };
@@ -94,6 +118,12 @@ export default function Clients() {
 
   return (
     <div className="space-y-6">
+      {!online && (
+        <div className="flex items-center gap-2 rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-800 dark:border-amber-700 dark:bg-amber-950/30 dark:text-amber-300">
+          <WifiOff className="h-4 w-4 shrink-0" />
+          <span>أنت غير متصل — البيانات المعروضة من الذاكرة المحلية.</span>
+        </div>
+      )}
       <div className="flex justify-between items-center">
         <div>
           <h1 className="text-3xl font-bold tracking-tight">العملاء</h1>
@@ -130,7 +160,25 @@ export default function Clients() {
         <DialogContent className="sm:max-w-md">
           <DialogHeader><DialogTitle>إضافة عميل جديد</DialogTitle></DialogHeader>
           <form
-            onSubmit={(e) => { e.preventDefault(); if (!addForm.name.trim()) return; createClient.mutate({ data: buildBody(addForm) }); }}
+            onSubmit={async (e) => {
+              e.preventDefault();
+              if (!addForm.name.trim()) return;
+              if (!online) {
+                try {
+                  await createLocalClient({
+                    name: addForm.name.trim(),
+                    phone: addForm.phone.trim() || null,
+                    client_type: addForm.clientType,
+                    is_deleted: 0,
+                  });
+                  toast.success("تم حفظ العميل محلياً — ستتم المزامنة عند الاتصال");
+                  setAddForm(emptyForm);
+                  setAddOpen(false);
+                } catch { toast.error("خطأ في الحفظ المحلي"); }
+                return;
+              }
+              createClient.mutate({ data: buildBody(addForm) });
+            }}
             className="space-y-4"
           >
             <div className="space-y-2">
@@ -166,7 +214,25 @@ export default function Clients() {
         <DialogContent className="sm:max-w-md">
           <DialogHeader><DialogTitle>تعديل العميل</DialogTitle></DialogHeader>
           <form
-            onSubmit={(e) => { e.preventDefault(); if (!editId || !editForm.name.trim()) return; updateClient.mutate({ id: editId, data: buildBody(editForm) }); }}
+            onSubmit={async (e) => {
+              e.preventDefault();
+              if (!editId || !editForm.name.trim()) return;
+              if (!online && editSyncId) {
+                try {
+                  await updateLocalClient(editSyncId, {
+                    name: editForm.name.trim(),
+                    phone: editForm.phone.trim() || null,
+                    client_type: editForm.clientType,
+                  });
+                  toast.success("تم تحديث العميل محلياً — ستتم المزامنة عند الاتصال");
+                  setEditOpen(false);
+                  setEditId(null);
+                  setEditSyncId(null);
+                } catch { toast.error("خطأ في التحديث المحلي"); }
+                return;
+              }
+              updateClient.mutate({ id: editId, data: buildBody(editForm) });
+            }}
             className="space-y-4"
           >
             <div className="space-y-2">
@@ -197,8 +263,16 @@ export default function Clients() {
         </DialogContent>
       </Dialog>
 
+      {/* Client Profile Sheet */}
+      <ClientProfileSheet
+        client={profileClient}
+        open={profileOpen}
+        onClose={() => setProfileOpen(false)}
+      />
+
       <Card>
         <CardContent className="p-0">
+          <div className="overflow-x-auto">
           <Table>
             <TableHeader>
               <TableRow>
@@ -216,7 +290,11 @@ export default function Clients() {
                 <TableRow><TableCell colSpan={5} className="text-center py-8">{search.trim() ? "لا توجد نتائج مطابقة" : "لا يوجد عملاء"}</TableCell></TableRow>
               ) : (
                 filtered.map((c) => (
-                  <TableRow key={c.id}>
+                  <TableRow
+                    key={c.id}
+                    className="cursor-pointer hover:bg-muted/50"
+                    onClick={() => openProfile(c as Client)}
+                  >
                     <TableCell className="font-medium">{c.name}</TableCell>
                     <TableCell>{c.phone || "-"}</TableCell>
                     <TableCell>
@@ -227,7 +305,7 @@ export default function Clients() {
                     <TableCell className={`font-bold ${c.balance < 0 ? "text-destructive" : ""}`}>
                       {formatCurrency(Math.abs(c.balance))}
                     </TableCell>
-                    <TableCell className="text-center">
+                    <TableCell className="text-center" onClick={(e) => e.stopPropagation()}>
                       <Button size="sm" variant="outline" onClick={() => openEdit(c as Client)}>
                         <Pencil className="h-3.5 w-3.5 ml-1" /> تعديل
                       </Button>
@@ -237,6 +315,7 @@ export default function Clients() {
               )}
             </TableBody>
           </Table>
+          </div>
         </CardContent>
       </Card>
     </div>

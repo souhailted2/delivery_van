@@ -831,6 +831,27 @@ paths:
         "204":
           description: Deleted
 
+  /clients/{id}/profile:
+    get:
+      operationId: getClientProfile
+      tags: [clients]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      summary: Get client profile with purchase stats
+      responses:
+        "200":
+          description: Client profile
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ClientProfile"
+        "404":
+          description: Not found
+
   # TRUCKS
   /trucks:
     get:
@@ -2121,6 +2142,56 @@ components:
           nullable: true
       required:
         - name
+
+    ClientProfileTopProduct:
+      type: object
+      properties:
+        productId:
+          type: integer
+        productName:
+          type: string
+        totalQty:
+          type: number
+        totalValue:
+          type: number
+      required: [productId, productName, totalQty, totalValue]
+
+    ClientProfileLastInvoice:
+      type: object
+      properties:
+        id:
+          type: integer
+        totalAmount:
+          type: number
+        createdAt:
+          type: string
+          format: date-time
+        paymentType:
+          type: string
+      required: [id, totalAmount, createdAt, paymentType]
+
+    ClientProfile:
+      type: object
+      properties:
+        client:
+          $ref: "#/components/schemas/Client"
+        totalYearPurchases:
+          type: number
+        invoiceCount:
+          type: integer
+        creditInvoiceCount:
+          type: integer
+        debtBalance:
+          type: number
+        lastInvoice:
+          oneOf:
+            - $ref: "#/components/schemas/ClientProfileLastInvoice"
+            - type: "null"
+        topProducts:
+          type: array
+          items:
+            $ref: "#/components/schemas/ClientProfileTopProduct"
+      required: [client, totalYearPurchases, invoiceCount, creditInvoiceCount, debtBalance, topProducts]
 
     Truck:
       type: object
