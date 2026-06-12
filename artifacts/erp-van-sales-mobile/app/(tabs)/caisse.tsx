@@ -77,19 +77,18 @@ export default function CaisseScreen() {
       // For truck users the only movement is delivering cash to management ("in").
       const direction = isTruck ? "in" : formDirection;
       await db.runAsync(
-        `INSERT INTO cash_transfers (sync_id, truck_id, amount, direction, note, created_at, updated_at, is_deleted, _pending)
-         VALUES (?, ?, ?, ?, ?, ?, ?, 0, 1)`,
+        `INSERT INTO cash_transfers (sync_id, truck_id, amount, direction, note, status, created_at, updated_at, is_deleted, _pending)
+         VALUES (?, ?, ?, ?, ?, 'pending', ?, ?, 0, 1)`,
         [newSyncId(), Number(truckId), amount, direction, formNote.trim() || null, now, now]
       );
-      // تحديث رصيد الشاحنة محلياً: تحصيل/تسليم = يُنقص من الشاحنة, صرف = يزيد للشاحنة
-      const delta = direction === "in" ? -amount : amount;
-      await db.runAsync(
-        "UPDATE trucks SET cash_balance = cash_balance + ?, updated_at = ?, _pending = 1 WHERE id = ?",
-        [delta, now, Number(truckId)]
-      );
+      // ملاحظة: لا يتم خصم رصيد صندوق الشاحنة هنا. يبقى الطلب "قيد الانتظار"
+      // ولا يُخصم المبلغ إلا بعد موافقة الإدارة (تتم المعالجة على الخادم).
       setShowModal(false);
       triggerSync();
       load();
+      if (isTruck) {
+        Alert.alert("✅ تم الإرسال", "تم إرسال طلب تسليم الدفعة للإدارة. سيُخصم المبلغ بعد الموافقة.");
+      }
     } catch (e: any) {
       Alert.alert("خطأ", e?.message ?? "فشل الحفظ");
     } finally {
@@ -155,9 +154,24 @@ export default function CaisseScreen() {
                 <View style={{ flex: 1, alignItems: "flex-end" }}>
                   <Text style={[styles.truckName, { color: colors.foreground }]}>{item.truck_name ?? "—"}</Text>
                   {item.note ? <Text style={[styles.note, { color: colors.mutedForeground }]}>{item.note}</Text> : null}
-                  <Text style={[styles.date, { color: colors.mutedForeground }]}>
-                    {item.created_at ? new Date(item.created_at).toLocaleDateString("ar-DZ") : ""}
-                  </Text>
+                  <View style={styles.statusDateRow}>
+                    {(() => {
+                      const st = item.status ?? "pending";
+                      const cfg = st === "approved"
+                        ? { label: "مقبول", color: "#059669", bg: "#d1fae5" }
+                        : st === "rejected"
+                        ? { label: "مرفوض", color: colors.destructive, bg: colors.destructive + "22" }
+                        : { label: "قيد الانتظار", color: "#d97706", bg: "#fef3c7" };
+                      return (
+                        <View style={[styles.statusPill, { backgroundColor: cfg.bg }]}>
+                          <Text style={[styles.statusPillText, { color: cfg.color }]}>{cfg.label}</Text>
+                        </View>
+                      );
+                    })()}
+                    <Text style={[styles.date, { color: colors.mutedForeground }]}>
+                      {item.created_at ? new Date(item.created_at).toLocaleDateString("ar-DZ") : ""}
+                    </Text>
+                  </View>
                 </View>
                 <Text style={[styles.amount, { color: isIn ? "#22c55e" : colors.destructive }]}>
                   {isIn ? "+" : "-"}{fmt(Number(item.amount ?? 0))}
@@ -279,6 +293,9 @@ const styles = StyleSheet.create({
   truckName: { fontSize: 14, fontFamily: "Cairo_600SemiBold" },
   note: { fontSize: 12, fontFamily: "Cairo_400Regular" },
   date: { fontSize: 11, fontFamily: "Cairo_400Regular" },
+  statusDateRow: { flexDirection: "row-reverse", alignItems: "center", gap: 8, marginTop: 2 },
+  statusPill: { paddingHorizontal: 8, paddingVertical: 2, borderRadius: 10 },
+  statusPillText: { fontSize: 10, fontFamily: "Cairo_600SemiBold" },
   amount: { fontSize: 15, fontFamily: "Cairo_700Bold" },
   empty: { alignItems: "center", paddingVertical: 60, gap: 12 },
   emptyText: { fontSize: 14, fontFamily: "Cairo_400Regular" },

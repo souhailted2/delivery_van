@@ -30,12 +30,6 @@ const TIER_LABEL: Record<Tier, string> = {
   half_wholesale: "نصف جملة",
   wholesale: "جملة",
 };
-const TIER_SHORT: Record<Tier, string> = {
-  retail: "تجزئة",
-  half_wholesale: "نصف",
-  wholesale: "جملة",
-};
-
 function priceByType(p: Product, t: Tier): number {
   if (t === "half_wholesale") return Number(p.selling_price_half_wholesale ?? 0);
   if (t === "wholesale") return Number(p.selling_price_wholesale ?? 0);
@@ -119,14 +113,6 @@ export default function NewInvoiceScreen() {
   const setQty = (syncId: string, qty: number) => {
     if (qty <= 0) { removeItem(syncId); return; }
     setItems(items.map(i => i.product.sync_id === syncId ? { ...i, quantity: qty } : i));
-  };
-
-  const setTier = (syncId: string, pt: Tier) => {
-    setItems(items.map(i =>
-      i.product.sync_id === syncId
-        ? { ...i, priceType: pt, unitPrice: priceByType(i.product, pt), overridden: true }
-        : i
-    ));
   };
 
   const removeItem = (syncId: string) => {
@@ -263,25 +249,6 @@ export default function NewInvoiceScreen() {
               <TouchableOpacity onPress={() => setQty(product.sync_id, cartItem!.quantity + 1)} hitSlop={8}>
                 <Feather name="plus-circle" size={24} color={colors.primary} />
               </TouchableOpacity>
-            </View>
-            <View style={styles.tierChips}>
-              {(["retail", "half_wholesale", "wholesale"] as Tier[]).map(pt => {
-                const active = cartItem!.priceType === pt;
-                return (
-                  <TouchableOpacity
-                    key={pt}
-                    style={[styles.tierChip, {
-                      backgroundColor: active ? colors.primary : colors.secondary,
-                      borderColor: active ? colors.primary : colors.border,
-                    }]}
-                    onPress={() => setTier(product.sync_id, pt)}
-                  >
-                    <Text style={[styles.tierChipText, { color: active ? "#fff" : colors.mutedForeground }]}>
-                      {TIER_SHORT[pt]}
-                    </Text>
-                  </TouchableOpacity>
-                );
-              })}
             </View>
           </View>
         )}
@@ -527,9 +494,6 @@ const styles = StyleSheet.create({
     borderWidth: 1, borderRadius: 10, paddingHorizontal: 12, paddingVertical: 5,
   },
   qtyVal: { fontSize: 17, fontFamily: "Cairo_700Bold", minWidth: 28, textAlign: "center" },
-  tierChips: { flexDirection: "row-reverse", gap: 4, justifyContent: "space-between" },
-  tierChip: { flex: 1, alignItems: "center", paddingVertical: 4, borderRadius: 7, borderWidth: 1 },
-  tierChipText: { fontSize: 10, fontFamily: "Cairo_600SemiBold" },
 
   cartBar: {
     position: "absolute", left: 0, right: 0, bottom: 0,

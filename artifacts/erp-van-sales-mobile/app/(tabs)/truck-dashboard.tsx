@@ -7,6 +7,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { SyncBar } from "@/components/SyncBar";
 import { useAuth } from "@/contexts/AuthContext";
 import { useSync } from "@/contexts/SyncContext";
+import { apiFetch } from "@/lib/api";
 import { Client, getDb, Invoice } from "@/lib/db";
 import { useColors } from "@/hooks/useColors";
 
@@ -152,6 +153,21 @@ export default function TruckDashboardScreen() {
   const [stock, setStock] = useState<StockRow[]>([]);
   const [tab, setTab] = useState<TabKey>("invoices");
   const [refreshing, setRefreshing] = useState(false);
+  const [pendingDispatch, setPendingDispatch] = useState(false);
+
+  const checkDispatch = useCallback(async () => {
+    try {
+      const r = await apiFetch("/dispatches/inbox");
+      if (r.ok) {
+        const data = await r.json();
+        setPendingDispatch(!!data && data.status === "pending");
+      } else {
+        setPendingDispatch(false);
+      }
+    } catch {
+      setPendingDispatch(false);
+    }
+  }, []);
 
   const load = useCallback(async () => {
     const db = await getDb();
@@ -216,12 +232,12 @@ export default function TruckDashboardScreen() {
     }
   }, [user?.truckId]);
 
-  useEffect(() => { load(); }, [load]);
+  useEffect(() => { load(); checkDispatch(); }, [load, checkDispatch]);
 
   const onRefresh = async () => {
     setRefreshing(true);
     triggerSync();
-    await load();
+    await Promise.all([load(), checkDispatch()]);
     setRefreshing(false);
   };
 
@@ -282,6 +298,23 @@ export default function TruckDashboardScreen() {
           <Text style={styles.cashVal}>{fmt(truck?.cash_balance ?? 0)}</Text>
         </TouchableOpacity>
       </View>
+
+      {pendingDispatch && (
+        <TouchableOpacity
+          style={styles.dispatchAlert}
+          activeOpacity={0.85}
+          onPress={() => router.push("/(tabs)/dispatch")}
+        >
+          <View style={styles.dispatchAlertIcon}>
+            <Feather name="download" size={18} color="#fff" />
+          </View>
+          <View style={{ flex: 1, alignItems: "flex-end" }}>
+            <Text style={styles.dispatchAlertTitle}>بضاعة بانتظار الاستلام</Text>
+            <Text style={styles.dispatchAlertSub}>اضغط لاستلام البضاعة المرسلة من الإدارة</Text>
+          </View>
+          <Feather name="chevron-left" size={18} color="#fff" />
+        </TouchableOpacity>
+      )}
 
       <View style={styles.statsRow}>
         <StatCard label="مبيعات اليوم" value={fmt(todaySales)} icon="dollar-sign" colors={colors} />
@@ -366,6 +399,16 @@ const styles = StyleSheet.create({
   cashHintText: { color: "#ffffffcc", fontSize: 10, fontFamily: "Cairo_400Regular" },
   cashVal: { color: "#fff", fontSize: 22, fontFamily: "Cairo_700Bold" },
 
+  dispatchAlert: {
+    flexDirection: "row-reverse", alignItems: "center", gap: 10,
+    backgroundColor: "#d97706", borderRadius: 14, padding: 14, marginBottom: 12,
+  },
+  dispatchAlertIcon: {
+    width: 38, height: 38, borderRadius: 19, backgroundColor: "#ffffff33",
+    alignItems: "center", justifyContent: "center",
+  },
+  dispatchAlertTitle: { color: "#fff", fontSize: 14, fontFamily: "Cairo_700Bold" },
+  dispatchAlertSub: { color: "#ffffffdd", fontSize: 11, fontFamily: "Cairo_400Regular" },
   statsRow: { flexDirection: "row-reverse", gap: 8, marginBottom: 12 },
   statCard: {
     flex: 1, borderRadius: 14, borderWidth: 1, padding: 12, alignItems: "center", gap: 6,

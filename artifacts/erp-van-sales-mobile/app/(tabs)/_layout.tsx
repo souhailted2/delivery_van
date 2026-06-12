@@ -117,7 +117,7 @@ function ClassicTabLayout() {
           title: "العملاء",
           tabBarLabel: "العملاء",
           tabBarIcon: ({ color }) => <Feather name="users" size={22} color={color} />,
-          href: isTruck ? null : undefined,
+          href: undefined,
         }}
       />
 
@@ -183,7 +183,7 @@ function ClassicTabLayout() {
           title: "استلام البضاعة",
           tabBarLabel: "التحميل",
           tabBarIcon: ({ color }) => <Feather name="download" size={22} color={color} />,
-          href: isAdmin || isTruck ? null : undefined,
+          href: isTruck ? undefined : null,
         }}
       />
 
@@ -194,7 +194,7 @@ function ClassicTabLayout() {
           title: "الصندوق",
           tabBarLabel: "الصندوق",
           tabBarIcon: ({ color }) => <Feather name="dollar-sign" size={22} color={color} />,
-          href: isTruck ? null : undefined,
+          href: undefined,
         }}
       />
 

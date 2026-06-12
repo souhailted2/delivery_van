@@ -6,11 +6,13 @@ import {
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Client, getDb } from "@/lib/db";
+import { useSync } from "@/contexts/SyncContext";
 import { useColors } from "@/hooks/useColors";
 
 const TIER_LABEL: Record<string, string> = {
   retail: "تجزئة", half_wholesale: "نصف جملة", wholesale: "جملة",
 };
+const TIERS = ["retail", "half_wholesale", "wholesale"] as const;
 const fmt = (n: number) => Number(n ?? 0).toLocaleString("fr-DZ") + " د.ج";
 
 interface RecentInvoice {
@@ -22,6 +24,7 @@ interface TopProduct { product_name: string; total_qty: number; }
 export default function ClientProfileScreen() {
   const colors = useColors();
   const insets = useSafeAreaInsets();
+  const { triggerSync } = useSync();
   const { syncId } = useLocalSearchParams<{ syncId: string }>();
 
   const [client, setClient] = useState<Client | null>(null);
@@ -89,6 +92,18 @@ export default function ClientProfileScreen() {
 
   useEffect(() => { load(); }, [load]);
 
+  const updateTier = async (tier: string) => {
+    if (!client || client.client_type === tier) return;
+    const db = await getDb();
+    if (!db) return;
+    await db.runAsync(
+      "UPDATE clients SET client_type = ?, _pending = 1, updated_at = ? WHERE sync_id = ?",
+      [tier, new Date().toISOString(), client.sync_id]
+    );
+    setClient({ ...client, client_type: tier });
+    triggerSync();
+  };
+
   const credit = Number(client?.credit_balance ?? 0);
 
   return (
@@ -115,16 +130,30 @@ export default function ClientProfileScreen() {
               <Text style={styles.avatarText}>{client.name.charAt(0)}</Text>
             </View>
             <Text style={styles.clientName}>{client.name}</Text>
-            <View style={styles.headerMeta}>
-              <View style={styles.headerBadge}>
-                <Text style={styles.headerBadgeText}>{TIER_LABEL[client.client_type ?? "retail"] ?? "تجزئة"}</Text>
-              </View>
-              {client.phone ? (
+            {client.phone ? (
+              <View style={styles.headerMeta}>
                 <View style={styles.headerBadge}>
                   <Feather name="phone" size={11} color="#fff" />
                   <Text style={styles.headerBadgeText}>{client.phone}</Text>
                 </View>
-              ) : null}
+              </View>
+            ) : null}
+            <View style={styles.tierEditRow}>
+              {TIERS.map(t => {
+                const active = (client.client_type ?? "retail") === t;
+                return (
+                  <TouchableOpacity
+                    key={t}
+                    style={[styles.tierEditChip, { backgroundColor: active ? "#fff" : "#ffffff2e" }]}
+                    onPress={() => updateTier(t)}
+                    activeOpacity={0.8}
+                  >
+                    <Text style={[styles.tierEditChipText, { color: active ? colors.primary : "#fff" }]}>
+                      {TIER_LABEL[t]}
+                    </Text>
+                  </TouchableOpacity>
+                );
+              })}
             </View>
           </View>
 
@@ -232,6 +261,9 @@ const styles = StyleSheet.create({
     backgroundColor: "#ffffff2e", paddingHorizontal: 10, paddingVertical: 4, borderRadius: 10,
   },
   headerBadgeText: { color: "#fff", fontSize: 12, fontFamily: "Cairo_600SemiBold" },
+  tierEditRow: { flexDirection: "row-reverse", gap: 6, marginTop: 4 },
+  tierEditChip: { paddingHorizontal: 12, paddingVertical: 5, borderRadius: 10 },
+  tierEditChipText: { fontSize: 12, fontFamily: "Cairo_600SemiBold" },
 
   creditCard: {
     flexDirection: "row-reverse", alignItems: "center", justifyContent: "space-between",

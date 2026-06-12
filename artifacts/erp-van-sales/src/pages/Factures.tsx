@@ -3,6 +3,9 @@ import {
   useListInvoices, useCreateInvoice,
   useListClients, useListTrucks, useListProducts,
 } from "@workspace/api-client-react";
+import { usePwaSync } from "@/contexts/PwaSyncContext";
+import { useLocalClients, useLocalTrucks, useLocalProducts, createLocalInvoice } from "@/lib/use-local-data";
+import { WifiOff } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { formatCurrency } from "@/lib/utils";
@@ -12,9 +15,10 @@ import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Plus, Trash2, CalendarDays, Search, X } from "lucide-react";
+import { Plus, Trash2, CalendarDays, Search, X, Printer } from "lucide-react";
 import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
+import { InvoicePrint } from "@/components/InvoicePrint";
 
 type PriceType = "retail" | "half_wholesale" | "wholesale";
 
@@ -41,14 +45,50 @@ function getPriceForType(product: { sellingPriceRetail: number; sellingPriceHalf
 }
 
 export default function Factures() {
+  const { online } = usePwaSync();
+
   const { data, isLoading } = useListInvoices();
   const invoices = Array.isArray(data) ? data : [];
+
   const { data: clientsData } = useListClients();
-  const clients = Array.isArray(clientsData) ? clientsData : [];
+  const apiClients = Array.isArray(clientsData) ? clientsData : [];
+  const localClients = useLocalClients() ?? [];
+
   const { data: trucksData } = useListTrucks();
-  const trucks = Array.isArray(trucksData) ? trucksData : [];
+  const apiTrucks = Array.isArray(trucksData) ? trucksData : [];
+  const localTrucks = useLocalTrucks() ?? [];
+
   const { data: productsData } = useListProducts();
-  const products = Array.isArray(productsData) ? productsData : [];
+  const apiProducts = Array.isArray(productsData) ? productsData : [];
+  const localProducts = useLocalProducts() ?? [];
+
+  // Offline fallback: use Dexie data when API data is unavailable
+  const clients = apiClients.length > 0 ? apiClients : localClients.map(lc => ({
+    id: lc.id ?? 0,
+    name: lc.name,
+    phone: lc.phone ?? null,
+    clientType: (lc.client_type ?? "retail") as "retail" | "half_wholesale" | "wholesale",
+    balance: lc.credit_balance ?? 0,
+  }));
+  const trucks = apiTrucks.length > 0 ? apiTrucks : localTrucks.map(lt => ({
+    id: lt.id ?? 0,
+    name: lt.name,
+    plateNumber: lt.plate_number ?? null,
+    branchId: lt.branch_id ?? null,
+    cashBalance: lt.cash_balance ?? 0,
+  }));
+  const products = apiProducts.length > 0 ? apiProducts : localProducts.map(lp => ({
+    id: lp.id ?? 0,
+    name: lp.name,
+    barcode: lp.barcode ?? null,
+    stockQuantity: lp.stock_quantity ?? 0,
+    sellingPriceRetail: lp.selling_price_retail ?? 0,
+    sellingPriceHalfWholesale: lp.selling_price_half_wholesale ?? 0,
+    sellingPriceWholesale: lp.selling_price_wholesale ?? 0,
+    purchasePrice: lp.purchase_price ?? 0,
+    imageUrl: lp.image_url ?? null,
+    unit: lp.unit ?? null,
+  }));
   const queryClient = useQueryClient();
 
   const [open, setOpen] = useState(false);
@@ -61,6 +101,9 @@ export default function Factures() {
   const [search, setSearch] = useState("");
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
+
+  // Print
+  const [printInvoiceId, setPrintInvoiceId] = useState<number | null>(null);
 
   const toDateStr = (d: Date) => {
     const y = d.getFullYear();
@@ -77,7 +120,6 @@ export default function Factures() {
 
   const setThisWeek = () => {
     const now = new Date();
-    // Week starts on Saturday (day 6) for Arabic/Algerian locale
     const day = now.getDay();
     const diffToSat = (day + 1) % 7;
     const start = new Date(now);
@@ -122,7 +164,6 @@ export default function Factures() {
     if (client?.clientType) {
       const pt = CLIENT_TYPE_TO_PRICE_TYPE[client.clientType] ?? "retail";
       setDefaultPriceType(pt);
-      // Update all existing item rows priceType + unitPrice
       setItems((prev) =>
         prev.map((it) => {
           const prod = products.find((p) => String(p.id) === it.productId);
@@ -154,12 +195,10 @@ export default function Factures() {
       prev.map((it, i) => {
         if (i !== idx) return it;
         const updated = { ...it, [field]: value };
-        // Auto-fill price when product changes
         if (field === "productId") {
           const prod = products.find((p) => String(p.id) === value);
           if (prod) updated.unitPrice = String(getPriceForType(prod, updated.priceType));
         }
-        // Recalculate price when priceType changes
         if (field === "priceType") {
           const prod = products.find((p) => String(p.id) === it.productId);
           if (prod) updated.unitPrice = String(getPriceForType(prod, value as PriceType));
@@ -172,12 +211,44 @@ export default function Factures() {
   const lineTotal = (it: InvoiceItem) => Number(it.quantity) * Number(it.unitPrice);
   const grandTotal = items.reduce((s, it) => s + lineTotal(it), 0);
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!clientId) { toast.error("اختر العميل"); return; }
     if (!truckId) { toast.error("اختر الشاحنة"); return; }
     const valid = items.filter((it) => it.productId && Number(it.quantity) > 0);
     if (valid.length === 0) { toast.error("أضف منتجاً واحداً على الأقل"); return; }
+
+    if (!online) {
+      // Offline: save directly to IndexedDB, will sync when back online
+      try {
+        await createLocalInvoice(
+          {
+            client_id: Number(clientId),
+            truck_id: Number(truckId),
+            payment_method: paymentType,
+            payment_status: paymentType === "cash" ? "paid" : "unpaid",
+            total_amount: grandTotal,
+            paid_amount: paymentType === "cash" ? grandTotal : 0,
+            is_deleted: 0,
+          },
+          valid.map((it) => ({
+            product_id: Number(it.productId),
+            product_name: products.find((p) => String(p.id) === it.productId)?.name ?? "",
+            quantity: Number(it.quantity),
+            unit_price: Number(it.unitPrice),
+            discount: 0,
+            subtotal: lineTotal(it),
+          }))
+        );
+        toast.success("تم حفظ الفاتورة محلياً — ستتم المزامنة عند الاتصال بالإنترنت");
+        setClientId(""); setTruckId(""); setPaymentType("cash");
+        setDefaultPriceType("retail"); setItems([emptyItem()]); setOpen(false);
+      } catch {
+        toast.error("خطأ في الحفظ المحلي");
+      }
+      return;
+    }
+
     createInvoice.mutate({
       data: {
         clientId: Number(clientId),
@@ -195,6 +266,12 @@ export default function Factures() {
 
   return (
     <div className="space-y-6">
+      {!online && (
+        <div className="flex items-center gap-2 rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-800 dark:border-amber-700 dark:bg-amber-950/30 dark:text-amber-300">
+          <WifiOff className="h-4 w-4 shrink-0" />
+          <span>أنت غير متصل — يمكنك إنشاء فواتير وستتم مزامنتها تلقائياً عند الاتصال.</span>
+        </div>
+      )}
       <div className="flex justify-between items-center">
         <div>
           <h1 className="text-3xl font-bold tracking-tight">الفواتير</h1>
@@ -257,25 +334,6 @@ export default function Factures() {
                 </Select>
               </div>
 
-              {/* Default price type — shows what was auto-set from client */}
-              <div className="space-y-2">
-                <Label>نوع السعر الافتراضي (حسب العميل)</Label>
-                <Select value={defaultPriceType} onValueChange={(v) => {
-                  const pt = v as PriceType;
-                  setDefaultPriceType(pt);
-                  setItems((prev) => prev.map((it) => {
-                    const prod = products.find((p) => String(p.id) === it.productId);
-                    return { ...it, priceType: pt, unitPrice: prod ? String(getPriceForType(prod, pt)) : it.unitPrice };
-                  }));
-                }}>
-                  <SelectTrigger><SelectValue /></SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="retail">تجزئة</SelectItem>
-                    <SelectItem value="half_wholesale">نصف جملة</SelectItem>
-                    <SelectItem value="wholesale">جملة</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
             </div>
 
             {/* Items */}
@@ -289,11 +347,11 @@ export default function Factures() {
               </div>
 
               <div className="space-y-2">
-                <div className="grid grid-cols-[2fr_70px_120px_90px_36px] gap-2 text-xs text-muted-foreground px-1">
-                  <span>المنتج</span><span>الكمية</span><span>نوع السعر</span><span>السعر</span><span></span>
+                <div className="grid grid-cols-[2fr_70px_110px_36px] gap-2 text-xs text-muted-foreground px-1">
+                  <span>المنتج</span><span>الكمية</span><span>السعر</span><span></span>
                 </div>
                 {items.map((it, idx) => (
-                  <div key={idx} className="grid grid-cols-[2fr_70px_120px_90px_36px] gap-2 items-center">
+                  <div key={idx} className="grid grid-cols-[2fr_70px_110px_36px] gap-2 items-center">
                     <Select value={it.productId} onValueChange={(v) => updateItem(idx, "productId", v)}>
                       <SelectTrigger className="h-9"><SelectValue placeholder="اختر..." /></SelectTrigger>
                       <SelectContent>
@@ -304,14 +362,6 @@ export default function Factures() {
                     </Select>
                     <Input type="number" min="1" className="h-9" value={it.quantity}
                       onChange={(e) => updateItem(idx, "quantity", e.target.value)} />
-                    <Select value={it.priceType} onValueChange={(v) => updateItem(idx, "priceType", v)}>
-                      <SelectTrigger className="h-9"><SelectValue /></SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="retail">تجزئة</SelectItem>
-                        <SelectItem value="half_wholesale">نصف جملة</SelectItem>
-                        <SelectItem value="wholesale">جملة</SelectItem>
-                      </SelectContent>
-                    </Select>
                     <Input type="number" min="0" className="h-9" value={it.unitPrice}
                       onChange={(e) => updateItem(idx, "unitPrice", e.target.value)} />
                     <Button type="button" size="icon" variant="ghost" className="h-9 w-9 text-destructive"
@@ -339,6 +389,12 @@ export default function Factures() {
           </form>
         </DialogContent>
       </Dialog>
+
+      {/* Print Modal */}
+      <InvoicePrint
+        invoiceId={printInvoiceId}
+        onClose={() => setPrintInvoiceId(null)}
+      />
 
       {/* Search */}
       <div className="relative">
@@ -407,6 +463,7 @@ export default function Factures() {
       {/* Invoices Table */}
       <Card>
         <CardContent className="p-0">
+          <div className="overflow-x-auto">
           <Table>
             <TableHeader>
               <TableRow>
@@ -416,13 +473,14 @@ export default function Factures() {
                 <TableHead>الشاحنة</TableHead>
                 <TableHead>طريقة الدفع</TableHead>
                 <TableHead>المبلغ</TableHead>
+                <TableHead className="w-16 text-center">طباعة</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
               {isLoading ? (
-                <TableRow><TableCell colSpan={6} className="text-center py-8">جارٍ التحميل...</TableCell></TableRow>
+                <TableRow><TableCell colSpan={7} className="text-center py-8">جارٍ التحميل...</TableCell></TableRow>
               ) : filteredInvoices.length === 0 ? (
-                <TableRow><TableCell colSpan={6} className="text-center py-8">
+                <TableRow><TableCell colSpan={7} className="text-center py-8">
                   {search.trim() ? "لا توجد نتائج مطابقة" : (dateFrom || dateTo) ? "لا توجد فواتير في هذه الفترة" : "لا توجد فواتير"}
                 </TableCell></TableRow>
               ) : (
@@ -438,13 +496,26 @@ export default function Factures() {
                       </Badge>
                     </TableCell>
                     <TableCell className="font-bold">{formatCurrency(i.totalAmount)}</TableCell>
+                    <TableCell className="text-center">
+                      <Button
+                        size="icon"
+                        variant="ghost"
+                        className="h-8 w-8 text-primary hover:text-primary hover:bg-primary/10"
+                        title="طباعة الفاتورة"
+                        onClick={() => setPrintInvoiceId(i.id)}
+                      >
+                        <Printer className="h-4 w-4" />
+                      </Button>
+                    </TableCell>
                   </TableRow>
                 ))
               )}
             </TableBody>
           </Table>
+          </div>
         </CardContent>
       </Card>
     </div>
   );
 }
+
