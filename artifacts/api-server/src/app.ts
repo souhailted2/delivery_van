@@ -3,8 +3,25 @@ import cors from "cors";
 import pinoHttp from "pino-http";
 import cookieParser from "cookie-parser";
 import session from "express-session";
+import connectPgSimple from "connect-pg-simple";
+import { pool } from "@workspace/db";
 import router from "./routes";
 import { logger } from "./lib/logger";
+
+const PgSession = connectPgSimple(session);
+
+// connect-pg-simple's `createTableIfMissing` reads a bundled table.sql file that
+// is not present in our esbuild output, so we create the session table ourselves.
+export async function ensureSessionTable(): Promise<void> {
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS "session" (
+      "sid" varchar NOT NULL PRIMARY KEY,
+      "sess" json NOT NULL,
+      "expire" timestamp(6) NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS "IDX_session_expire" ON "session" ("expire");
+  `);
+}
 
 const app: Express = express();
 
@@ -37,13 +54,19 @@ app.use(express.urlencoded({ extended: true }));
 app.use(cookieParser());
 
 app.use(session({
+  store: new PgSession({
+    pool,
+    tableName: "session",
+    createTableIfMissing: false,
+  }),
   secret: process.env.SESSION_SECRET || "erp-van-sales-secret-dzd",
   resave: false,
   saveUninitialized: false,
+  rolling: true, // reset 30-day expiry on every request
   cookie: {
     secure: false,
     httpOnly: true,
-    maxAge: 7 * 24 * 60 * 60 * 1000, // 7 days
+    maxAge: 30 * 24 * 60 * 60 * 1000, // 30 days
   },
 }));
 
