@@ -73,7 +73,7 @@ export default function NewInvoiceScreen() {
           : db.getAllAsync<Client>("SELECT * FROM clients WHERE is_deleted = 0 ORDER BY name"),
         truckId !== null
           ? db.getAllAsync<Product>(
-              `SELECT p.* FROM products p
+              `SELECT p.*, ts.quantity as truck_quantity FROM products p
                INNER JOIN truck_stock ts ON ts.product_id = p.id AND ts.truck_id = ? AND ts.quantity > 0
                WHERE p.is_deleted = 0 ORDER BY p.name`,
               [truckId]
@@ -231,6 +231,11 @@ export default function NewInvoiceScreen() {
         <View style={styles.catPriceRow}>
           <Text style={[styles.catPrice, { color: colors.primary }]}>{price.toLocaleString("fr-DZ")} د.ج</Text>
         </View>
+        {(product as any).truck_quantity !== undefined && (
+          <Text style={[styles.stockHint, { color: colors.mutedForeground }]}>
+            في الشاحنة: {Number((product as any).truck_quantity).toFixed(0)}
+          </Text>
+        )}
 
         {!inCart ? (
           <TouchableOpacity
@@ -482,6 +487,7 @@ const styles = StyleSheet.create({
   catName: { fontSize: 13, fontFamily: "Cairo_600SemiBold", textAlign: "center", minHeight: 36 },
   catPriceRow: { flexDirection: "row-reverse", alignItems: "center", gap: 6, flexWrap: "wrap", justifyContent: "center" },
   catPrice: { fontSize: 14, fontFamily: "Cairo_700Bold" },
+  stockHint: { fontSize: 10, fontFamily: "Cairo_400Regular", textAlign: "center" },
   tierBadge: { paddingHorizontal: 7, paddingVertical: 2, borderRadius: 6 },
   tierBadgeText: { fontSize: 10, fontFamily: "Cairo_600SemiBold" },
   addBtn: {

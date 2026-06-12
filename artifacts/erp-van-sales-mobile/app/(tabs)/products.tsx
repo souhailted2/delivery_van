@@ -37,8 +37,9 @@ function ProductImage({ item }: { item: Product }) {
   );
 }
 
-function ProductCard({ item, colors }: { item: Product & { category_name?: string }; colors: any }) {
+function ProductCard({ item, colors }: { item: Product & { category_name?: string; truck_quantity?: number }; colors: any }) {
   const hasImage = !!(item.local_image_uri ?? item.image_url);
+  const displayQty = item.truck_quantity !== undefined ? item.truck_quantity : (item.stock_quantity ?? 0);
   const prices = [
     { label: "تجزئة", value: item.selling_price_retail },
     { label: "نصف جملة", value: item.selling_price_half_wholesale },
@@ -75,8 +76,8 @@ function ProductCard({ item, colors }: { item: Product & { category_name?: strin
           </View>
         ))}
         <View style={styles.priceItem}>
-          <Text style={[styles.priceVal, { color: colors.foreground }]}>{Number(item.stock_quantity ?? 0).toFixed(0)}</Text>
-          <Text style={[styles.priceLabel, { color: colors.mutedForeground }]}>المخزون</Text>
+          <Text style={[styles.priceVal, { color: colors.foreground }]}>{Number(displayQty).toFixed(0)}</Text>
+          <Text style={[styles.priceLabel, { color: colors.mutedForeground }]}>في الشاحنة</Text>
         </View>
       </View>
     </View>
@@ -115,8 +116,8 @@ export default function ProductsScreen() {
     const truckId = user?.truckId ?? null;
     let rows: (Product & { category_name?: string })[];
     if (truckId !== null) {
-      rows = await db.getAllAsync<Product & { category_name?: string }>(
-        `SELECT p.*, c.name as category_name FROM products p
+      rows = await db.getAllAsync<Product & { category_name?: string; truck_quantity?: number }>(
+        `SELECT p.*, c.name as category_name, ts.quantity as truck_quantity FROM products p
          LEFT JOIN categories c ON p.category_id = c.id
          INNER JOIN truck_stock ts ON ts.product_id = p.id AND ts.truck_id = ? AND ts.quantity > 0
          WHERE p.is_deleted = 0 ${q ? "AND p.name LIKE ?" : ""}

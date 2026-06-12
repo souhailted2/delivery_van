@@ -12,11 +12,7 @@ import { Client, getDb } from "@/lib/db";
 import { newSyncId } from "@/lib/uuid";
 import { useColors } from "@/hooks/useColors";
 
-const CLIENT_TYPE_LABELS: Record<string, string> = {
-  retail: "تجزئة", half_wholesale: "نصف جملة", wholesale: "جملة",
-};
 type TierKey = "retail" | "half_wholesale" | "wholesale";
-const TIER_KEYS: TierKey[] = ["retail", "half_wholesale", "wholesale"];
 
 function ClientCard({ item, colors }: { item: Client; colors: any }) {
   const balance = Number(item.credit_balance ?? 0);
@@ -31,16 +27,9 @@ function ClientCard({ item, colors }: { item: Client; colors: any }) {
           <Text style={[styles.name, { color: colors.foreground }]}>{item.name}</Text>
           {item.phone && <Text style={[styles.phone, { color: colors.mutedForeground }]}>{item.phone}</Text>}
         </View>
-        <View style={{ alignItems: "center" }}>
-          <Text style={[styles.balance, { color: balanceColor }]}>
-            {balance.toLocaleString("fr-DZ")} د.ج
-          </Text>
-          <View style={[styles.typeBadge, { backgroundColor: colors.secondary }]}>
-            <Text style={[styles.typeText, { color: colors.mutedForeground }]}>
-              {CLIENT_TYPE_LABELS[item.client_type ?? "retail"] ?? item.client_type}
-            </Text>
-          </View>
-        </View>
+        <Text style={[styles.balance, { color: balanceColor }]}>
+          {balance.toLocaleString("fr-DZ")} د.ج
+        </Text>
       </View>
     </View>
   );
@@ -56,7 +45,6 @@ export default function ClientsScreen() {
   const [showAddModal, setShowAddModal] = useState(false);
   const [newName, setNewName] = useState("");
   const [newPhone, setNewPhone] = useState("");
-  const [newTier, setNewTier] = useState<TierKey>("retail");
   const nameInputRef = useRef<TextInput>(null);
 
   const load = useCallback(async () => {
@@ -84,7 +72,6 @@ export default function ClientsScreen() {
   const handleAdd = () => {
     setNewName("");
     setNewPhone("");
-    setNewTier("retail");
     setShowAddModal(true);
     setTimeout(() => nameInputRef.current?.focus(), 200);
   };
@@ -98,7 +85,7 @@ export default function ClientsScreen() {
     await db.runAsync(
       `INSERT INTO clients (sync_id, name, phone, client_type, truck_id, is_deleted, _pending, updated_at, created_at)
        VALUES (?, ?, ?, ?, ?, 0, 1, ?, ?)`,
-      [newSyncId(), newName.trim(), newPhone.trim() || null, newTier, truckId, new Date().toISOString(), new Date().toISOString()]
+      [newSyncId(), newName.trim(), newPhone.trim() || null, "retail", truckId, new Date().toISOString(), new Date().toISOString()]
     );
     setShowAddModal(false);
     triggerSync();
@@ -141,26 +128,6 @@ export default function ClientsScreen() {
               returnKeyType="done"
               onSubmitEditing={confirmAdd}
             />
-            <Text style={[styles.tierLabel, { color: colors.mutedForeground }]}>نوع السعر</Text>
-            <View style={styles.tierPicker}>
-              {TIER_KEYS.map(t => {
-                const active = newTier === t;
-                return (
-                  <TouchableOpacity
-                    key={t}
-                    style={[styles.tierOption, {
-                      backgroundColor: active ? colors.primary : colors.background,
-                      borderColor: active ? colors.primary : colors.border,
-                    }]}
-                    onPress={() => setNewTier(t)}
-                  >
-                    <Text style={[styles.tierOptionText, { color: active ? "#fff" : colors.foreground }]}>
-                      {CLIENT_TYPE_LABELS[t]}
-                    </Text>
-                  </TouchableOpacity>
-                );
-              })}
-            </View>
             <View style={styles.modalActions}>
               <TouchableOpacity
                 style={[styles.modalBtn, { backgroundColor: colors.secondary }]}
@@ -236,8 +203,6 @@ const styles = StyleSheet.create({
   name: { fontSize: 15, fontFamily: "Cairo_600SemiBold" },
   phone: { fontSize: 12, fontFamily: "Cairo_400Regular" },
   balance: { fontSize: 14, fontFamily: "Cairo_700Bold" },
-  typeBadge: { marginTop: 4, paddingHorizontal: 6, paddingVertical: 2, borderRadius: 6 },
-  typeText: { fontSize: 11, fontFamily: "Cairo_400Regular" },
   empty: { alignItems: "center", paddingVertical: 60, gap: 12 },
   emptyText: { fontSize: 14, fontFamily: "Cairo_400Regular", textAlign: "center" },
   overlay: {
@@ -253,10 +218,6 @@ const styles = StyleSheet.create({
     borderWidth: 1, borderRadius: 10, paddingHorizontal: 14, height: 46,
     fontSize: 14, fontFamily: "Cairo_400Regular",
   },
-  tierLabel: { fontSize: 12, fontFamily: "Cairo_600SemiBold", textAlign: "right", marginTop: 2 },
-  tierPicker: { flexDirection: "row-reverse", gap: 8 },
-  tierOption: { flex: 1, height: 40, borderRadius: 10, borderWidth: 1, alignItems: "center", justifyContent: "center" },
-  tierOptionText: { fontSize: 12, fontFamily: "Cairo_600SemiBold" },
   modalActions: { flexDirection: "row-reverse", gap: 10, marginTop: 4 },
   modalBtn: {
     flex: 1, height: 44, borderRadius: 10,
