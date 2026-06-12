@@ -181,7 +181,7 @@ export default function TruckDashboardScreen() {
     );
     setTruck(truckRow ?? null);
 
-    const truckId = truckRow?.id ?? null;
+    const truckId = truckRow?.id ?? user?.truckId ?? null;
     const invFilter = truckId ? "AND i.truck_id = ?" : "";
     const cntFilter = truckId ? "AND truck_id = ?" : "";
     const idArg = truckId ? [truckId] : [];
