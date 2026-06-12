@@ -60,6 +60,10 @@ export default function NewInvoiceScreen() {
   const [clientSearch, setClientSearch] = useState("");
   const [productSearch, setProductSearch] = useState("");
 
+  // Inline quantity card state
+  const [activeProductId, setActiveProductId] = useState<string | null>(null);
+  const [inputQty, setInputQty] = useState("");
+
   const clientTier = resolveTier(selectedClient);
 
   useEffect(() => {
@@ -99,29 +103,46 @@ export default function NewInvoiceScreen() {
   );
   const filteredProducts = products.filter(p => p.name.includes(productSearch));
 
-  const addProduct = (product: Product) => {
-    const existing = items.find(i => i.product.sync_id === product.sync_id);
-    if (existing) {
-      setItems(items.map(i =>
-        i.product.sync_id === product.sync_id ? { ...i, quantity: i.quantity + 1 } : i
-      ));
-    } else {
-      setItems([...items, {
-        product, quantity: 1,
-        priceType: clientTier,
-        unitPrice: priceByType(product, clientTier),
-      }]);
-    }
+  // Open the inline quantity card for a product
+  const openQtyCard = (product: Product, currentQty?: number) => {
+    setActiveProductId(product.sync_id);
+    setInputQty(currentQty !== undefined ? String(currentQty) : "");
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
   };
 
-  const setQty = (syncId: string, qty: number) => {
-    if (qty <= 0) { removeItem(syncId); return; }
-    setItems(items.map(i => i.product.sync_id === syncId ? { ...i, quantity: qty } : i));
+  // Confirm the quantity entered in the card
+  const confirmQty = (product: Product, existingItem: InvoiceItem | undefined) => {
+    const raw = inputQty.replace(",", ".").trim();
+    const qty = parseFloat(raw);
+    if (!isNaN(qty) && qty > 0) {
+      if (existingItem) {
+        setItems(prev => prev.map(i =>
+          i.product.sync_id === product.sync_id ? { ...i, quantity: qty } : i
+        ));
+      } else {
+        setItems(prev => [...prev, {
+          product,
+          quantity: qty,
+          priceType: clientTier,
+          unitPrice: priceByType(product, clientTier),
+        }]);
+      }
+    } else if ((!isNaN(qty) && qty === 0) || raw === "0") {
+      // Explicit zero → remove from cart
+      setItems(prev => prev.filter(i => i.product.sync_id !== product.sync_id));
+    }
+    // else: empty or invalid → no change
+    setActiveProductId(null);
+    setInputQty("");
+  };
+
+  const dismissCard = () => {
+    setActiveProductId(null);
+    setInputQty("");
   };
 
   const removeItem = (syncId: string) => {
-    setItems(items.filter(i => i.product.sync_id !== syncId));
+    setItems(prev => prev.filter(i => i.product.sync_id !== syncId));
   };
 
   const total = items.reduce((s, i) => s + i.quantity * i.unitPrice, 0);
@@ -216,10 +237,15 @@ export default function NewInvoiceScreen() {
   const renderProduct = ({ item: product }: { item: Product }) => {
     const cartItem = cartMap.get(product.sync_id);
     const inCart = !!cartItem;
-    const tier = cartItem?.priceType ?? clientTier;
+    const isActive = activeProductId === product.sync_id;
     const price = cartItem?.unitPrice ?? priceByType(product, clientTier);
+
     return (
-      <View style={[styles.catCard, { width: CARD_W, backgroundColor: colors.card, borderColor: inCart ? colors.primary : colors.border }]}>
+      <View style={[
+        styles.catCard,
+        { width: CARD_W, backgroundColor: colors.card, borderColor: inCart ? colors.primary : colors.border },
+        isActive && { borderColor: colors.primary, borderWidth: 2 },
+      ]}>
         <ProductImage
           imageUrl={product.image_url}
           localUri={product.local_image_uri}
@@ -237,27 +263,65 @@ export default function NewInvoiceScreen() {
           </Text>
         )}
 
-        {!inCart ? (
+        {isActive ? (
+          // ── Inline quantity card ──────────────────────────────────
+          <View style={[styles.qtyCard, { backgroundColor: colors.background, borderColor: colors.primary + "44" }]}>
+            <TextInput
+              style={[styles.qtyInput, { color: colors.foreground, backgroundColor: colors.card, borderColor: colors.border }]}
+              value={inputQty}
+              onChangeText={setInputQty}
+              keyboardType="numeric"
+              autoFocus
+              textAlign="center"
+              placeholder="الكمية"
+              placeholderTextColor={colors.mutedForeground}
+              returnKeyType="done"
+              onSubmitEditing={() => confirmQty(product, cartItem)}
+            />
+            <View style={styles.qtyCardActions}>
+              <TouchableOpacity
+                style={[styles.qtyConfirmBtn, { backgroundColor: colors.primary }]}
+                onPress={() => confirmQty(product, cartItem)}
+                activeOpacity={0.85}
+              >
+                <Text style={styles.qtyConfirmText}>{inCart ? "تحديث" : "أضف"}</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.qtyCancelBtn, { backgroundColor: colors.muted }]}
+                onPress={dismissCard}
+                activeOpacity={0.85}
+              >
+                <Feather name="x" size={15} color={colors.foreground} />
+              </TouchableOpacity>
+            </View>
+            {inCart && (
+              <TouchableOpacity onPress={() => { removeItem(product.sync_id); dismissCard(); }}>
+                <Text style={[styles.removeHint, { color: colors.destructive }]}>إزالة من السلة</Text>
+              </TouchableOpacity>
+            )}
+          </View>
+        ) : inCart ? (
+          // ── In cart: show qty badge, tap to edit ─────────────────
+          <TouchableOpacity
+            style={[styles.inCartBadge, { borderColor: colors.primary + "55", backgroundColor: colors.primary + "10" }]}
+            onPress={() => openQtyCard(product, cartItem!.quantity)}
+            activeOpacity={0.75}
+          >
+            <Feather name="edit-2" size={12} color={colors.primary} />
+            <Text style={[styles.inCartQty, { color: colors.primary }]}>
+              {cartItem!.quantity % 1 === 0 ? cartItem!.quantity : cartItem!.quantity.toFixed(2)} وحدة
+            </Text>
+          </TouchableOpacity>
+        ) : (
+          // ── Not in cart: add button ───────────────────────────────
           <TouchableOpacity
             style={[styles.addBtn, { backgroundColor: colors.primary }]}
-            onPress={() => addProduct(product)}
+            onPress={() => openQtyCard(product)}
             activeOpacity={0.85}
           >
             <Feather name="plus" size={16} color="#fff" />
             <Text style={styles.addBtnText}>إضافة</Text>
           </TouchableOpacity>
-        ) : (
-          <View style={{ gap: 6, width: "100%" }}>
-            <View style={[styles.qtyRow, { borderColor: colors.border }]}>
-              <TouchableOpacity onPress={() => setQty(product.sync_id, cartItem!.quantity - 1)} hitSlop={8}>
-                <Feather name="minus-circle" size={24} color={colors.destructive} />
-              </TouchableOpacity>
-              <Text style={[styles.qtyVal, { color: colors.foreground }]}>{cartItem!.quantity}</Text>
-              <TouchableOpacity onPress={() => setQty(product.sync_id, cartItem!.quantity + 1)} hitSlop={8}>
-                <Feather name="plus-circle" size={24} color={colors.primary} />
-              </TouchableOpacity>
-            </View>
-          </View>
         )}
       </View>
     );
@@ -282,6 +346,7 @@ export default function NewInvoiceScreen() {
           <TouchableOpacity key={s.key} onPress={() => {
             if (s.key === "products" && !selectedClient) return;
             if (s.key === "payment" && items.length === 0) return;
+            dismissCard();
             setStep(s.key as any);
           }}>
             <Text style={[
@@ -359,6 +424,7 @@ export default function NewInvoiceScreen() {
             numColumns={COLS}
             columnWrapperStyle={{ gap: GAP, paddingHorizontal: H_PAD }}
             contentContainerStyle={{ paddingVertical: 12, gap: GAP, paddingBottom: 110 }}
+            keyboardShouldPersistTaps="handled"
             ListEmptyComponent={
               <View style={styles.empty}>
                 <Feather name="package" size={40} color={colors.muted} />
@@ -371,7 +437,7 @@ export default function NewInvoiceScreen() {
             <View style={[styles.cartBar, { backgroundColor: colors.card, borderTopColor: colors.border, paddingBottom: insets.bottom + 12 }]}>
               <TouchableOpacity
                 style={[styles.nextBtn, { backgroundColor: colors.primary }]}
-                onPress={() => setStep("payment")}
+                onPress={() => { dismissCard(); setStep("payment"); }}
               >
                 <Text style={styles.nextBtnText}>التالي</Text>
                 <Feather name="arrow-left" size={18} color="#fff" />
@@ -397,7 +463,7 @@ export default function NewInvoiceScreen() {
                   {(i.quantity * i.unitPrice).toLocaleString("fr-DZ")}
                 </Text>
                 <Text style={[styles.lineName, { color: colors.mutedForeground }]} numberOfLines={1}>
-                  {i.product.name} ({i.quantity} × {i.unitPrice.toLocaleString("fr-DZ")})
+                  {i.product.name} ({i.quantity % 1 === 0 ? i.quantity : i.quantity.toFixed(2)} × {i.unitPrice.toLocaleString("fr-DZ")})
                 </Text>
               </View>
             ))}
@@ -488,18 +554,40 @@ const styles = StyleSheet.create({
   catPriceRow: { flexDirection: "row-reverse", alignItems: "center", gap: 6, flexWrap: "wrap", justifyContent: "center" },
   catPrice: { fontSize: 14, fontFamily: "Cairo_700Bold" },
   stockHint: { fontSize: 10, fontFamily: "Cairo_400Regular", textAlign: "center" },
-  tierBadge: { paddingHorizontal: 7, paddingVertical: 2, borderRadius: 6 },
-  tierBadgeText: { fontSize: 10, fontFamily: "Cairo_600SemiBold" },
+
   addBtn: {
     flexDirection: "row-reverse", alignItems: "center", justifyContent: "center", gap: 6,
     width: "100%", paddingVertical: 9, borderRadius: 10,
   },
   addBtnText: { color: "#fff", fontSize: 14, fontFamily: "Cairo_700Bold" },
-  qtyRow: {
-    flexDirection: "row-reverse", alignItems: "center", justifyContent: "space-between",
-    borderWidth: 1, borderRadius: 10, paddingHorizontal: 12, paddingVertical: 5,
+
+  // In-cart badge (tap to edit)
+  inCartBadge: {
+    flexDirection: "row-reverse", alignItems: "center", justifyContent: "center", gap: 6,
+    width: "100%", paddingVertical: 8, borderRadius: 10, borderWidth: 1,
   },
-  qtyVal: { fontSize: 17, fontFamily: "Cairo_700Bold", minWidth: 28, textAlign: "center" },
+  inCartQty: { fontSize: 13, fontFamily: "Cairo_700Bold" },
+
+  // Inline quantity card
+  qtyCard: {
+    width: "100%", borderRadius: 10, borderWidth: 1,
+    padding: 8, gap: 6, alignItems: "center",
+  },
+  qtyInput: {
+    width: "100%", height: 42, borderRadius: 8, borderWidth: 1,
+    fontSize: 18, fontFamily: "Cairo_700Bold", textAlign: "center",
+  },
+  qtyCardActions: { flexDirection: "row-reverse", gap: 6, width: "100%" },
+  qtyConfirmBtn: {
+    flex: 1, paddingVertical: 8, borderRadius: 8,
+    alignItems: "center", justifyContent: "center",
+  },
+  qtyConfirmText: { color: "#fff", fontSize: 14, fontFamily: "Cairo_700Bold" },
+  qtyCancelBtn: {
+    width: 38, paddingVertical: 8, borderRadius: 8,
+    alignItems: "center", justifyContent: "center",
+  },
+  removeHint: { fontSize: 11, fontFamily: "Cairo_400Regular", textDecorationLine: "underline" },
 
   cartBar: {
     position: "absolute", left: 0, right: 0, bottom: 0,
