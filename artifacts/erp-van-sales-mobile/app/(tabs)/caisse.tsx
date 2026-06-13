@@ -108,6 +108,12 @@ export default function CaisseScreen() {
 
   const totalIn = transfers.filter(t => t.direction === "in").reduce((s, t) => s + Number(t.amount ?? 0), 0);
   const totalOut = transfers.filter(t => t.direction === "out").reduce((s, t) => s + Number(t.amount ?? 0), 0);
+  // Pending outgoing: transfers the driver submitted but the office hasn't confirmed yet.
+  // direction="in" means cash going from truck to office; status="pending" = not yet deducted.
+  const pendingOut = transfers
+    .filter(t => t.direction === "in" && (t.status === "pending" || t.status == null))
+    .reduce((s, t) => s + Number(t.amount ?? 0), 0);
+  const cashOnHand = Number(myTruck?.cash_balance ?? 0) - pendingOut;
   const fmt = (n: number) => n.toLocaleString("fr-DZ") + " د.ج";
 
   return (
@@ -118,13 +124,13 @@ export default function CaisseScreen() {
         {isTruck ? (
           <>
             <View style={styles.summaryItem}>
-              <Text style={styles.summaryVal}>{fmt(Number(myTruck?.cash_balance ?? 0))}</Text>
-              <Text style={styles.summaryLabel}>رصيد الصندوق الحالي</Text>
+              <Text style={styles.summaryVal}>{fmt(Math.max(0, cashOnHand))}</Text>
+              <Text style={styles.summaryLabel}>نقداً في الصندوق</Text>
             </View>
             <View style={styles.summaryDivider} />
             <View style={styles.summaryItem}>
-              <Text style={styles.summaryVal}>{fmt(totalIn)}</Text>
-              <Text style={styles.summaryLabel}>إجمالي ما سُلّم</Text>
+              <Text style={[styles.summaryVal, pendingOut > 0 && { color: "#fde68a" }]}>{fmt(pendingOut)}</Text>
+              <Text style={styles.summaryLabel}>بانتظار التأكيد</Text>
             </View>
           </>
         ) : (

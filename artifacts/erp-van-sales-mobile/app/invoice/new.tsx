@@ -239,12 +239,31 @@ export default function NewInvoiceScreen() {
   const saveInvoice = async () => {
     if (!selectedClient) return;
     if (items.length === 0) { Alert.alert("تنبيه", "أضف منتجاً واحداً على الأقل"); return; }
+
+    // Credit-limit check (offline-safe — uses locally synced credit_limit)
+    if (paymentType === "credit") {
+      const limit = Number(selectedClient.credit_limit ?? 0);
+      if (limit > 0) {
+        const currentDebt = -Number(selectedClient.credit_balance ?? 0); // positive = client owes
+        if (currentDebt + total > limit) {
+          const remaining = Math.max(0, limit - currentDebt);
+          Alert.alert(
+            "تجاوز سقف الآجل",
+            `ديْن هذا العميل الحالي ${currentDebt.toLocaleString("fr-DZ")} د.ج — السقف ${limit.toLocaleString("fr-DZ")} د.ج — المتاح ${remaining.toLocaleString("fr-DZ")} د.ج`,
+            [{ text: "موافق" }]
+          );
+          return;
+        }
+      }
+    }
+
     try {
       setSaving(true);
       const db = await getDb();
       if (!db) return;
 
       const invSyncId = newSyncId();
+      const invNumber = `MOB-${invSyncId.slice(-6).toUpperCase()}`;
       const now = new Date().toISOString();
 
       const truckRow = await db.getFirstAsync<{ id: number; name: string }>(
@@ -255,10 +274,10 @@ export default function NewInvoiceScreen() {
       );
 
       await db.runAsync(
-        `INSERT INTO invoices (sync_id, truck_id, client_id, client_sync_id, payment_type,
+        `INSERT INTO invoices (sync_id, invoice_number, truck_id, client_id, client_sync_id, payment_type,
           total_amount, created_at, updated_at, is_deleted, _pending)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, 1)`,
-        [invSyncId, truckRow?.id ?? null, selectedClient.id ?? null, selectedClient.sync_id,
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 1)`,
+        [invSyncId, invNumber, truckRow?.id ?? null, selectedClient.id ?? null, selectedClient.sync_id,
           paymentType, total, now, now] as any[]
       );
 
@@ -309,7 +328,7 @@ export default function NewInvoiceScreen() {
       }
 
       const receipt: ReceiptInvoice = {
-        invoiceNumber: `MOB-${invSyncId.slice(-6).toUpperCase()}`,
+        invoiceNumber: invNumber,
         createdAt: now,
         clientName: selectedClient.name,
         truckName: truckRow?.name ?? "—",
@@ -561,7 +580,7 @@ export default function NewInvoiceScreen() {
                 keyExtractor={i => i.sync_id}
                 renderItem={renderProduct}
                 numColumns={COLS}
-                columnWrapperStyle={{ gap: GAP, paddingHorizontal: H_PAD }}
+                columnWrapperStyle={{ gap: GAP, paddingHorizontal: H_PAD, flexDirection: "row-reverse" }}
                 contentContainerStyle={{ paddingVertical: 12, gap: GAP, paddingBottom: 110 }}
                 keyboardShouldPersistTaps="handled"
                 onScrollBeginDrag={dismissCard}

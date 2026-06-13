@@ -17,7 +17,8 @@ export interface Category {
 export interface Client {
   _lid?: number; sync_id: string; id?: number | null; name: string;
   phone?: string | null; client_type?: string | null; truck_id?: number | null;
-  credit_balance?: number; updated_at?: string; is_deleted?: number; _pending?: number;
+  credit_balance?: number; credit_limit?: number | null;
+  updated_at?: string; is_deleted?: number; _pending?: number;
 }
 export interface Truck {
   _lid?: number; sync_id: string; id?: number | null; name: string;
@@ -31,6 +32,7 @@ export interface TruckStock {
 }
 export interface Invoice {
   _lid?: number; sync_id: string; id?: number | null;
+  invoice_number?: string | null;
   truck_id?: number | null; truck_sync_id?: string | null;
   client_id?: number | null; client_sync_id?: string | null;
   payment_type?: string; total_amount?: number;
@@ -134,7 +136,7 @@ const SCHEMA = `
   CREATE TABLE IF NOT EXISTS clients (
     _lid INTEGER PRIMARY KEY AUTOINCREMENT, sync_id TEXT UNIQUE, id INTEGER,
     name TEXT NOT NULL, phone TEXT, client_type TEXT DEFAULT 'retail',
-    truck_id INTEGER, credit_balance REAL DEFAULT 0,
+    truck_id INTEGER, credit_balance REAL DEFAULT 0, credit_limit REAL,
     created_at TEXT, updated_at TEXT, is_deleted INTEGER DEFAULT 0, _pending INTEGER DEFAULT 0
   );
   CREATE TABLE IF NOT EXISTS trucks (
@@ -150,6 +152,7 @@ const SCHEMA = `
   );
   CREATE TABLE IF NOT EXISTS invoices (
     _lid INTEGER PRIMARY KEY AUTOINCREMENT, sync_id TEXT UNIQUE, id INTEGER,
+    invoice_number TEXT,
     truck_id INTEGER, truck_sync_id TEXT, client_id INTEGER, client_sync_id TEXT,
     payment_type TEXT DEFAULT 'cash', total_amount REAL DEFAULT 0,
     created_at TEXT, updated_at TEXT, is_deleted INTEGER DEFAULT 0, _pending INTEGER DEFAULT 0
@@ -232,6 +235,8 @@ export async function getDb(): Promise<SQLiteDatabase | null> {
       try { await db.runAsync("ALTER TABLE cash_transfers ADD COLUMN status TEXT DEFAULT 'pending'"); } catch {}
       try { await db.runAsync("CREATE TABLE IF NOT EXISTS branches (_lid INTEGER PRIMARY KEY AUTOINCREMENT, sync_id TEXT UNIQUE, id INTEGER, name TEXT NOT NULL, address TEXT, phone TEXT, updated_at TEXT, is_deleted INTEGER DEFAULT 0, _pending INTEGER DEFAULT 0)"); } catch {}
       try { await db.runAsync("ALTER TABLE trucks ADD COLUMN can_sell_on_credit INTEGER DEFAULT 1"); } catch {}
+      try { await db.runAsync("ALTER TABLE clients ADD COLUMN credit_limit REAL"); } catch {}
+      try { await db.runAsync("ALTER TABLE invoices ADD COLUMN invoice_number TEXT"); } catch {}
       return db;
     })().then(
       (db) => { _db = db; return db; },

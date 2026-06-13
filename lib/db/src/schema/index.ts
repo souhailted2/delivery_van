@@ -7,6 +7,7 @@ import {
   boolean,
   timestamp,
   real,
+  uniqueIndex,
 } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod/v4";
@@ -153,6 +154,7 @@ export const clientsTable = pgTable("clients", {
   latitude: real("latitude"),
   longitude: real("longitude"),
   balance: numeric("balance", { precision: 12, scale: 2 }).notNull().default("0"), // negative = debt
+  creditLimit: numeric("credit_limit", { precision: 12, scale: 2 }), // null = no limit
   createdAt: timestamp("created_at").notNull().defaultNow(),
   syncId: text("sync_id").unique(),
   updatedAt: timestamp("updated_at").notNull().defaultNow(),
@@ -174,6 +176,7 @@ export const trucksTable = pgTable("trucks", {
   passwordHash: text("password_hash"),
   location: text("location"),
   cashBalance: numeric("cash_balance", { precision: 12, scale: 2 }).notNull().default("0"),
+  canSellOnCredit: boolean("can_sell_on_credit").notNull().default(true),
   latitude: real("latitude"),
   longitude: real("longitude"),
   createdAt: timestamp("created_at").notNull().defaultNow(),
@@ -194,7 +197,9 @@ export const truckStockTable = pgTable("truck_stock", {
   syncId: text("sync_id").unique(),
   updatedAt: timestamp("updated_at").notNull().defaultNow(),
   isDeleted: boolean("is_deleted").notNull().default(false),
-});
+}, (table) => ({
+  truckProductUniq: uniqueIndex("truck_stock_truck_product_uniq").on(table.truckId, table.productId),
+}));
 export const insertTruckStockSchema = createInsertSchema(truckStockTable).omit({ id: true, updatedAt: true });
 export type InsertTruckStock = z.infer<typeof insertTruckStockSchema>;
 export type TruckStock = typeof truckStockTable.$inferSelect;
@@ -296,6 +301,22 @@ export const returnItemsTable = pgTable("return_items", {
 export const insertReturnItemSchema = createInsertSchema(returnItemsTable).omit({ id: true, updatedAt: true });
 export type InsertReturnItem = z.infer<typeof insertReturnItemSchema>;
 export type ReturnItem = typeof returnItemsTable.$inferSelect;
+
+// Truck dispatch orders — admin loads a truck with stock
+export const truckDispatchesTable = pgTable("truck_dispatches", {
+  id: serial("id").primaryKey(),
+  truckId: integer("truck_id").notNull().references(() => trucksTable.id),
+  status: text("status").notNull().default("pending"), // pending | received | closed
+  stockItems: text("stock_items").notNull().default("[]"), // JSON: [{productId,productName,quantity,unit,sellingPriceRetail}]
+  note: text("note"),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+  receivedAt: timestamp("received_at"),
+  closedAt: timestamp("closed_at"),
+  createdBy: integer("created_by"),
+});
+export const insertTruckDispatchSchema = createInsertSchema(truckDispatchesTable).omit({ id: true, createdAt: true });
+export type InsertTruckDispatch = z.infer<typeof insertTruckDispatchSchema>;
+export type TruckDispatch = typeof truckDispatchesTable.$inferSelect;
 
 // Company settings (global, single row)
 export const companySettingsTable = pgTable("company_settings", {

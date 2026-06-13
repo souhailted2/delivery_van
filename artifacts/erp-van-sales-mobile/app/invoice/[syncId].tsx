@@ -70,7 +70,7 @@ export default function InvoiceDetailScreen() {
     setPrinting(true);
     try {
       const receipt: ReceiptInvoice = {
-        invoiceNumber: invoice.id ? String(invoice.id) : `MOB-${invoice.sync_id.slice(-6).toUpperCase()}`,
+        invoiceNumber: invoice.invoice_number ?? (invoice.id ? `#${invoice.id}` : `MOB-${invoice.sync_id.slice(-6).toUpperCase()}`),
         createdAt: invoice.created_at ?? new Date().toISOString(),
         clientName: invoice.client_name ?? "عميل غير معروف",
         truckName: invoice.truck_name ?? "—",
