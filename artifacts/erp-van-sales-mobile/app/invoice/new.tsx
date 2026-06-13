@@ -15,6 +15,7 @@ import { Client, getDb, Product } from "@/lib/db";
 import { printInvoiceReceipt, ReceiptInvoice } from "@/lib/receipt";
 import { getTruckForUser } from "@/lib/truck";
 import { newSyncId } from "@/lib/uuid";
+import { canonicalizeTruckStock } from "@/lib/truckStock";
 import { useColors } from "@/hooks/useColors";
 
 type Tier = "retail" | "half_wholesale" | "wholesale";
@@ -97,8 +98,11 @@ export default function NewInvoiceScreen() {
           : db.getAllAsync<Client>("SELECT * FROM clients WHERE is_deleted = 0 ORDER BY name"),
         truckId !== null
           ? db.getAllAsync<Product>(
-              `SELECT p.*, COALESCE(ts.quantity, 0) as truck_quantity FROM products p
-               LEFT JOIN truck_stock ts ON ts.product_id = p.id AND ts.truck_id = ?
+              `SELECT p.*, COALESCE(agg.quantity, 0) as truck_quantity FROM products p
+               LEFT JOIN (
+                 SELECT product_id, SUM(quantity) AS quantity
+                 FROM truck_stock WHERE truck_id = ? GROUP BY product_id
+               ) agg ON agg.product_id = p.id
                WHERE p.is_deleted = 0 ORDER BY p.name`,
               [truckId]
             )
@@ -289,14 +293,14 @@ export default function NewInvoiceScreen() {
           [newSyncId(), invSyncId, item.product.id ?? null, item.product.sync_id,
             item.product.name, item.quantity, item.priceType, item.unitPrice, subtotal, now] as any[]
         );
-        if (effectiveTruckId) {
+        if (effectiveTruckId && item.product.id != null) {
           // Optimistic local decrement. Bump updated_at so the pull half of the
           // next sync (pull-then-push) does not overwrite this with the stale
           // server quantity before the server-side reconciliation runs.
-          await db.runAsync(
-            `UPDATE truck_stock SET quantity = MAX(0, quantity - ?), updated_at = ?
-             WHERE truck_id = ? AND product_id = ?`,
-            [item.quantity, now, effectiveTruckId, item.product.id ?? null] as any[]
+          // canonicalizeTruckStock collapses any duplicate rows so the decrement
+          // applies to the true total, not a single (possibly stale) row.
+          await canonicalizeTruckStock(
+            db, effectiveTruckId, item.product.id, -item.quantity, now
           );
         }
       }
