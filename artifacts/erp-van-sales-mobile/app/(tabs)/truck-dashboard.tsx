@@ -14,12 +14,11 @@ import { useColors } from "@/hooks/useColors";
 
 const logo = require("../../assets/images/logo.png");
 
-type TabKey = "invoices" | "clients" | "stock";
+type TabKey = "invoices" | "clients";
 
 const TABS: { key: TabKey; label: string; icon: any }[] = [
   { key: "invoices", label: "الفواتير", icon: "file-text" },
   { key: "clients", label: "العملاء", icon: "users" },
-  { key: "stock", label: "المخزون", icon: "box" },
 ];
 
 interface InvoiceRow extends Invoice {
@@ -102,29 +101,6 @@ function ClientCard({ item, colors }: { item: Client; colors: any }) {
   );
 }
 
-function StockCard({ item, colors }: { item: StockRow; colors: any }) {
-  const qty = Number(item.quantity ?? 0);
-  const qtyColor = qty === 0 ? colors.destructive : qty < 5 ? colors.warning : colors.foreground;
-  return (
-    <View style={[styles.card, { backgroundColor: colors.card, borderColor: colors.border }]}>
-      <View style={styles.cardRow}>
-        <View style={[styles.avatar, { backgroundColor: colors.primary + "15" }]}>
-          <Feather name="box" size={16} color={colors.primary} />
-        </View>
-        <View style={{ flex: 1, alignItems: "flex-end" }}>
-          <Text style={[styles.cardTitle, { color: colors.foreground }]}>{item.product_name}</Text>
-          <Text style={[styles.cardSub, { color: colors.mutedForeground }]}>
-            {fmt(item.selling_price_retail ?? 0)}
-          </Text>
-        </View>
-        <View style={{ alignItems: "center" }}>
-          <Text style={[styles.qty, { color: qtyColor }]}>{qty.toFixed(0)}</Text>
-          <Text style={[styles.unit, { color: colors.mutedForeground }]}>{item.unit || "قطعة"}</Text>
-        </View>
-      </View>
-    </View>
-  );
-}
 
 function StatCard({ label, value, icon, colors }: { label: string; value: string; icon: any; colors: any }) {
   return (
@@ -247,7 +223,7 @@ export default function TruckDashboardScreen() {
     router.push("/invoice/new");
   };
 
-  const data: any[] = tab === "invoices" ? invoices : tab === "clients" ? clients : stock;
+  const data: any[] = tab === "invoices" ? invoices : clients;
 
   const renderItem = ({ item }: { item: any }) => {
     if (tab === "invoices") {
@@ -257,19 +233,15 @@ export default function TruckDashboardScreen() {
         </TouchableOpacity>
       );
     }
-    if (tab === "clients") {
-      return (
-        <TouchableOpacity activeOpacity={0.7} onPress={() => router.push(`/client/${item.sync_id}`)}>
-          <ClientCard item={item} colors={colors} />
-        </TouchableOpacity>
-      );
-    }
-    return <StockCard item={item} colors={colors} />;
+    return (
+      <TouchableOpacity activeOpacity={0.7} onPress={() => router.push(`/client/${item.sync_id}`)}>
+        <ClientCard item={item} colors={colors} />
+      </TouchableOpacity>
+    );
   };
 
-  const emptyText =
-    tab === "invoices" ? "لا توجد فواتير" : tab === "clients" ? "لا يوجد عملاء" : "المخزون فارغ";
-  const emptyIcon = tab === "invoices" ? "file-text" : tab === "clients" ? "users" : "inbox";
+  const emptyText = tab === "invoices" ? "لا توجد فواتير" : "لا يوجد عملاء";
+  const emptyIcon = tab === "invoices" ? "file-text" : "users";
 
   const header = (
     <View>
@@ -435,9 +407,6 @@ const styles = StyleSheet.create({
   amount: { fontSize: 15, fontFamily: "Cairo_700Bold" },
   badge: { paddingHorizontal: 8, paddingVertical: 2, borderRadius: 8, marginTop: 4 },
   badgeText: { fontSize: 11, fontFamily: "Cairo_600SemiBold" },
-  qty: { fontSize: 18, fontFamily: "Cairo_700Bold" },
-  unit: { fontSize: 11, fontFamily: "Cairo_400Regular" },
-
   empty: { alignItems: "center", paddingVertical: 70, gap: 12 },
   emptyText: { fontSize: 14, fontFamily: "Cairo_400Regular" },
 

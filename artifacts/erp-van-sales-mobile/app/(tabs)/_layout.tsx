@@ -165,14 +165,14 @@ function ClassicTabLayout() {
         }}
       />
 
-      {/* ── شاحنتي (مخزون الشاحنة) ── */}
+      {/* ── شاحنتي (مخزون الشاحنة — للسائق فقط) ── */}
       <Tabs.Screen
         name="truck"
         options={{
           title: "شاحنتي",
           tabBarLabel: "شاحنتي",
           tabBarIcon: ({ color }) => <Feather name="box" size={22} color={color} />,
-          href: isTruck ? null : undefined,
+          href: isTruck ? undefined : null,
         }}
       />
 

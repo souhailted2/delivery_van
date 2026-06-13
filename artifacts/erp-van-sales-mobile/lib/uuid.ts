@@ -5,6 +5,9 @@ export function newSyncId(): string {
     (globalThis.crypto as Crypto).getRandomValues(bytes);
     return ts + "-" + Array.from(bytes, b => b.toString(16).padStart(2, "0")).join("");
   } catch {
-    return ts + "-" + Math.random().toString(36).slice(2) + Math.random().toString(36).slice(2);
+    // Fallback: combine timestamp (µs), performance counter, and four Math.random() words
+    const perf = (typeof performance !== "undefined" ? performance.now() : 0).toString(36).replace(".", "");
+    const r = () => Math.floor(Math.random() * 0xffffffff).toString(16).padStart(8, "0");
+    return `${ts}-${perf}-${r()}${r()}${r()}`;
   }
 }
