@@ -379,14 +379,23 @@ async function handleTruckPush(
             .where(and(eq(truckStockTable.truckId, inv.truckId), eq(truckStockTable.productId, it.productId)))
             .limit(1);
           const available = Number(stockRow?.quantity ?? 0);
+          const cappedQty = Math.min(qty, available);
           if (qty > available) {
             req.log.warn(
-              { truckId: inv.truckId, invoiceId: inv.id, productId: it.productId, available, requestedQty: qty },
-              "sync push: invoice line qty exceeds truck stock — capping to available",
+              { truckId: inv.truckId, invoiceId: inv.id, productId: it.productId, available, requestedQty: qty, cappedQty },
+              "sync push: invoice line qty exceeds truck stock — capping persisted quantity to available",
             );
+            // Cap the invoice_item quantity so revenue/balance figures match reality.
+            await tx.update(invoiceItemsTable)
+              .set({ quantity: String(cappedQty) })
+              .where(and(
+                eq(invoiceItemsTable.invoiceId, inv.id),
+                eq(invoiceItemsTable.productId, it.productId!),
+              ));
           }
+          if (cappedQty <= 0) continue; // nothing to deduct
           await tx.update(truckStockTable).set({
-            quantity: sql`GREATEST(0, ${truckStockTable.quantity} - ${qty})`,
+            quantity: sql`GREATEST(0, ${truckStockTable.quantity} - ${cappedQty})`,
             updatedAt: new Date(),
           }).where(and(eq(truckStockTable.truckId, inv.truckId), eq(truckStockTable.productId, it.productId)));
         }

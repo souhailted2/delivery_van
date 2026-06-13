@@ -96,8 +96,8 @@ export default function NewInvoiceScreen() {
           : db.getAllAsync<Client>("SELECT * FROM clients WHERE is_deleted = 0 ORDER BY name"),
         truckId !== null
           ? db.getAllAsync<Product>(
-              `SELECT p.*, ts.quantity as truck_quantity FROM products p
-               INNER JOIN truck_stock ts ON ts.product_id = p.id AND ts.truck_id = ? AND ts.quantity > 0
+              `SELECT p.*, COALESCE(ts.quantity, 0) as truck_quantity FROM products p
+               LEFT JOIN truck_stock ts ON ts.product_id = p.id AND ts.truck_id = ?
                WHERE p.is_deleted = 0 ORDER BY p.name`,
               [truckId]
             )
@@ -375,6 +375,8 @@ export default function NewInvoiceScreen() {
     const inCart = !!cartItem;
     const isActive = activeProductId === product.sync_id;
     const price = cartItem?.unitPrice ?? priceByType(product, clientTier);
+    const tqRaw = (product as any).truck_quantity;
+    const isOutOfStock = tqRaw !== undefined && Number(tqRaw) <= 0;
 
     return (
       <Pressable
@@ -382,6 +384,7 @@ export default function NewInvoiceScreen() {
           styles.catCard,
           { width: CARD_W, backgroundColor: colors.card, borderColor: inCart ? colors.primary : colors.border },
           isActive && { borderColor: colors.primary, borderWidth: 2 },
+          isOutOfStock && { opacity: 0.45 },
         ]}
         onPress={() => {
           if (isActive) return;
