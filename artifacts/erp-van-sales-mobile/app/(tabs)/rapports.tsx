@@ -1,5 +1,6 @@
 import { Feather } from "@expo/vector-icons";
-import { useCallback, useEffect, useState } from "react";
+import { useRefreshOnFocus } from "@/hooks/useRefreshOnFocus";
+import { useCallback, useState } from "react";
 import {
   RefreshControl, ScrollView, StyleSheet, Text, TouchableOpacity, View,
 } from "react-native";
@@ -132,7 +133,7 @@ export default function RapportsScreen() {
     });
   }, [period]);
 
-  useEffect(() => { load(); }, [load]);
+  useRefreshOnFocus(load);
 
   const onRefresh = async () => {
     setRefreshing(true);

@@ -3,8 +3,9 @@ import * as Haptics from "expo-haptics";
 import { router } from "expo-router";
 import { useEffect, useMemo, useState } from "react";
 import {
-  Alert, Dimensions, FlatList, ScrollView, StyleSheet, Text,
-  TextInput, TouchableOpacity, View,
+  Alert, Dimensions, FlatList, KeyboardAvoidingView, Modal, Platform,
+  Pressable, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity,
+  TouchableWithoutFeedback, View,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { ProductImage } from "@/components/ProductImage";
@@ -25,11 +26,6 @@ interface InvoiceItem {
   overridden?: boolean;
 }
 
-const TIER_LABEL: Record<Tier, string> = {
-  retail: "تجزئة",
-  half_wholesale: "نصف جملة",
-  wholesale: "جملة",
-};
 function priceByType(p: Product, t: Tier): number {
   if (t === "half_wholesale") return Number(p.selling_price_half_wholesale ?? 0);
   if (t === "wholesale") return Number(p.selling_price_wholesale ?? 0);
@@ -48,16 +44,27 @@ const GAP = 10;
 const CARD_W = (Dimensions.get("window").width - H_PAD * 2 - GAP * (COLS - 1)) / COLS;
 const IMG_SIZE = CARD_W - 16;
 
+const TIER_OPTIONS: { value: Tier; label: string }[] = [
+  { value: "retail", label: "تجزئة" },
+  { value: "half_wholesale", label: "نصف جملة" },
+  { value: "wholesale", label: "جملة" },
+];
+
 export default function NewInvoiceScreen() {
   const colors = useColors();
   const insets = useSafeAreaInsets();
   const { user } = useAuth();
-  const { triggerSync } = useSync();
+  const { triggerSync, bumpLocalVersion } = useSync();
 
   const [step, setStep] = useState<"client" | "products" | "payment">("client");
   const [selectedClient, setSelectedClient] = useState<Client | null>(null);
   const [items, setItems] = useState<InvoiceItem[]>([]);
   const [paymentType, setPaymentType] = useState<"cash" | "credit">("cash");
+
+  // Enforce cash-only when truck is not permitted to sell on credit
+  useEffect(() => {
+    if (user?.truckCanSellOnCredit === false) setPaymentType("cash");
+  }, [user?.truckCanSellOnCredit]);
   const [saving, setSaving] = useState(false);
 
   const [clients, setClients] = useState<Client[]>([]);
@@ -65,20 +72,41 @@ export default function NewInvoiceScreen() {
   const [clientSearch, setClientSearch] = useState("");
   const [productSearch, setProductSearch] = useState("");
 
+  // ── Add-client modal state ─────────────────────────────────────────────────
+  const [addClientOpen, setAddClientOpen] = useState(false);
+  const [newClientName, setNewClientName] = useState("");
+  const [newClientPhone, setNewClientPhone] = useState("");
+  const [newClientType, setNewClientType] = useState<Tier>("retail");
+  const [savingNewClient, setSavingNewClient] = useState(false);
+
+  // Inline quantity card state
+  const [activeProductId, setActiveProductId] = useState<string | null>(null);
+  const [inputQty, setInputQty] = useState("");
+
   const clientTier = resolveTier(selectedClient);
 
   useEffect(() => {
     (async () => {
       const db = await getDb();
       if (!db) return;
+      const truckId = user?.truckId ?? null;
       const [cl, pr] = await Promise.all([
-        db.getAllAsync<Client>("SELECT * FROM clients WHERE is_deleted = 0 ORDER BY name"),
-        db.getAllAsync<Product>("SELECT * FROM products WHERE is_deleted = 0 ORDER BY name"),
+        truckId !== null
+          ? db.getAllAsync<Client>("SELECT * FROM clients WHERE is_deleted = 0 AND truck_id = ? ORDER BY name", [truckId])
+          : db.getAllAsync<Client>("SELECT * FROM clients WHERE is_deleted = 0 ORDER BY name"),
+        truckId !== null
+          ? db.getAllAsync<Product>(
+              `SELECT p.*, ts.quantity as truck_quantity FROM products p
+               INNER JOIN truck_stock ts ON ts.product_id = p.id AND ts.truck_id = ? AND ts.quantity > 0
+               WHERE p.is_deleted = 0 ORDER BY p.name`,
+              [truckId]
+            )
+          : db.getAllAsync<Product>("SELECT * FROM products WHERE is_deleted = 0 ORDER BY name"),
       ]);
       setClients(cl);
       setProducts(pr);
     })();
-  }, []);
+  }, [user?.truckId]);
 
   // Re-price cart items to the selected customer's tier (unless manually overridden).
   useEffect(() => {
@@ -94,29 +122,96 @@ export default function NewInvoiceScreen() {
   );
   const filteredProducts = products.filter(p => p.name.includes(productSearch));
 
-  const addProduct = (product: Product) => {
-    const existing = items.find(i => i.product.sync_id === product.sync_id);
-    if (existing) {
-      setItems(items.map(i =>
-        i.product.sync_id === product.sync_id ? { ...i, quantity: i.quantity + 1 } : i
-      ));
-    } else {
-      setItems([...items, {
-        product, quantity: 1,
-        priceType: clientTier,
-        unitPrice: priceByType(product, clientTier),
-      }]);
+  // ── Save new client to SQLite ──────────────────────────────────────────────
+  const saveNewClient = async () => {
+    const name = newClientName.trim();
+    if (!name) return;
+    setSavingNewClient(true);
+    try {
+      const db = await getDb();
+      if (!db) return;
+      const syncId = newSyncId();
+      const now = new Date().toISOString();
+      const truckId = user?.truckId ?? null;
+      await db.runAsync(
+        `INSERT INTO clients (sync_id, name, phone, client_type, truck_id, credit_balance,
+           created_at, updated_at, is_deleted, _pending)
+         VALUES (?, ?, ?, ?, ?, 0, ?, ?, 0, 1)`,
+        [syncId, name, newClientPhone.trim() || null, newClientType,
+          truckId, now, now] as any[]
+      );
+      const newClient: Client = {
+        sync_id: syncId,
+        name,
+        phone: newClientPhone.trim() || null,
+        client_type: newClientType,
+        truck_id: truckId,
+        credit_balance: 0,
+        updated_at: now,
+        is_deleted: 0,
+        _pending: 1,
+      };
+      setClients(prev => [newClient, ...prev]);
+      setSelectedClient(newClient);
+      setAddClientOpen(false);
+      setNewClientName("");
+      setNewClientPhone("");
+      setNewClientType("retail");
+      bumpLocalVersion();
+      triggerSync();
+      setStep("products");
+    } catch (e: any) {
+      Alert.alert("خطأ", e?.message ?? "فشل حفظ الزبون");
+    } finally {
+      setSavingNewClient(false);
     }
+  };
+
+  const resetAddClientModal = () => {
+    setAddClientOpen(false);
+    setNewClientName("");
+    setNewClientPhone("");
+    setNewClientType("retail");
+  };
+
+  // Open the inline quantity card for a product
+  const openQtyCard = (product: Product, currentQty?: number) => {
+    setActiveProductId(product.sync_id);
+    setInputQty(currentQty !== undefined ? String(currentQty) : "");
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
   };
 
-  const setQty = (syncId: string, qty: number) => {
-    if (qty <= 0) { removeItem(syncId); return; }
-    setItems(items.map(i => i.product.sync_id === syncId ? { ...i, quantity: qty } : i));
+  // Confirm the quantity entered in the card
+  const confirmQty = (product: Product, existingItem: InvoiceItem | undefined) => {
+    const raw = inputQty.replace(",", ".").trim();
+    const qty = parseFloat(raw);
+    if (!isNaN(qty) && qty > 0) {
+      if (existingItem) {
+        setItems(prev => prev.map(i =>
+          i.product.sync_id === product.sync_id ? { ...i, quantity: qty } : i
+        ));
+      } else {
+        setItems(prev => [...prev, {
+          product,
+          quantity: qty,
+          priceType: clientTier,
+          unitPrice: priceByType(product, clientTier),
+        }]);
+      }
+    } else if ((!isNaN(qty) && qty === 0) || raw === "0") {
+      setItems(prev => prev.filter(i => i.product.sync_id !== product.sync_id));
+    }
+    setActiveProductId(null);
+    setInputQty("");
+  };
+
+  const dismissCard = () => {
+    setActiveProductId(null);
+    setInputQty("");
   };
 
   const removeItem = (syncId: string) => {
-    setItems(items.filter(i => i.product.sync_id !== syncId));
+    setItems(prev => prev.filter(i => i.product.sync_id !== syncId));
   };
 
   const total = items.reduce((s, i) => s + i.quantity * i.unitPrice, 0);
@@ -158,12 +253,38 @@ export default function NewInvoiceScreen() {
             item.product.name, item.quantity, item.priceType, item.unitPrice, subtotal, now] as any[]
         );
         if (truckRow?.id) {
+          // Optimistic local decrement. Bump updated_at so the pull half of the
+          // next sync (pull-then-push) does not overwrite this with the stale
+          // server quantity before the server-side reconciliation runs.
           await db.runAsync(
-            `UPDATE truck_stock SET quantity = MAX(0, quantity - ?)
+            `UPDATE truck_stock SET quantity = MAX(0, quantity - ?), updated_at = ?
              WHERE truck_id = ? AND product_id = ?`,
-            [item.quantity, truckRow.id, item.product.id ?? null] as any[]
+            [item.quantity, now, truckRow.id, item.product.id ?? null] as any[]
           );
         }
+      }
+
+      // Credit sale → increase the client's outstanding balance locally so the
+      // dashboard/clients list reflect it immediately (mobile owns credit; it is
+      // pushed via the clients table, server does NOT recompute it).
+      if (paymentType === "credit") {
+        await db.runAsync(
+          `UPDATE clients SET credit_balance = COALESCE(credit_balance, 0) + ?, updated_at = ?, _pending = 1
+           WHERE sync_id = ? OR (id IS NOT NULL AND id = ?)`,
+          [total, now, selectedClient.sync_id, selectedClient.id ?? -1] as any[]
+        );
+      }
+
+      // Cash sale → increase the truck's cash balance locally so the caisse /
+      // dashboard reflect it immediately. trucks is NOT pushed from mobile, so
+      // the server reconciles the authoritative balance on push; the updated_at
+      // bump keeps the optimistic value from being reverted by the pre-push pull.
+      if (paymentType === "cash" && truckRow?.id) {
+        await db.runAsync(
+          `UPDATE trucks SET cash_balance = COALESCE(cash_balance, 0) + ?, updated_at = ?
+           WHERE id = ?`,
+          [total, now, truckRow.id] as any[]
+        );
       }
 
       const receipt: ReceiptInvoice = {
@@ -183,6 +304,7 @@ export default function NewInvoiceScreen() {
       };
 
       await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      bumpLocalVersion();
       triggerSync();
       Alert.alert("تم", "تم حفظ الفاتورة بنجاح", [
         {
@@ -211,10 +333,21 @@ export default function NewInvoiceScreen() {
   const renderProduct = ({ item: product }: { item: Product }) => {
     const cartItem = cartMap.get(product.sync_id);
     const inCart = !!cartItem;
-    const tier = cartItem?.priceType ?? clientTier;
+    const isActive = activeProductId === product.sync_id;
     const price = cartItem?.unitPrice ?? priceByType(product, clientTier);
+
     return (
-      <View style={[styles.catCard, { width: CARD_W, backgroundColor: colors.card, borderColor: inCart ? colors.primary : colors.border }]}>
+      <Pressable
+        style={[
+          styles.catCard,
+          { width: CARD_W, backgroundColor: colors.card, borderColor: inCart ? colors.primary : colors.border },
+          isActive && { borderColor: colors.primary, borderWidth: 2 },
+        ]}
+        onPress={() => {
+          if (isActive) return;
+          openQtyCard(product, cartItem?.quantity);
+        }}
+      >
         <ProductImage
           imageUrl={product.image_url}
           localUri={product.local_image_uri}
@@ -224,35 +357,62 @@ export default function NewInvoiceScreen() {
         />
         <Text style={[styles.catName, { color: colors.foreground }]} numberOfLines={2}>{product.name}</Text>
         <View style={styles.catPriceRow}>
-          <View style={[styles.tierBadge, { backgroundColor: colors.secondary }]}>
-            <Text style={[styles.tierBadgeText, { color: colors.mutedForeground }]}>{TIER_LABEL[tier]}</Text>
-          </View>
           <Text style={[styles.catPrice, { color: colors.primary }]}>{price.toLocaleString("fr-DZ")} د.ج</Text>
         </View>
+        {(product as any).truck_quantity !== undefined && (
+          <Text style={[styles.stockHint, { color: colors.mutedForeground }]}>
+            في الشاحنة: {Number((product as any).truck_quantity).toFixed(0)}
+          </Text>
+        )}
 
-        {!inCart ? (
-          <TouchableOpacity
-            style={[styles.addBtn, { backgroundColor: colors.primary }]}
-            onPress={() => addProduct(product)}
-            activeOpacity={0.85}
-          >
+        {isActive ? (
+          <View style={[styles.qtyCard, { backgroundColor: colors.background, borderColor: colors.primary + "44" }]}>
+            <TextInput
+              style={[styles.qtyInput, { color: colors.foreground, backgroundColor: colors.card, borderColor: colors.border }]}
+              value={inputQty}
+              onChangeText={setInputQty}
+              keyboardType="numeric"
+              autoFocus
+              textAlign="center"
+              placeholder="الكمية"
+              placeholderTextColor={colors.mutedForeground}
+              returnKeyType="done"
+              onSubmitEditing={() => confirmQty(product, cartItem)}
+            />
+            <View style={styles.qtyCardActions}>
+              <Pressable
+                style={[styles.qtyConfirmBtn, { backgroundColor: colors.primary }]}
+                onPress={() => confirmQty(product, cartItem)}
+              >
+                <Text style={styles.qtyConfirmText}>{inCart ? "تحديث" : "أضف"}</Text>
+              </Pressable>
+              <Pressable
+                style={[styles.qtyCancelBtn, { backgroundColor: colors.muted }]}
+                onPress={dismissCard}
+              >
+                <Feather name="x" size={15} color={colors.foreground} />
+              </Pressable>
+            </View>
+            {inCart && (
+              <Pressable onPress={() => { removeItem(product.sync_id); dismissCard(); }}>
+                <Text style={[styles.removeHint, { color: colors.destructive }]}>إزالة من السلة</Text>
+              </Pressable>
+            )}
+          </View>
+        ) : inCart ? (
+          <View style={[styles.inCartBadge, { borderColor: colors.primary + "55", backgroundColor: colors.primary + "10" }]}>
+            <Feather name="edit-2" size={12} color={colors.primary} />
+            <Text style={[styles.inCartQty, { color: colors.primary }]}>
+              {cartItem!.quantity % 1 === 0 ? cartItem!.quantity : cartItem!.quantity.toFixed(2)} وحدة
+            </Text>
+          </View>
+        ) : (
+          <View style={[styles.addBtn, { backgroundColor: colors.primary }]}>
             <Feather name="plus" size={16} color="#fff" />
             <Text style={styles.addBtnText}>إضافة</Text>
-          </TouchableOpacity>
-        ) : (
-          <View style={{ gap: 6, width: "100%" }}>
-            <View style={[styles.qtyRow, { borderColor: colors.border }]}>
-              <TouchableOpacity onPress={() => setQty(product.sync_id, cartItem!.quantity - 1)} hitSlop={8}>
-                <Feather name="minus-circle" size={24} color={colors.destructive} />
-              </TouchableOpacity>
-              <Text style={[styles.qtyVal, { color: colors.foreground }]}>{cartItem!.quantity}</Text>
-              <TouchableOpacity onPress={() => setQty(product.sync_id, cartItem!.quantity + 1)} hitSlop={8}>
-                <Feather name="plus-circle" size={24} color={colors.primary} />
-              </TouchableOpacity>
-            </View>
           </View>
         )}
-      </View>
+      </Pressable>
     );
   };
 
@@ -275,6 +435,7 @@ export default function NewInvoiceScreen() {
           <TouchableOpacity key={s.key} onPress={() => {
             if (s.key === "products" && !selectedClient) return;
             if (s.key === "payment" && items.length === 0) return;
+            dismissCard();
             setStep(s.key as any);
           }}>
             <Text style={[
@@ -290,17 +451,27 @@ export default function NewInvoiceScreen() {
 
       {step === "client" && (
         <View style={{ flex: 1 }}>
-          <View style={[styles.searchBar, { backgroundColor: colors.card, borderColor: colors.border }]}>
-            <Feather name="search" size={16} color={colors.mutedForeground} />
-            <TextInput
-              style={[styles.searchInput, { color: colors.foreground }]}
-              placeholder="ابحث عن عميل..."
-              placeholderTextColor={colors.mutedForeground}
-              value={clientSearch}
-              onChangeText={setClientSearch}
-              textAlign="right"
-            />
+          {/* Search bar + add-client button */}
+          <View style={styles.clientSearchRow}>
+            <View style={[styles.searchBar, { flex: 1, backgroundColor: colors.card, borderColor: colors.border }]}>
+              <Feather name="search" size={16} color={colors.mutedForeground} />
+              <TextInput
+                style={[styles.searchInput, { color: colors.foreground }]}
+                placeholder="ابحث عن عميل..."
+                placeholderTextColor={colors.mutedForeground}
+                value={clientSearch}
+                onChangeText={setClientSearch}
+                textAlign="right"
+              />
+            </View>
+            <TouchableOpacity
+              style={[styles.addClientBtn, { backgroundColor: colors.primary }]}
+              onPress={() => setAddClientOpen(true)}
+            >
+              <Feather name="plus" size={20} color="#fff" />
+            </TouchableOpacity>
           </View>
+
           <FlatList
             data={filteredClients}
             keyExtractor={i => i.sync_id}
@@ -315,13 +486,26 @@ export default function NewInvoiceScreen() {
                 <Feather name="check" size={16} color={selectedClient?.sync_id === item.sync_id ? colors.primary : "transparent"} />
                 <View style={{ flex: 1, alignItems: "flex-end" }}>
                   <Text style={[styles.clientName, { color: colors.foreground }]}>{item.name}</Text>
-                  <Text style={[styles.clientPhone, { color: colors.mutedForeground }]}>
-                    {TIER_LABEL[resolveTier(item)]}{item.phone ? ` • ${item.phone}` : ""}
-                  </Text>
+                  {item.phone ? (
+                    <Text style={[styles.clientPhone, { color: colors.mutedForeground }]}>{item.phone}</Text>
+                  ) : null}
                 </View>
               </TouchableOpacity>
             )}
             contentContainerStyle={{ padding: 12, gap: 6 }}
+            ListEmptyComponent={
+              <View style={styles.empty}>
+                <Feather name="users" size={40} color={colors.muted} />
+                <Text style={[styles.emptyText, { color: colors.mutedForeground }]}>لا يوجد عملاء</Text>
+                <TouchableOpacity
+                  style={[styles.addClientEmptyBtn, { backgroundColor: colors.primary }]}
+                  onPress={() => setAddClientOpen(true)}
+                >
+                  <Feather name="plus" size={16} color="#fff" />
+                  <Text style={styles.addClientEmptyBtnText}>إضافة زبون جديد</Text>
+                </TouchableOpacity>
+              </View>
+            }
           />
         </View>
       )}
@@ -329,11 +513,9 @@ export default function NewInvoiceScreen() {
       {step === "products" && (
         <View style={{ flex: 1 }}>
           <View style={[styles.clientPill, { backgroundColor: colors.primary + "12", borderColor: colors.primary + "33" }]}>
-            <View style={[styles.tierBadge, { backgroundColor: colors.primary }]}>
-              <Text style={[styles.tierBadgeText, { color: "#fff" }]}>{TIER_LABEL[clientTier]}</Text>
-            </View>
+            <Feather name="user" size={14} color={colors.primary} />
             <Text style={[styles.clientPillText, { color: colors.foreground }]} numberOfLines={1}>
-              {selectedClient?.name} — الأسعار حسب فئة العميل
+              {selectedClient?.name}
             </Text>
           </View>
           <View style={[styles.searchBar, { backgroundColor: colors.card, borderColor: colors.border }]}>
@@ -347,26 +529,32 @@ export default function NewInvoiceScreen() {
               textAlign="right"
             />
           </View>
-          <FlatList
-            data={filteredProducts}
-            keyExtractor={i => i.sync_id}
-            renderItem={renderProduct}
-            numColumns={COLS}
-            columnWrapperStyle={{ gap: GAP, paddingHorizontal: H_PAD }}
-            contentContainerStyle={{ paddingVertical: 12, gap: GAP, paddingBottom: 110 }}
-            ListEmptyComponent={
-              <View style={styles.empty}>
-                <Feather name="package" size={40} color={colors.muted} />
-                <Text style={[styles.emptyText, { color: colors.mutedForeground }]}>لا توجد منتجات</Text>
-              </View>
-            }
-            showsVerticalScrollIndicator={false}
-          />
+          <TouchableWithoutFeedback onPress={() => activeProductId !== null && dismissCard()}>
+            <View style={{ flex: 1 }}>
+              <FlatList
+                data={filteredProducts}
+                keyExtractor={i => i.sync_id}
+                renderItem={renderProduct}
+                numColumns={COLS}
+                columnWrapperStyle={{ gap: GAP, paddingHorizontal: H_PAD }}
+                contentContainerStyle={{ paddingVertical: 12, gap: GAP, paddingBottom: 110 }}
+                keyboardShouldPersistTaps="handled"
+                onScrollBeginDrag={dismissCard}
+                ListEmptyComponent={
+                  <View style={styles.empty}>
+                    <Feather name="package" size={40} color={colors.muted} />
+                    <Text style={[styles.emptyText, { color: colors.mutedForeground }]}>لا توجد منتجات</Text>
+                  </View>
+                }
+                showsVerticalScrollIndicator={false}
+              />
+            </View>
+          </TouchableWithoutFeedback>
           {items.length > 0 && (
             <View style={[styles.cartBar, { backgroundColor: colors.card, borderTopColor: colors.border, paddingBottom: insets.bottom + 12 }]}>
               <TouchableOpacity
                 style={[styles.nextBtn, { backgroundColor: colors.primary }]}
-                onPress={() => setStep("payment")}
+                onPress={() => { dismissCard(); setStep("payment"); }}
               >
                 <Text style={styles.nextBtnText}>التالي</Text>
                 <Feather name="arrow-left" size={18} color="#fff" />
@@ -384,7 +572,7 @@ export default function NewInvoiceScreen() {
         <ScrollView contentContainerStyle={{ padding: 16, gap: 16, paddingBottom: insets.bottom + 24 }}>
           <View style={[styles.summaryCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
             <Text style={[styles.summaryLabel, { color: colors.mutedForeground }]}>العميل</Text>
-            <Text style={[styles.summaryVal, { color: colors.foreground }]}>{selectedClient?.name} ({TIER_LABEL[clientTier]})</Text>
+            <Text style={[styles.summaryVal, { color: colors.foreground }]}>{selectedClient?.name}</Text>
             <View style={[styles.divider, { backgroundColor: colors.border }]} />
             {items.map(i => (
               <View key={i.product.sync_id} style={styles.lineRow}>
@@ -392,7 +580,7 @@ export default function NewInvoiceScreen() {
                   {(i.quantity * i.unitPrice).toLocaleString("fr-DZ")}
                 </Text>
                 <Text style={[styles.lineName, { color: colors.mutedForeground }]} numberOfLines={1}>
-                  {i.product.name} ({i.quantity} × {i.unitPrice.toLocaleString("fr-DZ")})
+                  {i.product.name} ({i.quantity % 1 === 0 ? i.quantity : i.quantity.toFixed(2)} × {i.unitPrice.toLocaleString("fr-DZ")})
                 </Text>
               </View>
             ))}
@@ -403,7 +591,9 @@ export default function NewInvoiceScreen() {
 
           <Text style={[styles.sectionTitle, { color: colors.foreground }]}>طريقة الدفع</Text>
           <View style={styles.paymentRow}>
-            {(["cash", "credit"] as const).map(pt => (
+            {(["cash", "credit"] as const)
+              .filter(pt => pt === "cash" || (user?.truckCanSellOnCredit !== false))
+              .map(pt => (
               <TouchableOpacity
                 key={pt}
                 style={[
@@ -439,6 +629,108 @@ export default function NewInvoiceScreen() {
           </TouchableOpacity>
         </ScrollView>
       )}
+
+      {/* ── Add-client modal ──────────────────────────────────────────────── */}
+      <Modal
+        visible={addClientOpen}
+        transparent
+        animationType="slide"
+        onRequestClose={resetAddClientModal}
+      >
+        <TouchableWithoutFeedback onPress={resetAddClientModal}>
+          <View style={styles.modalOverlay} />
+        </TouchableWithoutFeedback>
+        <KeyboardAvoidingView
+          behavior={Platform.OS === "ios" ? "padding" : "height"}
+          style={styles.modalKav}
+        >
+          <View style={[styles.modalSheet, { backgroundColor: colors.card, borderColor: colors.border, paddingBottom: insets.bottom + 16 }]}>
+            {/* Handle */}
+            <View style={[styles.modalHandle, { backgroundColor: colors.border }]} />
+
+            <Text style={[styles.modalTitle, { color: colors.foreground }]}>زبون جديد</Text>
+
+            {/* Name */}
+            <View style={styles.modalField}>
+              <Text style={[styles.modalLabel, { color: colors.mutedForeground }]}>الاسم *</Text>
+              <TextInput
+                style={[styles.modalInput, { color: colors.foreground, backgroundColor: colors.background, borderColor: colors.border }]}
+                value={newClientName}
+                onChangeText={setNewClientName}
+                placeholder="اسم الزبون"
+                placeholderTextColor={colors.mutedForeground}
+                textAlign="right"
+                autoFocus
+                returnKeyType="next"
+              />
+            </View>
+
+            {/* Phone */}
+            <View style={styles.modalField}>
+              <Text style={[styles.modalLabel, { color: colors.mutedForeground }]}>الهاتف (اختياري)</Text>
+              <TextInput
+                style={[styles.modalInput, { color: colors.foreground, backgroundColor: colors.background, borderColor: colors.border }]}
+                value={newClientPhone}
+                onChangeText={setNewClientPhone}
+                placeholder="0555 000 000"
+                placeholderTextColor={colors.mutedForeground}
+                keyboardType="phone-pad"
+                textAlign="right"
+                returnKeyType="done"
+              />
+            </View>
+
+            {/* Client type selector */}
+            <View style={styles.modalField}>
+              <Text style={[styles.modalLabel, { color: colors.mutedForeground }]}>نوع العميل</Text>
+              <View style={styles.tierRow}>
+                {TIER_OPTIONS.map(opt => (
+                  <TouchableOpacity
+                    key={opt.value}
+                    style={[
+                      styles.tierBtn,
+                      {
+                        backgroundColor: newClientType === opt.value ? colors.primary : colors.background,
+                        borderColor: newClientType === opt.value ? colors.primary : colors.border,
+                      },
+                    ]}
+                    onPress={() => setNewClientType(opt.value)}
+                  >
+                    <Text style={[
+                      styles.tierBtnText,
+                      { color: newClientType === opt.value ? "#fff" : colors.foreground },
+                    ]}>
+                      {opt.label}
+                    </Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+            </View>
+
+            {/* Actions */}
+            <View style={styles.modalActions}>
+              <TouchableOpacity
+                style={[styles.modalCancelBtn, { backgroundColor: colors.background, borderColor: colors.border }]}
+                onPress={resetAddClientModal}
+              >
+                <Text style={[styles.modalCancelText, { color: colors.foreground }]}>إلغاء</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[
+                  styles.modalSaveBtn,
+                  { backgroundColor: savingNewClient || !newClientName.trim() ? colors.muted : colors.primary },
+                ]}
+                onPress={saveNewClient}
+                disabled={savingNewClient || !newClientName.trim()}
+              >
+                <Text style={styles.modalSaveText}>
+                  {savingNewClient ? "جاري الحفظ..." : "حفظ وتحديد"}
+                </Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </KeyboardAvoidingView>
+      </Modal>
     </View>
   );
 }
@@ -456,6 +748,17 @@ const styles = StyleSheet.create({
   },
   stepLabel: { fontSize: 13, fontFamily: "Cairo_600SemiBold", paddingVertical: 4, paddingHorizontal: 12 },
   stepActive: { borderBottomWidth: 2, borderBottomColor: "#f97316" } as any,
+
+  // Client search row with + button
+  clientSearchRow: {
+    flexDirection: "row-reverse", alignItems: "center",
+    gap: 8, marginHorizontal: 12, marginTop: 10,
+  },
+  addClientBtn: {
+    width: 44, height: 44, borderRadius: 12,
+    alignItems: "center", justifyContent: "center",
+  },
+
   searchBar: {
     flexDirection: "row-reverse", alignItems: "center", gap: 8,
     marginHorizontal: 12, marginTop: 10, paddingHorizontal: 14, height: 44,
@@ -482,18 +785,39 @@ const styles = StyleSheet.create({
   catName: { fontSize: 13, fontFamily: "Cairo_600SemiBold", textAlign: "center", minHeight: 36 },
   catPriceRow: { flexDirection: "row-reverse", alignItems: "center", gap: 6, flexWrap: "wrap", justifyContent: "center" },
   catPrice: { fontSize: 14, fontFamily: "Cairo_700Bold" },
-  tierBadge: { paddingHorizontal: 7, paddingVertical: 2, borderRadius: 6 },
-  tierBadgeText: { fontSize: 10, fontFamily: "Cairo_600SemiBold" },
+  stockHint: { fontSize: 10, fontFamily: "Cairo_400Regular", textAlign: "center" },
+
   addBtn: {
     flexDirection: "row-reverse", alignItems: "center", justifyContent: "center", gap: 6,
     width: "100%", paddingVertical: 9, borderRadius: 10,
   },
   addBtnText: { color: "#fff", fontSize: 14, fontFamily: "Cairo_700Bold" },
-  qtyRow: {
-    flexDirection: "row-reverse", alignItems: "center", justifyContent: "space-between",
-    borderWidth: 1, borderRadius: 10, paddingHorizontal: 12, paddingVertical: 5,
+
+  inCartBadge: {
+    flexDirection: "row-reverse", alignItems: "center", justifyContent: "center", gap: 6,
+    width: "100%", paddingVertical: 8, borderRadius: 10, borderWidth: 1,
   },
-  qtyVal: { fontSize: 17, fontFamily: "Cairo_700Bold", minWidth: 28, textAlign: "center" },
+  inCartQty: { fontSize: 13, fontFamily: "Cairo_700Bold" },
+
+  qtyCard: {
+    width: "100%", borderRadius: 10, borderWidth: 1,
+    padding: 8, gap: 6, alignItems: "center",
+  },
+  qtyInput: {
+    width: "100%", height: 42, borderRadius: 8, borderWidth: 1,
+    fontSize: 18, fontFamily: "Cairo_700Bold", textAlign: "center",
+  },
+  qtyCardActions: { flexDirection: "row-reverse", gap: 6, width: "100%" },
+  qtyConfirmBtn: {
+    flex: 1, paddingVertical: 8, borderRadius: 8,
+    alignItems: "center", justifyContent: "center",
+  },
+  qtyConfirmText: { color: "#fff", fontSize: 14, fontFamily: "Cairo_700Bold" },
+  qtyCancelBtn: {
+    width: 38, paddingVertical: 8, borderRadius: 8,
+    alignItems: "center", justifyContent: "center",
+  },
+  removeHint: { fontSize: 11, fontFamily: "Cairo_400Regular", textDecorationLine: "underline" },
 
   cartBar: {
     position: "absolute", left: 0, right: 0, bottom: 0,
@@ -507,6 +831,11 @@ const styles = StyleSheet.create({
 
   empty: { alignItems: "center", paddingVertical: 60, gap: 12 },
   emptyText: { fontSize: 14, fontFamily: "Cairo_400Regular" },
+  addClientEmptyBtn: {
+    flexDirection: "row-reverse", alignItems: "center", gap: 6,
+    paddingHorizontal: 20, paddingVertical: 10, borderRadius: 12,
+  },
+  addClientEmptyBtnText: { color: "#fff", fontSize: 14, fontFamily: "Cairo_700Bold" },
 
   summaryCard: { borderRadius: 14, borderWidth: 1, padding: 16, gap: 8 },
   summaryLabel: { fontSize: 12, fontFamily: "Cairo_400Regular" },
@@ -528,4 +857,46 @@ const styles = StyleSheet.create({
     gap: 10, paddingVertical: 16, borderRadius: 14, marginTop: 8,
   },
   saveBtnText: { color: "#fff", fontSize: 17, fontFamily: "Cairo_700Bold" },
+
+  // ── Add-client modal ──────────────────────────────────────────────────────
+  modalOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: "rgba(0,0,0,0.45)",
+  },
+  modalKav: {
+    position: "absolute", left: 0, right: 0, bottom: 0,
+  },
+  modalSheet: {
+    borderTopLeftRadius: 24, borderTopRightRadius: 24,
+    borderWidth: 1, paddingHorizontal: 20, paddingTop: 12,
+    gap: 14,
+  },
+  modalHandle: {
+    width: 40, height: 4, borderRadius: 2,
+    alignSelf: "center", marginBottom: 4,
+  },
+  modalTitle: { fontSize: 17, fontFamily: "Cairo_700Bold", textAlign: "right" },
+  modalField: { gap: 6 },
+  modalLabel: { fontSize: 12, fontFamily: "Cairo_400Regular", textAlign: "right" },
+  modalInput: {
+    height: 46, borderRadius: 10, borderWidth: 1,
+    paddingHorizontal: 14, fontSize: 15, fontFamily: "Cairo_400Regular",
+  },
+  tierRow: { flexDirection: "row-reverse", gap: 8 },
+  tierBtn: {
+    flex: 1, paddingVertical: 10, borderRadius: 10, borderWidth: 1,
+    alignItems: "center", justifyContent: "center",
+  },
+  tierBtnText: { fontSize: 13, fontFamily: "Cairo_600SemiBold" },
+  modalActions: { flexDirection: "row-reverse", gap: 10, marginTop: 4 },
+  modalCancelBtn: {
+    flex: 1, paddingVertical: 13, borderRadius: 12, borderWidth: 1,
+    alignItems: "center", justifyContent: "center",
+  },
+  modalCancelText: { fontSize: 15, fontFamily: "Cairo_600SemiBold" },
+  modalSaveBtn: {
+    flex: 2, paddingVertical: 13, borderRadius: 12,
+    alignItems: "center", justifyContent: "center",
+  },
+  modalSaveText: { color: "#fff", fontSize: 15, fontFamily: "Cairo_700Bold" },
 });

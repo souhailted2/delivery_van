@@ -1,5 +1,6 @@
 import { Feather } from "@expo/vector-icons";
-import { useCallback, useEffect, useState } from "react";
+import { useRefreshOnFocus } from "@/hooks/useRefreshOnFocus";
+import { useCallback, useState } from "react";
 import {
   Alert, FlatList, Modal, RefreshControl, ScrollView, StyleSheet, Text,
   TextInput, TouchableOpacity, View,
@@ -18,7 +19,7 @@ export default function CaisseScreen() {
   const colors = useColors();
   const { user } = useAuth();
   const isTruck = user?.role === "truck";
-  const { triggerSync } = useSync();
+  const { triggerSync, bumpLocalVersion } = useSync();
   const [transfers, setTransfers] = useState<CashRow[]>([]);
   const [trucks, setTrucks] = useState<TruckRow[]>([]);
   const [refreshing, setRefreshing] = useState(false);
@@ -47,7 +48,7 @@ export default function CaisseScreen() {
     setTrucks(truckRows);
   }, [isTruck, user?.truckId]);
 
-  useEffect(() => { load(); }, [load]);
+  useRefreshOnFocus(load);
 
   const myTruck = isTruck ? trucks.find(t => t.id === user?.truckId) ?? trucks[0] : undefined;
 
@@ -69,6 +70,14 @@ export default function CaisseScreen() {
     if (!truckId) { Alert.alert("تنبيه", "اختر الشاحنة"); return; }
     const amount = parseFloat(formAmount);
     if (!amount || amount <= 0) { Alert.alert("تنبيه", "أدخل مبلغاً صحيحاً"); return; }
+    // Truck users: block if amount exceeds current cash balance
+    if (isTruck) {
+      const balance = Number(myTruck?.cash_balance ?? 0);
+      if (amount > balance) {
+        Alert.alert("تنبيه", `المبلغ يتجاوز رصيد الصندوق (${balance.toLocaleString("fr-DZ")} د.ج)`);
+        return;
+      }
+    }
     setSaving(true);
     try {
       const db = await getDb();
@@ -84,6 +93,7 @@ export default function CaisseScreen() {
       // ملاحظة: لا يتم خصم رصيد صندوق الشاحنة هنا. يبقى الطلب "قيد الانتظار"
       // ولا يُخصم المبلغ إلا بعد موافقة الإدارة (تتم المعالجة على الخادم).
       setShowModal(false);
+      bumpLocalVersion();
       triggerSync();
       load();
       if (isTruck) {

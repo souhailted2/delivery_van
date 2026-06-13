@@ -1,7 +1,8 @@
 import { Feather } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
 import { router } from "expo-router";
-import { useCallback, useEffect, useState } from "react";
+import { useRefreshOnFocus } from "@/hooks/useRefreshOnFocus";
+import { useCallback, useState } from "react";
 import { FlatList, Image, RefreshControl, StyleSheet, Text, TouchableOpacity, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { SyncBar } from "@/components/SyncBar";
@@ -181,7 +182,7 @@ export default function TruckDashboardScreen() {
     );
     setTruck(truckRow ?? null);
 
-    const truckId = truckRow?.id ?? null;
+    const truckId = truckRow?.id ?? user?.truckId ?? null;
     const invFilter = truckId ? "AND i.truck_id = ?" : "";
     const cntFilter = truckId ? "AND truck_id = ?" : "";
     const idArg = truckId ? [truckId] : [];
@@ -232,7 +233,7 @@ export default function TruckDashboardScreen() {
     }
   }, [user?.truckId]);
 
-  useEffect(() => { load(); checkDispatch(); }, [load, checkDispatch]);
+  useRefreshOnFocus(() => { load(); checkDispatch(); });
 
   const onRefresh = async () => {
     setRefreshing(true);

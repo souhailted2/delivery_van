@@ -1,6 +1,7 @@
 import { Feather } from "@expo/vector-icons";
 import { router, useLocalSearchParams } from "expo-router";
-import { useCallback, useEffect, useState } from "react";
+import { useRefreshOnFocus } from "@/hooks/useRefreshOnFocus";
+import { useCallback, useState } from "react";
 import {
   ActivityIndicator, Alert, ScrollView, StyleSheet, Text, TouchableOpacity, View,
 } from "react-native";
@@ -62,7 +63,7 @@ export default function InvoiceDetailScreen() {
     setLoading(false);
   }, [syncId]);
 
-  useEffect(() => { load(); }, [load]);
+  useRefreshOnFocus(load);
 
   const handlePrint = async () => {
     if (!invoice) return;

@@ -1,5 +1,6 @@
 import { Feather } from "@expo/vector-icons";
-import { useCallback, useEffect, useState } from "react";
+import { useRefreshOnFocus } from "@/hooks/useRefreshOnFocus";
+import { useCallback, useState } from "react";
 import {
   Alert, FlatList, Modal, RefreshControl, StyleSheet, Text,
   TextInput, TouchableOpacity, View,
@@ -33,7 +34,7 @@ export default function TrucksScreen() {
     setTrucks(rows);
   }, [search]);
 
-  useEffect(() => { load(); }, [load]);
+  useRefreshOnFocus(load);
 
   const onRefresh = async () => {
     setRefreshing(true);

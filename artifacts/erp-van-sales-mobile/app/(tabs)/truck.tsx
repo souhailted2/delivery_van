@@ -1,5 +1,6 @@
 import { Feather } from "@expo/vector-icons";
-import { useCallback, useEffect, useState } from "react";
+import { useRefreshOnFocus } from "@/hooks/useRefreshOnFocus";
+import { useCallback, useState } from "react";
 import { FlatList, RefreshControl, StyleSheet, Text, View } from "react-native";
 import { SyncBar } from "@/components/SyncBar";
 import { useAuth } from "@/contexts/AuthContext";
@@ -78,7 +79,7 @@ export default function TruckScreen() {
     }
   }, [user?.truckId]);
 
-  useEffect(() => { load(); }, [load]);
+  useRefreshOnFocus(load);
 
   const onRefresh = async () => {
     setRefreshing(true);

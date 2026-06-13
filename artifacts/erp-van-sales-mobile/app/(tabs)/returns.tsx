@@ -1,6 +1,7 @@
 import { Feather } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
 import { router } from "expo-router";
+import { useRefreshOnFocus } from "@/hooks/useRefreshOnFocus";
 import { useCallback, useEffect, useState } from "react";
 import {
   Alert, FlatList, Modal, RefreshControl, ScrollView, StyleSheet,
@@ -59,7 +60,7 @@ function NewReturnModal({
 }: {
   visible: boolean; onClose: () => void; onSaved: () => void; colors: any;
 }) {
-  const { triggerSync } = useSync();
+  const { triggerSync, bumpLocalVersion } = useSync();
   const [invoices, setInvoices] = useState<(Invoice & { client_name?: string })[]>([]);
   const [products, setProducts] = useState<Product[]>([]);
   const [selectedInvoice, setSelectedInvoice] = useState<Invoice | null>(null);
@@ -161,9 +162,21 @@ function NewReturnModal({
             item.quantity, item.unitPrice, item.quantity * item.unitPrice, now,
           ] as any[]
         );
+        // Optimistic restock of the truck so the stock screen reflects the
+        // return immediately. trucks/truck_stock are server-authoritative; the
+        // updated_at bump prevents the pre-push pull from reverting it before
+        // the server-side reconciliation runs.
+        if (inv?.truck_id && item.product.id != null) {
+          await db.runAsync(
+            `UPDATE truck_stock SET quantity = quantity + ?, updated_at = ?
+             WHERE truck_id = ? AND product_id = ?`,
+            [item.quantity, now, inv.truck_id, item.product.id] as any[]
+          );
+        }
       }
 
       await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      bumpLocalVersion();
       triggerSync();
       onSaved();
       onClose();
@@ -425,7 +438,7 @@ export default function ReturnsScreen() {
     setReturns(rows);
   }, []);
 
-  useEffect(() => { load(); }, [load]);
+  useRefreshOnFocus(load);
 
   const onRefresh = async () => {
     setRefreshing(true);

@@ -1,6 +1,7 @@
 import { Feather } from "@expo/vector-icons";
 import { router, useLocalSearchParams } from "expo-router";
-import { useCallback, useEffect, useState } from "react";
+import { useRefreshOnFocus } from "@/hooks/useRefreshOnFocus";
+import { useCallback, useState } from "react";
 import {
   ActivityIndicator, ScrollView, StyleSheet, Text, TouchableOpacity, View,
 } from "react-native";
@@ -90,7 +91,7 @@ export default function ClientProfileScreen() {
     setLoading(false);
   }, [syncId]);
 
-  useEffect(() => { load(); }, [load]);
+  useRefreshOnFocus(load);
 
   const updateTier = async (tier: string) => {
     if (!client || client.client_type === tier) return;

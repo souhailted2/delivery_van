@@ -1,7 +1,8 @@
 import { Feather } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
 import { router } from "expo-router";
-import { useCallback, useEffect, useState } from "react";
+import { useRefreshOnFocus } from "@/hooks/useRefreshOnFocus";
+import { useCallback, useState } from "react";
 import { FlatList, RefreshControl, StyleSheet, Text, TouchableOpacity, View } from "react-native";
 import { SyncBar } from "@/components/SyncBar";
 import { useSync } from "@/contexts/SyncContext";
@@ -62,7 +63,7 @@ export default function InvoicesScreen() {
     setInvoices(rows);
   }, []);
 
-  useEffect(() => { load(); }, []);
+  useRefreshOnFocus(load);
 
   const onRefresh = async () => {
     setRefreshing(true);

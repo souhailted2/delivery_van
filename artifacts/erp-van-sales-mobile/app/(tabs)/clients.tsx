@@ -1,21 +1,20 @@
 import { Feather } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { router } from "expo-router";
+import { useRefreshOnFocus } from "@/hooks/useRefreshOnFocus";
+import { useCallback, useRef, useState } from "react";
 import {
   Alert, FlatList, Modal, RefreshControl, StyleSheet, Text,
   TextInput, TouchableOpacity, View,
 } from "react-native";
 import { SyncBar } from "@/components/SyncBar";
+import { useAuth } from "@/contexts/AuthContext";
 import { useSync } from "@/contexts/SyncContext";
 import { Client, getDb } from "@/lib/db";
 import { newSyncId } from "@/lib/uuid";
 import { useColors } from "@/hooks/useColors";
 
-const CLIENT_TYPE_LABELS: Record<string, string> = {
-  retail: "تجزئة", half_wholesale: "نصف جملة", wholesale: "جملة",
-};
 type TierKey = "retail" | "half_wholesale" | "wholesale";
-const TIER_KEYS: TierKey[] = ["retail", "half_wholesale", "wholesale"];
 
 function ClientCard({ item, colors }: { item: Client; colors: any }) {
   const balance = Number(item.credit_balance ?? 0);
@@ -30,16 +29,9 @@ function ClientCard({ item, colors }: { item: Client; colors: any }) {
           <Text style={[styles.name, { color: colors.foreground }]}>{item.name}</Text>
           {item.phone && <Text style={[styles.phone, { color: colors.mutedForeground }]}>{item.phone}</Text>}
         </View>
-        <View style={{ alignItems: "center" }}>
-          <Text style={[styles.balance, { color: balanceColor }]}>
-            {balance.toLocaleString("fr-DZ")} د.ج
-          </Text>
-          <View style={[styles.typeBadge, { backgroundColor: colors.secondary }]}>
-            <Text style={[styles.typeText, { color: colors.mutedForeground }]}>
-              {CLIENT_TYPE_LABELS[item.client_type ?? "retail"] ?? item.client_type}
-            </Text>
-          </View>
-        </View>
+        <Text style={[styles.balance, { color: balanceColor }]}>
+          {balance.toLocaleString("fr-DZ")} د.ج
+        </Text>
       </View>
     </View>
   );
@@ -47,6 +39,7 @@ function ClientCard({ item, colors }: { item: Client; colors: any }) {
 
 export default function ClientsScreen() {
   const colors = useColors();
+  const { user } = useAuth();
   const { triggerSync } = useSync();
   const [clients, setClients] = useState<Client[]>([]);
   const [search, setSearch] = useState("");
@@ -54,26 +47,33 @@ export default function ClientsScreen() {
   const [showAddModal, setShowAddModal] = useState(false);
   const [newName, setNewName] = useState("");
   const [newPhone, setNewPhone] = useState("");
-  const [newTier, setNewTier] = useState<TierKey>("retail");
   const nameInputRef = useRef<TextInput>(null);
 
   const load = useCallback(async () => {
     const db = await getDb();
     if (!db) return;
     const q = search.trim();
-    const rows = await db.getAllAsync<Client>(
-      `SELECT * FROM clients WHERE is_deleted = 0 ${q ? "AND (name LIKE ? OR phone LIKE ?)" : ""} ORDER BY name`,
-      q ? [`%${q}%`, `%${q}%`] : []
-    );
+    const truckId = user?.truckId ?? null;
+    let rows: Client[];
+    if (truckId !== null) {
+      rows = await db.getAllAsync<Client>(
+        `SELECT * FROM clients WHERE is_deleted = 0 AND truck_id = ? ${q ? "AND (name LIKE ? OR phone LIKE ?)" : ""} ORDER BY name`,
+        q ? [truckId, `%${q}%`, `%${q}%`] : [truckId]
+      );
+    } else {
+      rows = await db.getAllAsync<Client>(
+        `SELECT * FROM clients WHERE is_deleted = 0 ${q ? "AND (name LIKE ? OR phone LIKE ?)" : ""} ORDER BY name`,
+        q ? [`%${q}%`, `%${q}%`] : []
+      );
+    }
     setClients(rows);
-  }, [search]);
+  }, [search, user?.truckId]);
 
-  useEffect(() => { load(); }, [load]);
+  useRefreshOnFocus(load);
 
   const handleAdd = () => {
     setNewName("");
     setNewPhone("");
-    setNewTier("retail");
     setShowAddModal(true);
     setTimeout(() => nameInputRef.current?.focus(), 200);
   };
@@ -83,10 +83,11 @@ export default function ClientsScreen() {
     const db = await getDb();
     if (!db) return;
     await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    const truckId = user?.truckId ?? null;
     await db.runAsync(
-      `INSERT INTO clients (sync_id, name, phone, client_type, is_deleted, _pending, updated_at, created_at)
-       VALUES (?, ?, ?, ?, 0, 1, ?, ?)`,
-      [newSyncId(), newName.trim(), newPhone.trim() || null, newTier, new Date().toISOString(), new Date().toISOString()]
+      `INSERT INTO clients (sync_id, name, phone, client_type, truck_id, is_deleted, _pending, updated_at, created_at)
+       VALUES (?, ?, ?, ?, ?, 0, 1, ?, ?)`,
+      [newSyncId(), newName.trim(), newPhone.trim() || null, "retail", truckId, new Date().toISOString(), new Date().toISOString()]
     );
     setShowAddModal(false);
     triggerSync();
@@ -129,26 +130,6 @@ export default function ClientsScreen() {
               returnKeyType="done"
               onSubmitEditing={confirmAdd}
             />
-            <Text style={[styles.tierLabel, { color: colors.mutedForeground }]}>نوع السعر</Text>
-            <View style={styles.tierPicker}>
-              {TIER_KEYS.map(t => {
-                const active = newTier === t;
-                return (
-                  <TouchableOpacity
-                    key={t}
-                    style={[styles.tierOption, {
-                      backgroundColor: active ? colors.primary : colors.background,
-                      borderColor: active ? colors.primary : colors.border,
-                    }]}
-                    onPress={() => setNewTier(t)}
-                  >
-                    <Text style={[styles.tierOptionText, { color: active ? "#fff" : colors.foreground }]}>
-                      {CLIENT_TYPE_LABELS[t]}
-                    </Text>
-                  </TouchableOpacity>
-                );
-              })}
-            </View>
             <View style={styles.modalActions}>
               <TouchableOpacity
                 style={[styles.modalBtn, { backgroundColor: colors.secondary }]}
@@ -191,7 +172,11 @@ export default function ClientsScreen() {
       <FlatList
         data={clients}
         keyExtractor={i => i.sync_id}
-        renderItem={({ item }) => <ClientCard item={item} colors={colors} />}
+        renderItem={({ item }) => (
+          <TouchableOpacity activeOpacity={0.7} onPress={() => router.push(`/client/${item.sync_id}`)}>
+            <ClientCard item={item} colors={colors} />
+          </TouchableOpacity>
+        )}
         contentContainerStyle={styles.list}
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary} />}
         ListEmptyComponent={
@@ -224,8 +209,6 @@ const styles = StyleSheet.create({
   name: { fontSize: 15, fontFamily: "Cairo_600SemiBold" },
   phone: { fontSize: 12, fontFamily: "Cairo_400Regular" },
   balance: { fontSize: 14, fontFamily: "Cairo_700Bold" },
-  typeBadge: { marginTop: 4, paddingHorizontal: 6, paddingVertical: 2, borderRadius: 6 },
-  typeText: { fontSize: 11, fontFamily: "Cairo_400Regular" },
   empty: { alignItems: "center", paddingVertical: 60, gap: 12 },
   emptyText: { fontSize: 14, fontFamily: "Cairo_400Regular", textAlign: "center" },
   overlay: {
@@ -241,10 +224,6 @@ const styles = StyleSheet.create({
     borderWidth: 1, borderRadius: 10, paddingHorizontal: 14, height: 46,
     fontSize: 14, fontFamily: "Cairo_400Regular",
   },
-  tierLabel: { fontSize: 12, fontFamily: "Cairo_600SemiBold", textAlign: "right", marginTop: 2 },
-  tierPicker: { flexDirection: "row-reverse", gap: 8 },
-  tierOption: { flex: 1, height: 40, borderRadius: 10, borderWidth: 1, alignItems: "center", justifyContent: "center" },
-  tierOptionText: { fontSize: 12, fontFamily: "Cairo_600SemiBold" },
   modalActions: { flexDirection: "row-reverse", gap: 10, marginTop: 4 },
   modalBtn: {
     flex: 1, height: 44, borderRadius: 10,

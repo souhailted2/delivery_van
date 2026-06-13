@@ -13,7 +13,8 @@ import {
   invoicesTable, invoiceItemsTable, returnsTable, returnItemsTable,
   cashTransfersTable, truckStockTable, stockTransfersTable, stockTransferItemsTable,
 } from "@workspace/db";
-import { gt, or, isNull, sql } from "drizzle-orm";
+import { and, eq, gt, or, isNull, sql } from "drizzle-orm";
+import { randomUUID } from "node:crypto";
 
 const router = Router();
 
@@ -86,6 +87,7 @@ router.get("/sync/v2/pull", requireAuth, async (req, res) => {
 
   // Truck sessions receive only operational tables; user sessions receive all
   const isTruckSession = !!(req as any).session?.truckId && !(req as any).session?.userId;
+  const sessionTruckId: number | null = isTruckSession ? ((req as any).session.truckId ?? null) : null;
 
   const result: Record<string, any[]> = {};
 
@@ -94,8 +96,22 @@ router.get("/sync/v2/pull", requireAuth, async (req, res) => {
     try {
       const t = table as any;
       if (!t.updatedAt) continue;
-      const rows = await db.select().from(t)
-        .where(or(gt(t.updatedAt, since), isNull(t.updatedAt)));
+      // truck_stock is tiny and must never be missed due to device-clock skew in
+      // the incremental `since` cursor, so always return all of its rows. The
+      // mobile upsert is idempotent, so re-sending every pull is safe and cheap.
+      let rows;
+      if (name === "truck_stock") {
+        rows = await db.select().from(t);
+      } else if (name === "clients" && sessionTruckId !== null) {
+        // Truck sessions receive ALL of their own clients (no since-cursor filter).
+        // Sending the complete authoritative set allows the mobile to prune stale
+        // local rows when a client is reassigned to a different truck.
+        rows = await db.select().from(t)
+          .where(eq(t.truckId, sessionTruckId));
+      } else {
+        rows = await db.select().from(t)
+          .where(or(gt(t.updatedAt, since), isNull(t.updatedAt)));
+      }
       // Convert timestamps to ISO strings and snake_case; strip sensitive columns
       const strip = COLUMN_STRIP[name] ?? [];
       result[name] = rows.map((r: any) => {
@@ -108,9 +124,15 @@ router.get("/sync/v2/pull", requireAuth, async (req, res) => {
     }
   }
 
+  // Tell the mobile which tables were returned as a complete authoritative set
+  // (vs. incremental delta). Mobile uses this to prune stale local rows.
+  const authoritativeTables: string[] = ["truck_stock"];
+  if (sessionTruckId !== null) authoritativeTables.push("clients");
+
   res.json({
     tables: result,
     cursor: new Date().toISOString(),
+    authoritativeTables,
   });
 });
 
@@ -134,6 +156,17 @@ router.post("/sync/v2/push", requireAuth, async (req, res): Promise<void> => {
 
   const tableMap: Record<string, any> = {};
   for (const { name, table } of SYNC_TABLES) tableMap[name] = table;
+
+  // Mobile (truck) pushes need special handling: invoices/returns are created
+  // OFFLINE so their children reference parents by sync_id (not the cloud's
+  // serial id), and invoice_number is generated server-side. The cloud also
+  // never reconciled truck_stock/cash for mobile sales. This path resolves the
+  // foreign keys, persists the sale atomically, and applies once-only stock/cash
+  // reconciliation. Desktop/admin sessions keep the generic upsert path below.
+  if (isTruckSession) {
+    await handleTruckPush(req, res, tables, tableMap);
+    return;
+  }
 
   for (const [tableName, records] of Object.entries(tables)) {
     const t = tableMap[tableName] as any;
@@ -164,6 +197,239 @@ router.post("/sync/v2/push", requireAuth, async (req, res): Promise<void> => {
 
   res.json({ ok: true, cursor: new Date().toISOString() });
 });
+
+// A foreign-key column on a pushed row that the mobile only knows by sync_id.
+type FkRule = { idCol: string; syncCol: string; refTable: any; tag: string };
+
+/**
+ * Truck (mobile) push: resolve sync_id foreign keys, generate invoice numbers,
+ * persist the whole sale in one transaction, and reconcile truck_stock + truck
+ * cash_balance once for each newly-inserted invoice/return.
+ *
+ * Idempotency: invoices/returns/items are inserted with ON CONFLICT DO NOTHING.
+ * Only rows actually inserted by THIS request (captured via RETURNING) drive the
+ * stock/cash reconciliation, so retries (or a lost 200 response) never
+ * double-apply a delta. credit_balance stays mobile-authoritative (carried by the
+ * pushed `clients` rows), so the server never recomputes it here.
+ */
+async function handleTruckPush(
+  req: any,
+  res: any,
+  tables: Record<string, any[]>,
+  tableMap: Record<string, any>,
+): Promise<void> {
+  const newInvoices: Array<{ id: number; truckId: number; paymentType: string; totalAmount: number }> = [];
+  const newClientReturns: Array<{ id: number; truckId: number }> = [];
+
+  try {
+    await db.transaction(async (tx) => {
+      const cache = new Map<string, number | null>();
+      const resolveId = async (tag: string, refTable: any, syncVal: any): Promise<number | null> => {
+        if (syncVal == null || syncVal === "") return null;
+        const key = tag + ":" + String(syncVal);
+        if (cache.has(key)) return cache.get(key)!;
+        const [row] = await tx.select({ id: refTable.id }).from(refTable)
+          .where(eq(refTable.syncId, String(syncVal))).limit(1);
+        const id = row?.id ?? null;
+        cache.set(key, id);
+        return id;
+      };
+      const applyFk = async (rec: any, rules: FkRule[]) => {
+        for (const r of rules) {
+          if (rec[r.idCol] == null && rec[r.syncCol] != null) {
+            const resolved = await resolveId(r.tag, r.refTable, rec[r.syncCol]);
+            if (resolved != null) rec[r.idCol] = resolved;
+          }
+        }
+      };
+      const upsert = async (tableName: string, rules?: FkRule[]) => {
+        const recs = tables[tableName];
+        if (!Array.isArray(recs)) return;
+        const t = tableMap[tableName];
+        for (const raw of recs) {
+          if (!raw.sync_id) continue;
+          const rec = camelCaseRecord(raw);
+          if (rules) await applyFk(rec, rules);
+          const clean = sanitizeForTable(t, rec);
+          if (!clean) continue;
+          await tx.insert(t).values(clean).onConflictDoUpdate({
+            target: t.syncId,
+            set: buildUpdateSet(t, clean),
+            setWhere: sql`excluded.updated_at > ${t.updatedAt} OR ${t.updatedAt} IS NULL`,
+          });
+        }
+      };
+
+      // 1. Independent/parent tables. `clients` carry the mobile-authoritative
+      //    credit_balance, so they must be upserted (not insert-only).
+      await upsert("categories");
+      await upsert("clients", [{ idCol: "truckId", syncCol: "truckSyncId", refTable: trucksTable, tag: "truck" }]);
+      await upsert("cash_transfers", [{ idCol: "truckId", syncCol: "truckSyncId", refTable: trucksTable, tag: "truck" }]);
+
+      // 2. Invoices — insert-only (immutable once created on the device).
+      for (const raw of (tables["invoices"] ?? [])) {
+        if (!raw.sync_id) continue;
+        const rec = camelCaseRecord(raw);
+        await applyFk(rec, [
+          { idCol: "clientId", syncCol: "clientSyncId", refTable: clientsTable, tag: "client" },
+          { idCol: "truckId", syncCol: "truckSyncId", refTable: trucksTable, tag: "truck" },
+        ]);
+        const clean = sanitizeForTable(invoicesTable, rec);
+        if (!clean) continue;
+        if (clean.truckId == null || clean.clientId == null) continue; // unresolved required FK
+        if (!clean.invoiceNumber) clean.invoiceNumber = `FAC-MOB-${String(clean.syncId)}`;
+        const inserted = await tx.insert(invoicesTable).values(clean)
+          .onConflictDoNothing({ target: invoicesTable.syncId })
+          .returning({
+            id: invoicesTable.id,
+            truckId: invoicesTable.truckId,
+            paymentType: invoicesTable.paymentType,
+            totalAmount: invoicesTable.totalAmount,
+          });
+        if (inserted.length > 0) {
+          newInvoices.push({
+            id: inserted[0].id,
+            truckId: inserted[0].truckId,
+            paymentType: inserted[0].paymentType,
+            totalAmount: Number(inserted[0].totalAmount),
+          });
+        }
+      }
+
+      // 3. Returns — insert-only.
+      for (const raw of (tables["returns"] ?? [])) {
+        if (!raw.sync_id) continue;
+        const rec = camelCaseRecord(raw);
+        await applyFk(rec, [
+          { idCol: "clientId", syncCol: "clientSyncId", refTable: clientsTable, tag: "client" },
+          { idCol: "truckId", syncCol: "truckSyncId", refTable: trucksTable, tag: "truck" },
+        ]);
+        const clean = sanitizeForTable(returnsTable, rec);
+        if (!clean) continue;
+        if (!clean.type) continue; // NOT NULL
+        const inserted = await tx.insert(returnsTable).values(clean)
+          .onConflictDoNothing({ target: returnsTable.syncId })
+          .returning({ id: returnsTable.id, truckId: returnsTable.truckId, type: returnsTable.type });
+        if (inserted.length > 0 && inserted[0].type === "client_return" && inserted[0].truckId != null) {
+          newClientReturns.push({ id: inserted[0].id, truckId: inserted[0].truckId });
+        }
+      }
+
+      // 4. Invoice items — resolve invoice + product, insert-only.
+      for (const raw of (tables["invoice_items"] ?? [])) {
+        if (!raw.sync_id) continue;
+        const rec = camelCaseRecord(raw);
+        await applyFk(rec, [
+          { idCol: "invoiceId", syncCol: "invoiceSyncId", refTable: invoicesTable, tag: "invoice" },
+          { idCol: "productId", syncCol: "productSyncId", refTable: productsTable, tag: "product" },
+        ]);
+        const clean = sanitizeForTable(invoiceItemsTable, rec);
+        if (!clean) continue;
+        if (clean.invoiceId == null || clean.productId == null) continue;
+        await tx.insert(invoiceItemsTable).values(clean).onConflictDoNothing({ target: invoiceItemsTable.syncId });
+      }
+
+      // 5. Return items — resolve return + product, insert-only.
+      for (const raw of (tables["return_items"] ?? [])) {
+        if (!raw.sync_id) continue;
+        const rec = camelCaseRecord(raw);
+        await applyFk(rec, [
+          { idCol: "returnId", syncCol: "returnSyncId", refTable: returnsTable, tag: "return" },
+          { idCol: "productId", syncCol: "productSyncId", refTable: productsTable, tag: "product" },
+        ]);
+        const clean = sanitizeForTable(returnItemsTable, rec);
+        if (!clean) continue;
+        if (clean.returnId == null || clean.productId == null) continue;
+        await tx.insert(returnItemsTable).values(clean).onConflictDoNothing({ target: returnItemsTable.syncId });
+      }
+
+      // 6. Reconciliation — once-only for invoices/returns inserted above.
+      //    Sale: decrement truck_stock per line item; cash sale also credits the
+      //    truck cash_balance. Mirrors the web POST /invoices side effects.
+      for (const inv of newInvoices) {
+        const items = await tx.select({ productId: invoiceItemsTable.productId, quantity: invoiceItemsTable.quantity })
+          .from(invoiceItemsTable).where(eq(invoiceItemsTable.invoiceId, inv.id));
+        for (const it of items) {
+          const qty = Number(it.quantity);
+          if (!qty) continue;
+          const [ts] = await tx.select().from(truckStockTable)
+            .where(and(eq(truckStockTable.truckId, inv.truckId), eq(truckStockTable.productId, it.productId))).limit(1);
+          if (ts) {
+            await tx.update(truckStockTable).set({
+              quantity: String(Math.max(0, Number(ts.quantity) - qty)),
+              updatedAt: new Date(),
+            }).where(eq(truckStockTable.id, ts.id));
+          }
+        }
+        if (inv.paymentType === "cash" && inv.totalAmount) {
+          const [truck] = await tx.select().from(trucksTable).where(eq(trucksTable.id, inv.truckId)).limit(1);
+          if (truck) {
+            await tx.update(trucksTable).set({
+              cashBalance: String(Number(truck.cashBalance) + inv.totalAmount),
+              updatedAt: new Date(),
+            }).where(eq(trucksTable.id, inv.truckId));
+          }
+        }
+      }
+      // Client return: add the returned quantity back to truck_stock (insert the
+      // row if the truck never carried that product). Mirrors web POST /returns.
+      for (const ret of newClientReturns) {
+        const items = await tx.select({ productId: returnItemsTable.productId, quantity: returnItemsTable.quantity })
+          .from(returnItemsTable).where(eq(returnItemsTable.returnId, ret.id));
+        for (const it of items) {
+          const qty = Number(it.quantity);
+          if (!qty) continue;
+          const [ts] = await tx.select().from(truckStockTable)
+            .where(and(eq(truckStockTable.truckId, ret.truckId), eq(truckStockTable.productId, it.productId))).limit(1);
+          if (ts) {
+            await tx.update(truckStockTable).set({
+              quantity: String(Number(ts.quantity) + qty),
+              updatedAt: new Date(),
+            }).where(eq(truckStockTable.id, ts.id));
+          } else {
+            await tx.insert(truckStockTable).values({
+              truckId: ret.truckId, productId: it.productId, quantity: String(qty),
+              syncId: randomUUID(), updatedAt: new Date(),
+            });
+          }
+        }
+      }
+    });
+  } catch (err) {
+    // Hard failure on the critical sale path: surface it (mobile keeps the rows
+    // pending and retries) instead of silently dropping the sale.
+    req.log?.error?.({ err }, "truck sync push failed");
+    res.status(500).json({ error: "sync push failed" });
+    return;
+  }
+
+  // Best-effort tables outside the critical sale path (e.g. stock_transfers,
+  // whose mobile schema differs from cloud). Processed per-row so a mismatch can
+  // never abort the sale transaction above.
+  const handled = new Set(["categories", "clients", "cash_transfers", "invoices", "returns", "invoice_items", "return_items"]);
+  for (const [tableName, records] of Object.entries(tables)) {
+    if (handled.has(tableName)) continue;
+    const t = tableMap[tableName];
+    if (!t || !Array.isArray(records)) continue;
+    for (const raw of records) {
+      if (!raw.sync_id) continue;
+      try {
+        const rec = camelCaseRecord(raw);
+        const clean = sanitizeForTable(t, rec);
+        if (!clean) continue;
+        await db.insert(t).values(clean).onConflictDoUpdate({
+          target: t.syncId,
+          set: buildUpdateSet(t, clean),
+          setWhere: sql`excluded.updated_at > ${t.updatedAt} OR ${t.updatedAt} IS NULL`,
+        }).catch((e: any) => req.log?.warn?.({ err: e, table: tableName }, "non-critical sync row failed"));
+      } catch (e) {
+        req.log?.warn?.({ err: e, table: tableName }, "non-critical sync row failed");
+      }
+    }
+  }
+
+  res.json({ ok: true, cursor: new Date().toISOString() });
+}
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
