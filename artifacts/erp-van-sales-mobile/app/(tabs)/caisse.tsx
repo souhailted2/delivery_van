@@ -85,13 +85,12 @@ export default function CaisseScreen() {
     if (!truckId) { Alert.alert("تنبيه", "اختر الشاحنة"); return; }
     const amount = parseFloat(formAmount);
     if (!amount || amount <= 0) { Alert.alert("تنبيه", "أدخل مبلغاً صحيحاً"); return; }
-    // Truck users: block if amount exceeds current cash balance
-    if (isTruck) {
-      const balance = Number(myTruck?.cash_balance ?? 0);
-      if (amount > balance) {
-        Alert.alert("تنبيه", `المبلغ يتجاوز رصيد الصندوق (${balance.toLocaleString("fr-DZ")} د.ج)`);
-        return;
-      }
+    // Truck users: block if amount exceeds the cash actually on hand.
+    // cashOnHand subtracts already-pending deliveries from the balance, so the
+    // driver can't queue more than they physically hold.
+    if (isTruck && amount > cashOnHand) {
+      Alert.alert("تنبيه", `المبلغ يتجاوز رصيد الصندوق (${Math.max(0, cashOnHand).toLocaleString("fr-DZ")} د.ج)`);
+      return;
     }
     setSaving(true);
     try {
