@@ -10,6 +10,7 @@ import { useAuth } from "@/contexts/AuthContext";
 import { useSync } from "@/contexts/SyncContext";
 import { getDb } from "@/lib/db";
 import { newSyncId } from "@/lib/uuid";
+import { canonicalizeTruckStock } from "@/lib/truckStock";
 import { useColors } from "@/hooks/useColors";
 
 interface WarehouseRow {
@@ -125,21 +126,9 @@ export default function WarehouseScreen() {
           "UPDATE products SET stock_quantity = MAX(0, stock_quantity - ?), updated_at = ?, _pending = 1 WHERE id = ?",
           [Number(item.quantity), now, item.productId]
         );
-        const existing = await db.getFirstAsync<{ _lid: number }>(
-          "SELECT _lid FROM truck_stock WHERE truck_id = ? AND product_id = ?",
-          [truckId, item.productId]
+        await canonicalizeTruckStock(
+          db, truckId, item.productId, Number(item.quantity), now
         );
-        if (existing) {
-          await db.runAsync(
-            "UPDATE truck_stock SET quantity = quantity + ?, updated_at = ?, _pending = 1 WHERE _lid = ?",
-            [Number(item.quantity), now, existing._lid]
-          );
-        } else {
-          await db.runAsync(
-            "INSERT INTO truck_stock (sync_id, truck_id, product_id, quantity, updated_at, _pending) VALUES (?, ?, ?, ?, ?, 1)",
-            [newSyncId(), truckId, item.productId, Number(item.quantity), now]
-          );
-        }
       }
       setShowTransfer(false);
       triggerSync();
