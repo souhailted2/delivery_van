@@ -1,7 +1,7 @@
 import type { SQLiteDatabase } from "expo-sqlite";
 import { Directory, File, Paths } from "expo-file-system";
 import { API_URL, getActiveApiUrl } from "./api";
-import { getDb, getSyncMeta, setSyncMeta, upsertRecord, getPendingCount, resetSyncMeta } from "./db";
+import { getDb, getSyncMeta, setSyncMeta, upsertRecord, getPendingCount, resetSyncMeta, TABLES_WITH_SOFT_DELETE } from "./db";
 import { newSyncId } from "./uuid";
 
 const PULL_TABLES = [
@@ -49,14 +49,66 @@ export async function pullSync(
     { headers: { Cookie: `connect.sid=${cookie}` } },
   );
   if (!res.ok) throw new Error(`Pull ${res.status}`);
-  const { tables } = await res.json();
-  for (const [tableName, records] of Object.entries(tables as Record<string, unknown[]>)) {
+  const payload = await res.json();
+  const tables = payload.tables as Record<string, unknown[]>;
+  // authoritativeTables: tables where the server sent the FULL set (not an incremental delta).
+  // For these tables we prune any local committed row whose sync_id wasn't in the response,
+  // which handles reassignment (e.g. a client moved from this truck to another).
+  const authoritativeTables: string[] = Array.isArray(payload.authoritativeTables)
+    ? payload.authoritativeTables
+    : [];
+
+  for (const [tableName, records] of Object.entries(tables)) {
     if (!PULL_TABLES.includes(tableName) || !Array.isArray(records)) continue;
     for (const rec of records) {
       await upsertRecord(db, tableName, rec as Record<string, unknown>);
     }
     if (options?.onProgress) {
       options.onProgress(tableName, records.length);
+    }
+    // Prune stale local rows for authoritative tables.
+    // The server's response is the complete set — any local committed row
+    // (pending=0) not in it has been reassigned/removed and should be pruned.
+    // • Tables WITH is_deleted: soft-delete (set is_deleted=1) so foreign-key
+    //   references remain intact and the app doesn't crash on stale joins.
+    // • Tables WITHOUT is_deleted (e.g. truck_stock): hard-delete the missing rows
+    //   since they are server-managed and have no FK dependents on mobile.
+    // Wrapped in try/catch so one table failure never aborts the whole pull.
+    if (authoritativeTables.includes(tableName)) {
+      try {
+        const receivedIds = records
+          .map((r) => (r as Record<string, unknown>).sync_id as string)
+          .filter(Boolean);
+        const hasSoftDelete = TABLES_WITH_SOFT_DELETE.has(tableName);
+
+        if (receivedIds.length > 0) {
+          const placeholders = receivedIds.map(() => "?").join(", ");
+          if (hasSoftDelete) {
+            await db.runAsync(
+              `UPDATE ${tableName} SET is_deleted = 1 WHERE is_deleted = 0 AND _pending = 0 AND sync_id NOT IN (${placeholders})`,
+              receivedIds,
+            );
+          } else {
+            await db.runAsync(
+              `DELETE FROM ${tableName} WHERE _pending = 0 AND sync_id NOT IN (${placeholders})`,
+              receivedIds,
+            );
+          }
+        } else {
+          // Server returned an empty authoritative set → prune all committed local rows
+          if (hasSoftDelete) {
+            await db.runAsync(
+              `UPDATE ${tableName} SET is_deleted = 1 WHERE is_deleted = 0 AND _pending = 0`,
+            );
+          } else {
+            await db.runAsync(
+              `DELETE FROM ${tableName} WHERE _pending = 0`,
+            );
+          }
+        }
+      } catch {
+        // Prune failure is non-fatal — stale rows will be pruned on the next pull
+      }
     }
   }
   await setSyncMeta(db, "last_pull_at", new Date().toISOString());
@@ -154,6 +206,7 @@ async function preCacheImages(db: SQLiteDatabase, cookie: string): Promise<void>
           const fullUrl = image_url.startsWith("http") ? image_url : `${cacheBase}${image_url}`;
           await File.downloadFileAsync(fullUrl, localFile, {
             headers: { Cookie: `connect.sid=${cookie}` },
+            idempotent: true,
           });
         }
       } catch {}
