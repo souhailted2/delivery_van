@@ -204,6 +204,13 @@ async function preCacheImages(db: SQLiteDatabase, cookie: string): Promise<void>
         if (!localFile.exists) {
           const cacheBase = await getActiveApiUrl();
           const fullUrl = image_url.startsWith("http") ? image_url : `${cacheBase}${image_url}`;
+          // NOTE: `File.downloadFileAsync` (static) is the correct API in
+          // expo-file-system 19.x — see the File class in
+          // ExpoFileSystem.types.d.ts. There is NO instance `localFile.downloadAsync`
+          // on the new File class; the only `downloadAsync` is the DEPRECATED
+          // legacy function that throws at runtime. Do not "migrate" to it.
+          // `idempotent: true` overwrites instead of throwing if the file
+          // appears between the exists check and the download (concurrent pulls).
           await File.downloadFileAsync(fullUrl, localFile, {
             headers: { Cookie: `connect.sid=${cookie}` },
             idempotent: true,
