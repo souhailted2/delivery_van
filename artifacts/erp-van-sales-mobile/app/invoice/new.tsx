@@ -184,8 +184,27 @@ export default function NewInvoiceScreen() {
   // Confirm the quantity entered in the card
   const confirmQty = (product: Product, existingItem: InvoiceItem | undefined) => {
     const raw = inputQty.replace(",", ".").trim();
-    const qty = parseFloat(raw);
+    let qty = parseFloat(raw);
     if (!isNaN(qty) && qty > 0) {
+      // Guard against overselling: truck_quantity is set by the JOIN in the
+      // products query and represents what the truck currently carries.
+      // Only enforced when a specific truck is known (truck_quantity is defined).
+      const maxAvailable = Number((product as any).truck_quantity);
+      if (!isNaN(maxAvailable)) {
+        if (maxAvailable <= 0) {
+          Alert.alert("نفدت الكمية", `لا يوجد مخزون من "${product.name}" في الشاحنة.`);
+          setActiveProductId(null);
+          setInputQty("");
+          return;
+        }
+        if (qty > maxAvailable) {
+          qty = maxAvailable;
+          Alert.alert(
+            "تنبيه: تجاوز المخزون",
+            `الكمية المتوفرة من "${product.name}" في الشاحنة هي ${maxAvailable} وحدة فقط.\nتم ضبط الكمية تلقائياً.`,
+          );
+        }
+      }
       if (existingItem) {
         setItems(prev => prev.map(i =>
           i.product.sync_id === product.sync_id ? { ...i, quantity: qty } : i
@@ -361,11 +380,15 @@ export default function NewInvoiceScreen() {
         <View style={styles.catPriceRow}>
           <Text style={[styles.catPrice, { color: colors.primary }]}>{price.toLocaleString("fr-DZ")} د.ج</Text>
         </View>
-        {(product as any).truck_quantity !== undefined && (
-          <Text style={[styles.stockHint, { color: colors.mutedForeground }]}>
-            في الشاحنة: {Number((product as any).truck_quantity).toFixed(0)}
-          </Text>
-        )}
+        {(product as any).truck_quantity !== undefined && (() => {
+          const tq = Number((product as any).truck_quantity);
+          const stockColor = tq <= 3 ? colors.destructive : colors.mutedForeground;
+          return (
+            <Text style={[styles.stockHint, { color: stockColor }]}>
+              {tq <= 0 ? "نفد المخزون" : `في الشاحنة: ${tq.toFixed(0)}`}
+            </Text>
+          );
+        })()}
 
         {isActive ? (
           <View style={[styles.qtyCard, { backgroundColor: colors.background, borderColor: colors.primary + "44" }]}>

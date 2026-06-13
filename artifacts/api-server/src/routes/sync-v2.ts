@@ -370,6 +370,21 @@ async function handleTruckPush(
         for (const it of items) {
           const qty = Number(it.quantity);
           if (!qty || it.productId == null) continue;
+          // Pre-check: log when a pushed line exceeds available truck stock so
+          // oversells from stale/tampered devices are visible in server logs.
+          // The GREATEST(0, …) below still caps stock at zero deterministically.
+          const [stockRow] = await tx
+            .select({ quantity: truckStockTable.quantity })
+            .from(truckStockTable)
+            .where(and(eq(truckStockTable.truckId, inv.truckId), eq(truckStockTable.productId, it.productId)))
+            .limit(1);
+          const available = Number(stockRow?.quantity ?? 0);
+          if (qty > available) {
+            req.log.warn(
+              { truckId: inv.truckId, invoiceId: inv.id, productId: it.productId, available, requestedQty: qty },
+              "sync push: invoice line qty exceeds truck stock — capping to available",
+            );
+          }
           await tx.update(truckStockTable).set({
             quantity: sql`GREATEST(0, ${truckStockTable.quantity} - ${qty})`,
             updatedAt: new Date(),
