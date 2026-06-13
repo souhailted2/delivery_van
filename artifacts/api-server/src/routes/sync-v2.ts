@@ -365,14 +365,22 @@ async function handleTruckPush(
       //    POST /invoices side effects. All money/stock mutations use atomic SQL
       //    expressions (read-modify-write would lose concurrent updates).
       for (const inv of newInvoices) {
-        const items = await tx.select({ productId: invoiceItemsTable.productId, quantity: invoiceItemsTable.quantity })
-          .from(invoiceItemsTable).where(eq(invoiceItemsTable.invoiceId, inv.id));
+        const items = await tx
+          .select({
+            syncId: invoiceItemsTable.syncId,
+            productId: invoiceItemsTable.productId,
+            quantity: invoiceItemsTable.quantity,
+            unitPrice: invoiceItemsTable.unitPrice,
+          })
+          .from(invoiceItemsTable)
+          .where(eq(invoiceItemsTable.invoiceId, inv.id));
+
+        let actualTotal = 0;
         for (const it of items) {
           const qty = Number(it.quantity);
+          const unitPrice = Number(it.unitPrice ?? 0);
           if (!qty || it.productId == null) continue;
-          // Pre-check: log when a pushed line exceeds available truck stock so
-          // oversells from stale/tampered devices are visible in server logs.
-          // The GREATEST(0, …) below still caps stock at zero deterministically.
+
           const [stockRow] = await tx
             .select({ quantity: truckStockTable.quantity })
             .from(truckStockTable)
@@ -380,34 +388,43 @@ async function handleTruckPush(
             .limit(1);
           const available = Number(stockRow?.quantity ?? 0);
           const cappedQty = Math.min(qty, available);
+
           if (qty > available) {
             req.log.warn(
-              { truckId: inv.truckId, invoiceId: inv.id, productId: it.productId, available, requestedQty: qty, cappedQty },
-              "sync push: invoice line qty exceeds truck stock — capping persisted quantity to available",
+              { truckId: inv.truckId, invoiceId: inv.id, syncId: it.syncId, productId: it.productId, available, requestedQty: qty, cappedQty },
+              "sync push: invoice line qty exceeds truck stock — capping persisted quantity and subtotal",
             );
-            // Cap the invoice_item quantity so revenue/balance figures match reality.
+            // Cap by syncId (unique per line) to avoid touching sibling lines for same product.
+            const cappedSubtotal = (cappedQty * unitPrice).toFixed(2);
             await tx.update(invoiceItemsTable)
-              .set({ quantity: String(cappedQty) })
-              .where(and(
-                eq(invoiceItemsTable.invoiceId, inv.id),
-                eq(invoiceItemsTable.productId, it.productId!),
-              ));
+              .set({ quantity: String(cappedQty), subtotal: cappedSubtotal })
+              .where(eq(invoiceItemsTable.syncId, it.syncId!));
           }
-          if (cappedQty <= 0) continue; // nothing to deduct
+
+          actualTotal += cappedQty * unitPrice;
+
+          if (cappedQty <= 0) continue; // nothing to deduct from stock
           await tx.update(truckStockTable).set({
             quantity: sql`GREATEST(0, ${truckStockTable.quantity} - ${cappedQty})`,
             updatedAt: new Date(),
           }).where(and(eq(truckStockTable.truckId, inv.truckId), eq(truckStockTable.productId, it.productId)));
         }
-        if (inv.paymentType === "cash" && inv.totalAmount) {
+
+        // Recompute invoice total from accepted (possibly capped) line amounts.
+        await tx.update(invoicesTable)
+          .set({ totalAmount: actualTotal.toFixed(2) })
+          .where(eq(invoicesTable.id, inv.id));
+
+        // Financial side-effects use the corrected actualTotal (not the device-pushed figure).
+        if (inv.paymentType === "cash" && actualTotal > 0) {
           await tx.update(trucksTable).set({
-            cashBalance: sql`${trucksTable.cashBalance} + ${inv.totalAmount}`,
+            cashBalance: sql`${trucksTable.cashBalance} + ${actualTotal}`,
             updatedAt: new Date(),
           }).where(eq(trucksTable.id, inv.truckId));
         }
-        if (inv.paymentType === "credit" && inv.totalAmount && inv.clientId != null) {
+        if (inv.paymentType === "credit" && actualTotal > 0 && inv.clientId != null) {
           await tx.update(clientsTable).set({
-            balance: sql`${clientsTable.balance} - ${inv.totalAmount}`,
+            balance: sql`${clientsTable.balance} - ${actualTotal}`,
             updatedAt: new Date(),
           }).where(eq(clientsTable.id, inv.clientId));
         }
