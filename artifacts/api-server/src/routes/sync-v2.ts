@@ -218,7 +218,10 @@ async function handleTruckPush(
   tables: Record<string, any[]>,
   tableMap: Record<string, any>,
 ): Promise<void> {
-  const newInvoices: Array<{ id: number; truckId: number; paymentType: string; totalAmount: number }> = [];
+  // Truck sessions may only write rows scoped to their own truck (server-side
+  // authorization — never trust the truck_id the device sends).
+  const sessionTruckId = Number((req as any).session?.truckId) || null;
+  const newInvoices: Array<{ id: number; truckId: number; clientId: number | null; paymentType: string; totalAmount: number }> = [];
   const newClientReturns: Array<{ id: number; truckId: number }> = [];
 
   try {
@@ -242,7 +245,7 @@ async function handleTruckPush(
           }
         }
       };
-      const upsert = async (tableName: string, rules?: FkRule[]) => {
+      const upsert = async (tableName: string, rules?: FkRule[], opts?: { forceTruckId?: boolean }) => {
         const recs = tables[tableName];
         if (!Array.isArray(recs)) return;
         const t = tableMap[tableName];
@@ -252,6 +255,7 @@ async function handleTruckPush(
           if (rules) await applyFk(rec, rules);
           const clean = sanitizeForTable(t, rec);
           if (!clean) continue;
+          if (opts?.forceTruckId && sessionTruckId != null) clean.truckId = sessionTruckId;
           await tx.insert(t).values(clean).onConflictDoUpdate({
             target: t.syncId,
             set: buildUpdateSet(t, clean),
@@ -260,11 +264,12 @@ async function handleTruckPush(
         }
       };
 
-      // 1. Independent/parent tables. `clients` carry the mobile-authoritative
-      //    credit_balance, so they must be upserted (not insert-only).
+      // 1. Independent/parent tables. `clients` are upserted for profile fields
+      //    (name/phone/type); their `balance` is reconciled server-side from
+      //    credit invoices below (mirroring the web), not trusted from the device.
       await upsert("categories");
       await upsert("clients", [{ idCol: "truckId", syncCol: "truckSyncId", refTable: trucksTable, tag: "truck" }]);
-      await upsert("cash_transfers", [{ idCol: "truckId", syncCol: "truckSyncId", refTable: trucksTable, tag: "truck" }]);
+      await upsert("cash_transfers", [{ idCol: "truckId", syncCol: "truckSyncId", refTable: trucksTable, tag: "truck" }], { forceTruckId: true });
 
       // 2. Invoices — insert-only (immutable once created on the device).
       for (const raw of (tables["invoices"] ?? [])) {
@@ -276,13 +281,18 @@ async function handleTruckPush(
         ]);
         const clean = sanitizeForTable(invoicesTable, rec);
         if (!clean) continue;
-        if (clean.truckId == null || clean.clientId == null) continue; // unresolved required FK
+        if (sessionTruckId != null) clean.truckId = sessionTruckId; // truck-scope enforcement
+        if (clean.truckId == null || clean.clientId == null) {
+          req.log?.warn?.({ syncId: clean.syncId, truckId: clean.truckId, clientId: clean.clientId }, "truck push: invoice skipped, unresolved FK");
+          continue; // unresolved required FK
+        }
         if (!clean.invoiceNumber) clean.invoiceNumber = `FAC-MOB-${String(clean.syncId)}`;
         const inserted = await tx.insert(invoicesTable).values(clean)
           .onConflictDoNothing({ target: invoicesTable.syncId })
           .returning({
             id: invoicesTable.id,
             truckId: invoicesTable.truckId,
+            clientId: invoicesTable.clientId,
             paymentType: invoicesTable.paymentType,
             totalAmount: invoicesTable.totalAmount,
           });
@@ -290,6 +300,7 @@ async function handleTruckPush(
           newInvoices.push({
             id: inserted[0].id,
             truckId: inserted[0].truckId,
+            clientId: inserted[0].clientId ?? null,
             paymentType: inserted[0].paymentType,
             totalAmount: Number(inserted[0].totalAmount),
           });
@@ -306,6 +317,7 @@ async function handleTruckPush(
         ]);
         const clean = sanitizeForTable(returnsTable, rec);
         if (!clean) continue;
+        if (sessionTruckId != null) clean.truckId = sessionTruckId; // truck-scope enforcement
         if (!clean.type) continue; // NOT NULL
         const inserted = await tx.insert(returnsTable).values(clean)
           .onConflictDoNothing({ target: returnsTable.syncId })
@@ -325,7 +337,10 @@ async function handleTruckPush(
         ]);
         const clean = sanitizeForTable(invoiceItemsTable, rec);
         if (!clean) continue;
-        if (clean.invoiceId == null || clean.productId == null) continue;
+        if (clean.invoiceId == null || clean.productId == null) {
+          req.log?.warn?.({ syncId: clean.syncId, invoiceId: clean.invoiceId, productId: clean.productId }, "truck push: invoice_item skipped, unresolved FK");
+          continue;
+        }
         await tx.insert(invoiceItemsTable).values(clean).onConflictDoNothing({ target: invoiceItemsTable.syncId });
       }
 
@@ -344,31 +359,32 @@ async function handleTruckPush(
       }
 
       // 6. Reconciliation — once-only for invoices/returns inserted above.
-      //    Sale: decrement truck_stock per line item; cash sale also credits the
-      //    truck cash_balance. Mirrors the web POST /invoices side effects.
+      //    Sale: decrement truck_stock per line item; cash sale credits the truck
+      //    cash_balance; credit sale debits the client balance. Mirrors the web
+      //    POST /invoices side effects. All money/stock mutations use atomic SQL
+      //    expressions (read-modify-write would lose concurrent updates).
       for (const inv of newInvoices) {
         const items = await tx.select({ productId: invoiceItemsTable.productId, quantity: invoiceItemsTable.quantity })
           .from(invoiceItemsTable).where(eq(invoiceItemsTable.invoiceId, inv.id));
         for (const it of items) {
           const qty = Number(it.quantity);
-          if (!qty) continue;
-          const [ts] = await tx.select().from(truckStockTable)
-            .where(and(eq(truckStockTable.truckId, inv.truckId), eq(truckStockTable.productId, it.productId))).limit(1);
-          if (ts) {
-            await tx.update(truckStockTable).set({
-              quantity: String(Math.max(0, Number(ts.quantity) - qty)),
-              updatedAt: new Date(),
-            }).where(eq(truckStockTable.id, ts.id));
-          }
+          if (!qty || it.productId == null) continue;
+          await tx.update(truckStockTable).set({
+            quantity: sql`GREATEST(0, ${truckStockTable.quantity} - ${qty})`,
+            updatedAt: new Date(),
+          }).where(and(eq(truckStockTable.truckId, inv.truckId), eq(truckStockTable.productId, it.productId)));
         }
         if (inv.paymentType === "cash" && inv.totalAmount) {
-          const [truck] = await tx.select().from(trucksTable).where(eq(trucksTable.id, inv.truckId)).limit(1);
-          if (truck) {
-            await tx.update(trucksTable).set({
-              cashBalance: String(Number(truck.cashBalance) + inv.totalAmount),
-              updatedAt: new Date(),
-            }).where(eq(trucksTable.id, inv.truckId));
-          }
+          await tx.update(trucksTable).set({
+            cashBalance: sql`${trucksTable.cashBalance} + ${inv.totalAmount}`,
+            updatedAt: new Date(),
+          }).where(eq(trucksTable.id, inv.truckId));
+        }
+        if (inv.paymentType === "credit" && inv.totalAmount && inv.clientId != null) {
+          await tx.update(clientsTable).set({
+            balance: sql`${clientsTable.balance} - ${inv.totalAmount}`,
+            updatedAt: new Date(),
+          }).where(eq(clientsTable.id, inv.clientId));
         }
       }
       // Client return: add the returned quantity back to truck_stock (insert the
@@ -378,15 +394,13 @@ async function handleTruckPush(
           .from(returnItemsTable).where(eq(returnItemsTable.returnId, ret.id));
         for (const it of items) {
           const qty = Number(it.quantity);
-          if (!qty) continue;
-          const [ts] = await tx.select().from(truckStockTable)
-            .where(and(eq(truckStockTable.truckId, ret.truckId), eq(truckStockTable.productId, it.productId))).limit(1);
-          if (ts) {
-            await tx.update(truckStockTable).set({
-              quantity: String(Number(ts.quantity) + qty),
-              updatedAt: new Date(),
-            }).where(eq(truckStockTable.id, ts.id));
-          } else {
+          if (!qty || it.productId == null) continue;
+          const updated = await tx.update(truckStockTable).set({
+            quantity: sql`${truckStockTable.quantity} + ${qty}`,
+            updatedAt: new Date(),
+          }).where(and(eq(truckStockTable.truckId, ret.truckId), eq(truckStockTable.productId, it.productId)))
+            .returning({ id: truckStockTable.id });
+          if (updated.length === 0) {
             await tx.insert(truckStockTable).values({
               truckId: ret.truckId, productId: it.productId, quantity: String(qty),
               syncId: randomUUID(), updatedAt: new Date(),
