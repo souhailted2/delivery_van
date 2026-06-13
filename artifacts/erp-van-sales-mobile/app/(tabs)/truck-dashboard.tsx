@@ -10,6 +10,7 @@ import { useAuth } from "@/contexts/AuthContext";
 import { useSync } from "@/contexts/SyncContext";
 import { apiFetch } from "@/lib/api";
 import { Client, getDb, Invoice } from "@/lib/db";
+import { getTruckForUser, TruckInfo } from "@/lib/truck";
 import { useColors } from "@/hooks/useColors";
 
 const logo = require("../../assets/images/logo.png");
@@ -33,12 +34,6 @@ interface StockRow {
   selling_price_retail: number;
 }
 
-interface TruckInfo {
-  id: number;
-  name: string;
-  cash_balance: number;
-  plate_number?: string | null;
-}
 
 const fmt = (n: number) => Number(n ?? 0).toLocaleString("fr-DZ") + " د.ج";
 
@@ -150,13 +145,8 @@ export default function TruckDashboardScreen() {
     const db = await getDb();
     if (!db) return;
 
-    const truckRow = await db.getFirstAsync<TruckInfo>(
-      user?.truckId
-        ? "SELECT id, name, cash_balance, plate_number FROM trucks WHERE id = ? AND is_deleted = 0"
-        : "SELECT id, name, cash_balance, plate_number FROM trucks WHERE is_deleted = 0 LIMIT 1",
-      user?.truckId ? [user.truckId] : []
-    );
-    setTruck(truckRow ?? null);
+    const truckRow = await getTruckForUser(db, user?.truckId);
+    setTruck(truckRow);
 
     const truckId = truckRow?.id ?? user?.truckId ?? null;
     const invFilter = truckId ? "AND i.truck_id = ?" : "";

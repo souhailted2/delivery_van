@@ -13,6 +13,7 @@ import { useAuth } from "@/contexts/AuthContext";
 import { useSync } from "@/contexts/SyncContext";
 import { Client, getDb, Product } from "@/lib/db";
 import { printInvoiceReceipt, ReceiptInvoice } from "@/lib/receipt";
+import { getTruckForUser } from "@/lib/truck";
 import { newSyncId } from "@/lib/uuid";
 import { useColors } from "@/hooks/useColors";
 
@@ -266,12 +267,7 @@ export default function NewInvoiceScreen() {
       const invNumber = `MOB-${invSyncId.slice(-6).toUpperCase()}`;
       const now = new Date().toISOString();
 
-      const truckRow = await db.getFirstAsync<{ id: number; name: string }>(
-        user?.truckId
-          ? "SELECT id, name FROM trucks WHERE id = ?"
-          : "SELECT id, name FROM trucks WHERE is_deleted = 0 LIMIT 1",
-        user?.truckId ? [user.truckId] : []
-      );
+      const truckRow = await getTruckForUser(db, user?.truckId);
 
       await db.runAsync(
         `INSERT INTO invoices (sync_id, invoice_number, truck_id, client_id, client_sync_id, payment_type,
