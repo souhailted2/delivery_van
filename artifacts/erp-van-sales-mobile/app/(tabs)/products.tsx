@@ -118,9 +118,12 @@ export default function ProductsScreen() {
     let rows: (Product & { category_name?: string })[];
     if (truckId !== null) {
       rows = await db.getAllAsync<Product & { category_name?: string; truck_quantity?: number }>(
-        `SELECT p.*, c.name as category_name, ts.quantity as truck_quantity FROM products p
+        `SELECT p.*, c.name as category_name, agg.quantity as truck_quantity FROM products p
          LEFT JOIN categories c ON p.category_id = c.id
-         INNER JOIN truck_stock ts ON ts.product_id = p.id AND ts.truck_id = ? AND ts.quantity > 0
+         INNER JOIN (
+           SELECT product_id, SUM(quantity) AS quantity
+           FROM truck_stock WHERE truck_id = ? GROUP BY product_id HAVING SUM(quantity) > 0
+         ) agg ON agg.product_id = p.id
          WHERE p.is_deleted = 0 ${q ? "AND p.name LIKE ?" : ""}
          ORDER BY p.name`,
         q ? [truckId, `%${q}%`] : [truckId]
