@@ -268,12 +268,15 @@ export default function NewInvoiceScreen() {
       const now = new Date().toISOString();
 
       const truckRow = await getTruckForUser(db, user?.truckId);
+      // Fallback: when trucks table hasn't synced the row yet, user.truckId still
+      // lets us set invoice.truck_id, decrement stock, and update cash balance.
+      const effectiveTruckId = truckRow?.id ?? user?.truckId ?? null;
 
       await db.runAsync(
         `INSERT INTO invoices (sync_id, invoice_number, truck_id, client_id, client_sync_id, payment_type,
           total_amount, created_at, updated_at, is_deleted, _pending)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 1)`,
-        [invSyncId, invNumber, truckRow?.id ?? null, selectedClient.id ?? null, selectedClient.sync_id,
+        [invSyncId, invNumber, effectiveTruckId, selectedClient.id ?? null, selectedClient.sync_id,
           paymentType, total, now, now] as any[]
       );
 
@@ -286,14 +289,14 @@ export default function NewInvoiceScreen() {
           [newSyncId(), invSyncId, item.product.id ?? null, item.product.sync_id,
             item.product.name, item.quantity, item.priceType, item.unitPrice, subtotal, now] as any[]
         );
-        if (truckRow?.id) {
+        if (effectiveTruckId) {
           // Optimistic local decrement. Bump updated_at so the pull half of the
           // next sync (pull-then-push) does not overwrite this with the stale
           // server quantity before the server-side reconciliation runs.
           await db.runAsync(
             `UPDATE truck_stock SET quantity = MAX(0, quantity - ?), updated_at = ?
              WHERE truck_id = ? AND product_id = ?`,
-            [item.quantity, now, truckRow.id, item.product.id ?? null] as any[]
+            [item.quantity, now, effectiveTruckId, item.product.id ?? null] as any[]
           );
         }
       }
@@ -315,11 +318,11 @@ export default function NewInvoiceScreen() {
       // dashboard reflect it immediately. trucks is NOT pushed from mobile, so
       // the server reconciles the authoritative balance on push; the updated_at
       // bump keeps the optimistic value from being reverted by the pre-push pull.
-      if (paymentType === "cash" && truckRow?.id) {
+      if (paymentType === "cash" && effectiveTruckId) {
         await db.runAsync(
           `UPDATE trucks SET cash_balance = COALESCE(cash_balance, 0) + ?, updated_at = ?
            WHERE id = ?`,
-          [total, now, truckRow.id] as any[]
+          [total, now, effectiveTruckId] as any[]
         );
       }
 
@@ -586,7 +589,9 @@ export default function NewInvoiceScreen() {
                 ListEmptyComponent={
                   <View style={styles.empty}>
                     <Feather name="package" size={40} color={colors.muted} />
-                    <Text style={[styles.emptyText, { color: colors.mutedForeground }]}>لا توجد منتجات</Text>
+                    <Text style={[styles.emptyText, { color: colors.mutedForeground }]}>
+                      {productSearch.trim() ? "لا توجد نتائج" : "لا توجد منتجات"}
+                    </Text>
                   </View>
                 }
                 showsVerticalScrollIndicator={false}
