@@ -10,6 +10,7 @@ import { useAuth } from "@/contexts/AuthContext";
 import { useColors } from "@/hooks/useColors";
 import { apiFetch } from "@/lib/api";
 import { getDb } from "@/lib/db";
+import { canonicalizeTruckStock } from "@/lib/truckStock";
 
 interface DispatchItem {
   productId: number;
@@ -98,28 +99,14 @@ export default function DispatchScreen() {
                 const { stock } = await r.json();
                 const db = await getDb();
                 if (db && stock) {
+                  const now = new Date().toISOString();
                   for (const s of stock) {
-                    const existing = await db.getFirstAsync<{ _lid: number }>(
-                      "SELECT _lid FROM truck_stock WHERE product_id = ? AND truck_id = ?",
-                      [s.productId, inbox.truckId]
+                    // Server returns the authoritative post-receive quantity;
+                    // set it absolutely and collapse any duplicate rows.
+                    await canonicalizeTruckStock(
+                      db, inbox.truckId, s.productId, 0, now,
+                      { absolute: s.quantity }
                     );
-                    if (existing) {
-                      await db.runAsync(
-                        "UPDATE truck_stock SET quantity = ?, updated_at = ? WHERE _lid = ?",
-                        [s.quantity, new Date().toISOString(), existing._lid]
-                      );
-                    } else {
-                      await db.runAsync(
-                        "INSERT INTO truck_stock (sync_id, product_id, truck_id, quantity, updated_at) VALUES (?, ?, ?, ?, ?)",
-                        [
-                          `ts-${s.productId}-${Date.now()}`,
-                          s.productId,
-                          inbox.truckId,
-                          s.quantity,
-                          new Date().toISOString(),
-                        ]
-                      );
-                    }
                   }
                 }
                 await load();
