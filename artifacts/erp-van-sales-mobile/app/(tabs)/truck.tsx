@@ -11,6 +11,7 @@ import { useColors } from "@/hooks/useColors";
 
 interface StockRow {
   sync_id: string;
+  product_id: number;
   product_name: string;
   quantity: number;
   unit: string;
@@ -61,10 +62,13 @@ export default function TruckScreen() {
     const truckId = truckRow?.id ?? user?.truckId ?? null;
     if (truckId) {
       const rows = await db.getAllAsync<StockRow>(
-        `SELECT ts.sync_id, p.name as product_name, ts.quantity, p.unit, p.selling_price_retail
+        `SELECT MIN(ts.sync_id) as sync_id, p.id as product_id, p.name as product_name,
+                SUM(ts.quantity) as quantity, p.unit, p.selling_price_retail
          FROM truck_stock ts
          JOIN products p ON ts.product_id = p.id
-         WHERE ts.truck_id = ? AND ts.quantity > 0
+         WHERE ts.truck_id = ?
+         GROUP BY p.id, p.name, p.unit, p.selling_price_retail
+         HAVING SUM(ts.quantity) > 0
          ORDER BY p.name`,
         [truckId]
       );
