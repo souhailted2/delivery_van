@@ -1,5 +1,6 @@
 import { Feather } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
+import { router } from "expo-router";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   Alert, FlatList, Modal, RefreshControl, StyleSheet, Text,
@@ -170,7 +171,11 @@ export default function ClientsScreen() {
       <FlatList
         data={clients}
         keyExtractor={i => i.sync_id}
-        renderItem={({ item }) => <ClientCard item={item} colors={colors} />}
+        renderItem={({ item }) => (
+          <TouchableOpacity activeOpacity={0.7} onPress={() => router.push(`/client/${item.sync_id}`)}>
+            <ClientCard item={item} colors={colors} />
+          </TouchableOpacity>
+        )}
         contentContainerStyle={styles.list}
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary} />}
         ListEmptyComponent={
