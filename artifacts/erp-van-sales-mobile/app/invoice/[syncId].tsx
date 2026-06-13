@@ -121,7 +121,7 @@ export default function InvoiceDetailScreen() {
                 </Text>
               </View>
               <Text style={[styles.invNo, { color: colors.foreground }]}>
-                {invoice.id ? `#${invoice.id}` : `MOB-${invoice.sync_id.slice(-6).toUpperCase()}`}
+                {invoice.invoice_number ?? (invoice.id ? `#${invoice.id}` : `MOB-${invoice.sync_id.slice(-6).toUpperCase()}`)}
               </Text>
             </View>
             <View style={[styles.divider, { backgroundColor: colors.border }]} />
