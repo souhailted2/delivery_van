@@ -11,6 +11,7 @@ import { SyncBar } from "@/components/SyncBar";
 import { useSync } from "@/contexts/SyncContext";
 import { Invoice, Product, Return, getDb } from "@/lib/db";
 import { newSyncId } from "@/lib/uuid";
+import { canonicalizeTruckStock } from "@/lib/truckStock";
 import { useColors } from "@/hooks/useColors";
 
 interface ReturnWithClient extends Return {
@@ -167,10 +168,8 @@ function NewReturnModal({
         // updated_at bump prevents the pre-push pull from reverting it before
         // the server-side reconciliation runs.
         if (inv?.truck_id && item.product.id != null) {
-          await db.runAsync(
-            `UPDATE truck_stock SET quantity = quantity + ?, updated_at = ?
-             WHERE truck_id = ? AND product_id = ?`,
-            [item.quantity, now, inv.truck_id, item.product.id] as any[]
+          await canonicalizeTruckStock(
+            db, inv.truck_id, item.product.id, item.quantity, now
           );
         }
       }
