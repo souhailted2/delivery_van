@@ -149,8 +149,9 @@ export default function TruckDashboardScreen() {
     setTruck(truckRow);
 
     const truckId = truckRow?.id ?? user?.truckId ?? null;
-    const invFilter = truckId ? "AND i.truck_id = ?" : "";
-    const cntFilter = truckId ? "AND truck_id = ?" : "";
+    // Include invoices where truck_id IS NULL + _pending (created before trucks table synced).
+    const invFilter = truckId ? "AND (i.truck_id = ? OR (i.truck_id IS NULL AND i._pending = 1))" : "";
+    const cntFilter = truckId ? "AND (truck_id = ? OR (truck_id IS NULL AND _pending = 1))" : "";
     const idArg = truckId ? [truckId] : [];
 
     const today = new Date();
