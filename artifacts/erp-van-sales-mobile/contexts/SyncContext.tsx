@@ -97,6 +97,7 @@ export function SyncProvider({ children }: { children: React.ReactNode }) {
       setLocalVersion(v => v + 1);
       await refreshCanSellOnCredit();
     } catch (e: any) {
+      console.warn("[sync] error:", e?.stack ?? e?.message ?? e);
       const db = await getDb();
       const pending = db ? await getPendingCount(db) : 0;
       setState(s => ({ ...s, syncing: false, pending, error: e?.message ?? "خطأ في المزامنة" }));
