@@ -22,6 +22,7 @@ export default function CaisseScreen() {
   const { triggerSync, bumpLocalVersion } = useSync();
   const [transfers, setTransfers] = useState<CashRow[]>([]);
   const [trucks, setTrucks] = useState<TruckRow[]>([]);
+  const [pendingCash, setPendingCash] = useState(0);
   const [refreshing, setRefreshing] = useState(false);
   const [showModal, setShowModal] = useState(false);
   const [formTruckId, setFormTruckId] = useState("");
@@ -46,6 +47,20 @@ export default function CaisseScreen() {
       isTruck && user?.truckId ? [user.truckId] : []
     );
     setTrucks(truckRows);
+
+    // Fallback cash: sum of pending cash invoices for when trucks.cash_balance
+    // hasn't been updated yet (trucks table row missing or not yet synced).
+    if (isTruck && user?.truckId) {
+      const pcRow = await db.getFirstAsync<{ total: number }>(
+        `SELECT COALESCE(SUM(total_amount), 0) as total FROM invoices
+         WHERE (truck_id = ? OR (truck_id IS NULL AND _pending = 1))
+         AND payment_type = 'cash' AND is_deleted = 0 AND _pending = 1`,
+        [user.truckId]
+      );
+      setPendingCash(Number(pcRow?.total ?? 0));
+    } else {
+      setPendingCash(0);
+    }
   }, [isTruck, user?.truckId]);
 
   useRefreshOnFocus(load);
@@ -113,7 +128,10 @@ export default function CaisseScreen() {
   const pendingOut = transfers
     .filter(t => t.direction === "in" && (t.status === "pending" || t.status == null))
     .reduce((s, t) => s + Number(t.amount ?? 0), 0);
-  const cashOnHand = Number(myTruck?.cash_balance ?? 0) - pendingOut;
+  // When trucks table has the row (after sync), use its cash_balance (already optimistically updated).
+  // When trucks table row is missing, fall back to summing pending cash invoices directly.
+  const baseBalance = myTruck ? Number(myTruck.cash_balance ?? 0) : pendingCash;
+  const cashOnHand = baseBalance - pendingOut;
   const fmt = (n: number) => n.toLocaleString("fr-DZ") + " د.ج";
 
   return (
