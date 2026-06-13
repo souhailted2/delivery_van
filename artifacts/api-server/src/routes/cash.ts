@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { db } from "@workspace/db";
 import { cashTransfersTable, trucksTable } from "@workspace/db";
-import { eq } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 
 const router = Router();
 
@@ -55,26 +55,41 @@ router.post("/cash/transfers", async (req, res) => {
 
 router.post("/cash/transfers/:id/approve", async (req, res) => {
   const id = parseInt(req.params.id);
-  const [transfer] = await db.select({
-    id: cashTransfersTable.id,
-    truckId: cashTransfersTable.truckId,
-    amount: cashTransfersTable.amount,
-    status: cashTransfersTable.status,
-    note: cashTransfersTable.note,
-    createdAt: cashTransfersTable.createdAt,
-  }).from(cashTransfersTable).where(eq(cashTransfersTable.id, id)).limit(1);
-  if (!transfer) return res.status(404).json({ error: "Transfert non trouvé" });
-  if (transfer.status !== "pending") return res.status(400).json({ error: "Transfert déjà traité" });
 
-  await db.update(cashTransfersTable).set({ status: "approved" }).where(eq(cashTransfersTable.id, id));
+  // Claim-first inside a single transaction so concurrent syncs/retries cannot
+  // double-apply the balance change: the conditional UPDATE only succeeds for the
+  // single caller that flips pending→approved.
+  const outcome = await db.transaction(async (tx) => {
+    const claimed = await tx.update(cashTransfersTable)
+      .set({ status: "approved" })
+      .where(and(eq(cashTransfersTable.id, id), eq(cashTransfersTable.status, "pending")))
+      .returning({
+        truckId: cashTransfersTable.truckId,
+        amount: cashTransfersTable.amount,
+        direction: cashTransfersTable.direction,
+      });
 
-  // Deduct from truck cash
-  const [truck] = await db.select().from(trucksTable).where(eq(trucksTable.id, transfer.truckId)).limit(1);
-  if (truck) {
-    await db.update(trucksTable).set({
-      cashBalance: String(Math.max(0, Number(truck.cashBalance) - Number(transfer.amount))),
-    }).where(eq(trucksTable.id, transfer.truckId));
-  }
+    if (claimed.length === 0) {
+      // Distinguish "not found" from "already processed" for the right HTTP code.
+      const [exists] = await tx.select({ id: cashTransfersTable.id })
+        .from(cashTransfersTable).where(eq(cashTransfersTable.id, id)).limit(1);
+      return { error: exists ? "already" : "missing" as const };
+    }
+
+    const t = claimed[0];
+    // direction "in" = truck delivered cash to admin → subtract from truck balance.
+    // direction "out" = admin handed cash to truck → add to truck balance.
+    const delta = t.direction === "out" ? Number(t.amount) : -Number(t.amount);
+    // Atomic balance update (no read-modify-write) so concurrent approvals or
+    // invoice-sync reconciliations for the same truck can't lose each other's deltas.
+    await tx.update(trucksTable)
+      .set({ cashBalance: sql`GREATEST(0, ${trucksTable.cashBalance} + ${delta})` })
+      .where(eq(trucksTable.id, t.truckId));
+    return { error: null };
+  });
+
+  if (outcome.error === "missing") return res.status(404).json({ error: "Transfert non trouvé" });
+  if (outcome.error === "already") return res.status(400).json({ error: "Transfert déjà traité" });
 
   const [updated] = await db.select({
     id: cashTransfersTable.id,

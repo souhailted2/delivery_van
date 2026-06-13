@@ -57,7 +57,8 @@ export default function InvoicesScreen() {
     if (!db) return;
     const rows = await db.getAllAsync<InvoiceRow>(
       `SELECT i.*, c.name as client_name FROM invoices i
-       LEFT JOIN clients c ON i.client_id = c.id OR i.client_sync_id = c.sync_id
+       LEFT JOIN clients c ON (i.client_id IS NOT NULL AND i.client_id = c.id)
+                           OR (i.client_sync_id IS NOT NULL AND i.client_sync_id = c.sync_id)
        WHERE i.is_deleted = 0 ORDER BY i.created_at DESC LIMIT 100`
     );
     setInvoices(rows);

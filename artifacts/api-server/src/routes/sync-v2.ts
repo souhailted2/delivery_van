@@ -144,6 +144,15 @@ router.post("/sync/v2/push", requireAuth, async (req, res): Promise<void> => {
     res.status(400).json({ error: "tables object required" }); return;
   }
 
+  // Upgraded installs may carry cash_transfers rows whose `direction` column was
+  // added without a backfill (NULL). The cloud column is NOT NULL, so a NULL would
+  // abort the truck-push transaction; coerce it to the default before any insert.
+  if (Array.isArray(tables.cash_transfers)) {
+    for (const r of tables.cash_transfers) {
+      if (r && (r.direction == null || r.direction === "")) r.direction = "in";
+    }
+  }
+
   // Enforce table-level authorization: truck sessions may only push operational tables
   const isTruckSession = !!(req as any).session?.truckId && !(req as any).session?.userId;
   if (isTruckSession) {
@@ -462,7 +471,53 @@ async function handleTruckPush(
   // Best-effort tables outside the critical sale path (e.g. stock_transfers,
   // whose mobile schema differs from cloud). Processed per-row so a mismatch can
   // never abort the sale transaction above.
-  const handled = new Set(["categories", "clients", "cash_transfers", "invoices", "returns", "invoice_items", "return_items"]);
+  // Stock transfers from mobile arrive header-first with children that reference
+  // the parent only by sync_id. Resolve the parent id before inserting items (the
+  // server column is NOT NULL), processing the header first so the lookup can hit.
+  const warnRow = (e: any, table: string) =>
+    req.log?.warn?.({ err: e, table }, "non-critical sync row failed");
+
+  const stHeaders = tables["stock_transfers"];
+  if (Array.isArray(stHeaders)) {
+    for (const raw of stHeaders) {
+      if (!raw.sync_id) continue;
+      try {
+        const clean = sanitizeForTable(stockTransfersTable, camelCaseRecord(raw));
+        if (!clean) continue;
+        await db.insert(stockTransfersTable).values(clean).onConflictDoUpdate({
+          target: stockTransfersTable.syncId,
+          set: buildUpdateSet(stockTransfersTable, clean),
+          setWhere: sql`excluded.updated_at > ${stockTransfersTable.updatedAt} OR ${stockTransfersTable.updatedAt} IS NULL`,
+        }).catch((e: any) => warnRow(e, "stock_transfers"));
+      } catch (e) { warnRow(e, "stock_transfers"); }
+    }
+  }
+
+  const stItems = tables["stock_transfer_items"];
+  if (Array.isArray(stItems)) {
+    for (const raw of stItems) {
+      if (!raw.sync_id) continue;
+      try {
+        const rec = camelCaseRecord(raw);
+        if (rec.transferId == null && rec.stockTransferSyncId) {
+          const [parent] = await db.select({ id: stockTransfersTable.id })
+            .from(stockTransfersTable)
+            .where(eq(stockTransfersTable.syncId, String(rec.stockTransferSyncId))).limit(1);
+          if (parent) rec.transferId = parent.id;
+        }
+        if (rec.transferId == null) continue; // parent unknown — skip rather than violate NOT NULL
+        const clean = sanitizeForTable(stockTransferItemsTable, rec);
+        if (!clean) continue;
+        await db.insert(stockTransferItemsTable).values(clean).onConflictDoUpdate({
+          target: stockTransferItemsTable.syncId,
+          set: buildUpdateSet(stockTransferItemsTable, clean),
+          setWhere: sql`excluded.updated_at > ${stockTransferItemsTable.updatedAt} OR ${stockTransferItemsTable.updatedAt} IS NULL`,
+        }).catch((e: any) => warnRow(e, "stock_transfer_items"));
+      } catch (e) { warnRow(e, "stock_transfer_items"); }
+    }
+  }
+
+  const handled = new Set(["categories", "clients", "cash_transfers", "invoices", "returns", "invoice_items", "return_items", "stock_transfers", "stock_transfer_items"]);
   for (const [tableName, records] of Object.entries(tables)) {
     if (handled.has(tableName)) continue;
     const t = tableMap[tableName];

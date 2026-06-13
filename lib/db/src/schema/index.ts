@@ -208,7 +208,11 @@ export type TruckStock = typeof truckStockTable.$inferSelect;
 export const stockTransfersTable = pgTable("stock_transfers", {
   id: serial("id").primaryKey(),
   branchId: integer("branch_id"), // which branch warehouse
-  truckId: integer("truck_id").notNull(),
+  truckId: integer("truck_id"), // legacy web path sets this; mobile warehouse→truck transfers leave it null
+  fromTruckId: integer("from_truck_id"),
+  toTruckId: integer("to_truck_id"),
+  fromWarehouse: integer("from_warehouse").default(0),
+  note: text("note"),
   createdAt: timestamp("created_at").notNull().defaultNow(),
   syncId: text("sync_id").unique(),
   updatedAt: timestamp("updated_at").notNull().defaultNow(),
@@ -348,6 +352,7 @@ export const cashTransfersTable = pgTable("cash_transfers", {
   id: serial("id").primaryKey(),
   truckId: integer("truck_id").notNull(),
   amount: numeric("amount", { precision: 12, scale: 2 }).notNull(),
+  direction: text("direction").notNull().default("in"), // in = truck→admin (subtract), out = admin→truck (add)
   status: text("status").notNull().default("pending"), // pending | approved | rejected
   note: text("note"),
   createdAt: timestamp("created_at").notNull().defaultNow(),

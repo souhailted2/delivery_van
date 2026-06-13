@@ -237,6 +237,11 @@ export async function getDb(): Promise<SQLiteDatabase | null> {
       try { await db.runAsync("ALTER TABLE trucks ADD COLUMN can_sell_on_credit INTEGER DEFAULT 1"); } catch {}
       try { await db.runAsync("ALTER TABLE clients ADD COLUMN credit_limit REAL"); } catch {}
       try { await db.runAsync("ALTER TABLE invoices ADD COLUMN invoice_number TEXT"); } catch {}
+      try { await db.runAsync("ALTER TABLE cash_transfers ADD COLUMN direction TEXT DEFAULT 'in'"); } catch {}
+      try { await db.runAsync("UPDATE cash_transfers SET direction='in' WHERE direction IS NULL"); } catch {}
+      try { await db.runAsync("ALTER TABLE invoices ADD COLUMN truck_sync_id TEXT"); } catch {}
+      try { await db.runAsync("ALTER TABLE invoices ADD COLUMN client_sync_id TEXT"); } catch {}
+      try { await db.runAsync("ALTER TABLE stock_transfers ADD COLUMN from_warehouse INTEGER DEFAULT 0"); } catch {}
       return db;
     })().then(
       (db) => { _db = db; return db; },

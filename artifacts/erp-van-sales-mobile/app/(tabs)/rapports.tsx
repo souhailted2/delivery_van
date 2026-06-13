@@ -96,9 +96,9 @@ export default function RapportsScreen() {
       db.getFirstAsync<{ cnt: number }>(
         `SELECT COUNT(*) as cnt FROM purchases WHERE is_deleted=0 ${dateFilter}`, params),
       db.getFirstAsync<{ total: number }>(
-        `SELECT COALESCE(SUM(amount),0) as total FROM cash_transfers WHERE is_deleted=0 AND direction='in' ${dateFilter}`, params),
+        `SELECT COALESCE(SUM(amount),0) as total FROM cash_transfers WHERE is_deleted=0 AND status='approved' AND direction='in' ${dateFilter}`, params),
       db.getFirstAsync<{ total: number }>(
-        `SELECT COALESCE(SUM(amount),0) as total FROM cash_transfers WHERE is_deleted=0 AND direction='out' ${dateFilter}`, params),
+        `SELECT COALESCE(SUM(amount),0) as total FROM cash_transfers WHERE is_deleted=0 AND status='approved' AND direction='out' ${dateFilter}`, params),
       db.getAllAsync<{ name: string; qty: number }>(
         `SELECT ii.product_name as name, COALESCE(SUM(ii.quantity),0) as qty
          FROM invoice_items ii
