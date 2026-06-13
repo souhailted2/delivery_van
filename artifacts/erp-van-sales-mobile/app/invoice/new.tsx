@@ -276,6 +276,17 @@ export default function NewInvoiceScreen() {
       // lets us set invoice.truck_id, decrement stock, and update cash balance.
       const effectiveTruckId = truckRow?.id ?? user?.truckId ?? null;
 
+      // A truck driver must have an assigned truck before saving an invoice,
+      // otherwise stock can't be decremented and the invoice has no truck
+      // context. Block with a clear message ( finally{} resets `saving` ).
+      if (user?.role === "truck" && effectiveTruckId == null) {
+        Alert.alert(
+          "لا توجد شاحنة",
+          "لا يمكن حفظ الفاتورة: لم يتم تعيين شاحنة لحسابك. تواصل مع الإدارة لربط حسابك بشاحنة."
+        );
+        return;
+      }
+
       await db.runAsync(
         `INSERT INTO invoices (sync_id, invoice_number, truck_id, client_id, client_sync_id, payment_type,
           total_amount, created_at, updated_at, is_deleted, _pending)
