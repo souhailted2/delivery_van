@@ -1,9 +1,36 @@
 import React, { createContext, useCallback, useContext, useEffect, useRef, useState } from "react";
 import { AppState } from "react-native";
 import { checkOnline, getSessionSid } from "@/lib/api";
-import { getDb, getPendingCount, getTableCounts } from "@/lib/db";
+import { getDb, getPendingCount, getTableCounts, resetDbHandle } from "@/lib/db";
 import { syncNow, resetSync } from "@/lib/sync";
 import { useAuth } from "@/contexts/AuthContext";
+
+/**
+ * Returns true when an error looks like a dead native SQLite handle.
+ * expo-sqlite v16 throws "Call to function 'NativeDatabase.prepareAsync' has
+ * been rejected. Caused by java.lang.NullPointerException" when the underlying
+ * Android handle has been finalized (background memory pressure, OS reclaim).
+ */
+function isDeadHandleError(e: unknown): boolean {
+  const msg = String((e as any)?.message ?? e);
+  return msg.includes("NullPointerException") || msg.includes("prepareAsync");
+}
+
+/**
+ * Runs fn(); if it throws a dead-handle error it clears the cached connection
+ * and retries exactly once with a fresh handle.
+ */
+async function withDeadHandleRetry<T>(fn: () => Promise<T>): Promise<T> {
+  try {
+    return await fn();
+  } catch (e) {
+    if (isDeadHandleError(e)) {
+      resetDbHandle();
+      return fn();
+    }
+    throw e;
+  }
+}
 
 interface SyncState {
   online: boolean;
@@ -63,7 +90,7 @@ export function SyncProvider({ children }: { children: React.ReactNode }) {
     syncingRef.current = true;
     setState(s => ({ ...s, syncing: true, error: null }));
     try {
-      const { pending } = await syncNow(sid);
+      const { pending } = await withDeadHandleRetry(() => syncNow(sid));
       const db = await getDb();
       const counts = db ? await getTableCounts(db) : {};
       setState(s => ({ ...s, syncing: false, lastSync: new Date().toISOString(), pending, error: null, tableCounts: counts }));
@@ -86,7 +113,7 @@ export function SyncProvider({ children }: { children: React.ReactNode }) {
     syncingRef.current = true;
     setState(s => ({ ...s, resetting: true, syncing: true, error: null }));
     try {
-      await resetSync(sid);
+      await withDeadHandleRetry(() => resetSync(sid));
       const db = await getDb();
       const counts = db ? await getTableCounts(db) : {};
       const pending = db ? await getPendingCount(db) : 0;

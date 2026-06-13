@@ -22,7 +22,7 @@ export interface Client {
 export interface Truck {
   _lid?: number; sync_id: string; id?: number | null; name: string;
   plate_number?: string | null; cash_balance?: number; vendeur_id?: number | null;
-  updated_at?: string; is_deleted?: number; _pending?: number;
+  can_sell_on_credit?: number; updated_at?: string; is_deleted?: number; _pending?: number;
 }
 export interface TruckStock {
   _lid?: number; sync_id: string; id?: number | null;
@@ -94,6 +94,19 @@ export interface StockTransferItem {
 }
 
 let _db: SQLiteDatabase | null = null;
+// Memoises the in-flight open so concurrent callers await the same promise
+// instead of racing to open the same file twice.
+let _openPromise: Promise<SQLiteDatabase> | null = null;
+
+/**
+ * Clear the cached handle so the next getDb() call opens a fresh native
+ * connection. Call this when you detect a dead handle (NullPointerException
+ * from prepareAsync) so all subsequent queries use a healthy connection.
+ */
+export function resetDbHandle(): void {
+  _db = null;
+  _openPromise = null;
+}
 
 const SCHEMA = `
   CREATE TABLE IF NOT EXISTS sync_meta (key TEXT PRIMARY KEY, value TEXT);
@@ -127,7 +140,8 @@ const SCHEMA = `
   CREATE TABLE IF NOT EXISTS trucks (
     _lid INTEGER PRIMARY KEY AUTOINCREMENT, sync_id TEXT UNIQUE, id INTEGER,
     name TEXT NOT NULL, plate_number TEXT, cash_balance REAL DEFAULT 0,
-    vendeur_id INTEGER, updated_at TEXT, is_deleted INTEGER DEFAULT 0, _pending INTEGER DEFAULT 0
+    vendeur_id INTEGER, can_sell_on_credit INTEGER DEFAULT 1,
+    updated_at TEXT, is_deleted INTEGER DEFAULT 0, _pending INTEGER DEFAULT 0
   );
   CREATE TABLE IF NOT EXISTS truck_stock (
     _lid INTEGER PRIMARY KEY AUTOINCREMENT, sync_id TEXT UNIQUE, id INTEGER,
@@ -204,16 +218,28 @@ const SCHEMA = `
 
 export async function getDb(): Promise<SQLiteDatabase | null> {
   if (Platform.OS === "web") return null;
-  if (!_db) {
-    const SQLite = await import("expo-sqlite");
-    _db = await SQLite.openDatabaseAsync("erp_mobile.db");
-    await _db.execAsync(SCHEMA);
-    // Migrations for existing databases
-    try { await _db.runAsync("ALTER TABLE products ADD COLUMN local_image_uri TEXT"); } catch {}
-    try { await _db.runAsync("ALTER TABLE cash_transfers ADD COLUMN status TEXT DEFAULT 'pending'"); } catch {}
-    try { await _db.runAsync("CREATE TABLE IF NOT EXISTS branches (_lid INTEGER PRIMARY KEY AUTOINCREMENT, sync_id TEXT UNIQUE, id INTEGER, name TEXT NOT NULL, address TEXT, phone TEXT, updated_at TEXT, is_deleted INTEGER DEFAULT 0, _pending INTEGER DEFAULT 0)"); } catch {}
+  // Fast path: live handle already open.
+  if (_db) return _db;
+  // Serialize concurrent opens: if an open is already in flight all callers
+  // await the same promise instead of racing to open the same file twice.
+  if (!_openPromise) {
+    _openPromise = (async (): Promise<SQLiteDatabase> => {
+      const SQLite = await import("expo-sqlite");
+      const db = await SQLite.openDatabaseAsync("erp_mobile.db");
+      await db.execAsync(SCHEMA);
+      // Migrations for existing databases
+      try { await db.runAsync("ALTER TABLE products ADD COLUMN local_image_uri TEXT"); } catch {}
+      try { await db.runAsync("ALTER TABLE cash_transfers ADD COLUMN status TEXT DEFAULT 'pending'"); } catch {}
+      try { await db.runAsync("CREATE TABLE IF NOT EXISTS branches (_lid INTEGER PRIMARY KEY AUTOINCREMENT, sync_id TEXT UNIQUE, id INTEGER, name TEXT NOT NULL, address TEXT, phone TEXT, updated_at TEXT, is_deleted INTEGER DEFAULT 0, _pending INTEGER DEFAULT 0)"); } catch {}
+      try { await db.runAsync("ALTER TABLE trucks ADD COLUMN can_sell_on_credit INTEGER DEFAULT 1"); } catch {}
+      return db;
+    })().then(
+      (db) => { _db = db; return db; },
+      // On failure clear the promise so the next call can retry the open.
+      (err) => { _openPromise = null; throw err; },
+    );
   }
-  return _db;
+  return _openPromise;
 }
 
 export async function getSyncMeta(
@@ -350,7 +376,7 @@ export const TABLE_LABELS: [string, string][] = [
 ];
 
 // Tables that have an is_deleted soft-delete column
-const TABLES_WITH_SOFT_DELETE = new Set([
+export const TABLES_WITH_SOFT_DELETE = new Set([
   "categories", "products", "suppliers", "clients", "trucks", "users",
   "purchases", "invoices", "returns", "cash_transfers", "stock_transfers",
 ]);
