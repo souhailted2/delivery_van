@@ -48,6 +48,7 @@ export default function DispatchScreen() {
   const { user } = useAuth();
   const [inbox, setInbox] = useState<Dispatch | null | undefined>(undefined);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(false);
   const [receiving, setReceiving] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
 
@@ -57,11 +58,15 @@ export default function DispatchScreen() {
       if (r.ok) {
         const data = await r.json();
         setInbox(data);
-      } else {
+        setError(false);
+      } else if (r.status === 404) {
         setInbox(null);
+        setError(false);
+      } else {
+        setError(true);
       }
     } catch {
-      setInbox(null);
+      setError(true);
     } finally {
       setLoading(false);
     }
@@ -94,8 +99,8 @@ export default function DispatchScreen() {
                 if (db && stock) {
                   for (const s of stock) {
                     const existing = await db.getFirstAsync<{ _lid: number }>(
-                      "SELECT _lid FROM truck_stock WHERE product_id = ?",
-                      [s.productId]
+                      "SELECT _lid FROM truck_stock WHERE product_id = ? AND truck_id = ?",
+                      [s.productId, inbox.truckId]
                     );
                     if (existing) {
                       await db.runAsync(
@@ -162,7 +167,22 @@ export default function DispatchScreen() {
               </Text>
             </View>
 
-            {inbox === null || inbox === undefined ? (
+            {error ? (
+              <View style={[styles.emptyCard, { backgroundColor: colors.card, borderColor: "#fca5a5" }]}>
+                <Feather name="wifi-off" size={36} color="#ef4444" />
+                <Text style={[styles.emptyTitle, { color: "#ef4444" }]}>فشل الاتصال بالخادم</Text>
+                <Text style={[styles.emptySub, { color: colors.mutedForeground }]}>
+                  تأكد من الاتصال بالإنترنت أو تواصل مع الإدارة لإعادة تسجيل الدخول
+                </Text>
+                <Pressable
+                  style={[styles.retryBtn, { backgroundColor: colors.primary }]}
+                  onPress={() => { setLoading(true); load(); }}
+                >
+                  <Feather name="refresh-cw" size={15} color="#fff" />
+                  <Text style={styles.retryBtnText}>إعادة المحاولة</Text>
+                </Pressable>
+              </View>
+            ) : inbox === null || inbox === undefined ? (
               <View style={[styles.emptyCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
                 <Feather name="inbox" size={36} color={colors.muted} />
                 <Text style={[styles.emptyTitle, { color: colors.foreground }]}>لا يوجد تحميل جديد</Text>
@@ -292,4 +312,9 @@ const styles = StyleSheet.create({
     borderRadius: 10, borderWidth: 1, paddingHorizontal: 12, paddingVertical: 8,
   },
   receivedText: { fontSize: 13, fontFamily: "Cairo_600SemiBold" },
+  retryBtn: {
+    flexDirection: "row-reverse", alignItems: "center", gap: 6,
+    paddingHorizontal: 20, paddingVertical: 10, borderRadius: 10, marginTop: 4,
+  },
+  retryBtnText: { color: "#fff", fontSize: 14, fontFamily: "Cairo_700Bold" },
 });
