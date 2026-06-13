@@ -209,8 +209,9 @@ type FkRule = { idCol: string; syncCol: string; refTable: any; tag: string };
  * Idempotency: invoices/returns/items are inserted with ON CONFLICT DO NOTHING.
  * Only rows actually inserted by THIS request (captured via RETURNING) drive the
  * stock/cash reconciliation, so retries (or a lost 200 response) never
- * double-apply a delta. credit_balance stays mobile-authoritative (carried by the
- * pushed `clients` rows), so the server never recomputes it here.
+ * double-apply a delta. For credit sales the server also recomputes the client
+ * balance (balance − totalAmount) in step 6 below, matching the mobile
+ * sign convention (negative = owes money).
  */
 async function handleTruckPush(
   req: any,

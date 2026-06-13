@@ -158,15 +158,25 @@ export default function ClientProfileScreen() {
             </View>
           </View>
 
-          {credit > 0 && (
-            <View style={[styles.creditCard, { backgroundColor: colors.warning + "18", borderColor: colors.warning + "44" }]}>
-              <Text style={[styles.creditVal, { color: colors.warning }]}>{fmt(credit)}</Text>
-              <View style={{ alignItems: "flex-end" }}>
-                <Text style={[styles.creditLabel, { color: colors.foreground }]}>رصيد آجل (دين)</Text>
-                <Text style={[styles.creditSub, { color: colors.mutedForeground }]}>مستحق على العميل</Text>
+          {credit !== 0 && (() => {
+            // Negative balance = client owes money (server convention).
+            // Positive balance = client has a credit (overpaid).
+            const isDebt = credit < 0;
+            const accentColor = isDebt ? colors.destructive : colors.success;
+            return (
+              <View style={[styles.creditCard, { backgroundColor: accentColor + "18", borderColor: accentColor + "44" }]}>
+                <Text style={[styles.creditVal, { color: accentColor }]}>{fmt(Math.abs(credit))}</Text>
+                <View style={{ alignItems: "flex-end" }}>
+                  <Text style={[styles.creditLabel, { color: colors.foreground }]}>
+                    {isDebt ? "رصيد آجل (دين)" : "رصيد دائن"}
+                  </Text>
+                  <Text style={[styles.creditSub, { color: colors.mutedForeground }]}>
+                    {isDebt ? "مستحق على العميل" : "رصيد لصالح العميل"}
+                  </Text>
+                </View>
               </View>
-            </View>
-          )}
+            );
+          })()}
 
           <View style={styles.statsRow}>
             <View style={[styles.statCard, { backgroundColor: colors.card, borderColor: colors.border }]}>

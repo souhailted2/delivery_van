@@ -18,7 +18,10 @@ type TierKey = "retail" | "half_wholesale" | "wholesale";
 
 function ClientCard({ item, colors }: { item: Client; colors: any }) {
   const balance = Number(item.credit_balance ?? 0);
-  const balanceColor = balance < 0 ? colors.destructive : balance > 0 ? colors.warning : colors.success;
+  // Negative balance = client owes money (server convention: balance − sale).
+  // Always display the absolute value; color communicates owed vs credit.
+  const absBalance = Math.abs(balance);
+  const balanceColor = balance < 0 ? colors.destructive : balance > 0 ? colors.success : colors.mutedForeground;
   return (
     <View style={[styles.card, { backgroundColor: colors.card, borderColor: colors.border }]}>
       <View style={styles.row}>
@@ -30,7 +33,7 @@ function ClientCard({ item, colors }: { item: Client; colors: any }) {
           {item.phone && <Text style={[styles.phone, { color: colors.mutedForeground }]}>{item.phone}</Text>}
         </View>
         <Text style={[styles.balance, { color: balanceColor }]}>
-          {balance.toLocaleString("fr-DZ")} د.ج
+          {absBalance.toLocaleString("fr-DZ")} د.ج
         </Text>
       </View>
     </View>

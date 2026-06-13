@@ -264,12 +264,14 @@ export default function NewInvoiceScreen() {
         }
       }
 
-      // Credit sale → increase the client's outstanding balance locally so the
-      // dashboard/clients list reflect it immediately (mobile owns credit; it is
-      // pushed via the clients table, server does NOT recompute it).
+      // Credit sale → debit the client's balance locally so the dashboard /
+      // clients list reflect it immediately. Sign convention: negative balance
+      // means the client owes money — matching the server (balance − total).
+      // The server recomputes the same value on push reconciliation, so there
+      // is no sign flip after the next sync.
       if (paymentType === "credit") {
         await db.runAsync(
-          `UPDATE clients SET credit_balance = COALESCE(credit_balance, 0) + ?, updated_at = ?, _pending = 1
+          `UPDATE clients SET credit_balance = COALESCE(credit_balance, 0) - ?, updated_at = ?, _pending = 1
            WHERE sync_id = ? OR (id IS NOT NULL AND id = ?)`,
           [total, now, selectedClient.sync_id, selectedClient.id ?? -1] as any[]
         );
