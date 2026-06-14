@@ -135,6 +135,15 @@ export function ElectronSyncButton() {
       setMode("electron");
       return;
     }
+    // The cloud web ALSO exposes /api/sync/status (it's the v2 sync endpoint),
+    // so a 200 there does NOT mean we're on the desktop standalone server — and
+    // activating this desktop-only sync UI on the cloud site shows a broken
+    // dialog (offline + "credentials" calls to routes that don't exist there).
+    // The desktop standalone server is only ever served from localhost, so gate
+    // standalone detection on the hostname.
+    const host = window.location.hostname;
+    const isLocal = host === "localhost" || host === "127.0.0.1" || host === "[::1]";
+    if (!isLocal) return;
     const ctrl = new AbortController();
     fetch("/api/sync/status", { signal: ctrl.signal })
       .then(r => { if (r.ok) setMode("standalone"); })
