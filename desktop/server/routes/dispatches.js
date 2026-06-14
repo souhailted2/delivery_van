@@ -1,6 +1,7 @@
 const { Router } = require("express");
 const https = require("https");
 const http = require("http");
+const { getDb } = require("../db");
 
 const router = Router();
 const REMOTE_BASE = "https://deleveri.alllal.com/api";
@@ -69,8 +70,21 @@ async function getCloudCookie(forceLogin) {
 }
 
 async function proxyDispatch(req, res) {
-  if (!req.session?.userId) {
+  const userId = req.session?.userId;
+  if (!userId) {
     return res.status(401).json({ error: "Non authentifié" });
+  }
+
+  // Dispatch is an admin warehouse action. Because the proxy authenticates to the
+  // cloud with shared admin sync credentials, the desktop server must enforce the
+  // caller's role locally — otherwise any logged-in user would gain admin access.
+  let role;
+  try {
+    const user = getDb().prepare("SELECT role FROM users WHERE id = ?").get(userId);
+    role = user?.role;
+  } catch { /* role stays undefined -> denied below */ }
+  if (role !== "admin") {
+    return res.status(403).json({ error: "غير مصرح: هذه العملية تتطلب صلاحية المدير" });
   }
 
   const sub = req.originalUrl.replace(/^\/api/, ""); // e.g. /dispatches?truckId=1
