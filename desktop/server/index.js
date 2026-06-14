@@ -20,6 +20,7 @@ const syncRouter     = require("./routes/sync");
 const cashRouter     = require("./routes/cash");
 const returnsRouter  = require("./routes/returns");
 const reportsRouter  = require("./routes/reports");
+const dispatchesRouter = require("./routes/dispatches");
 const syncStatusModule = require("./routes/sync-status");
 const backupRouter     = require("./routes/backup");
 const debugRouter      = require("./routes/debug");
@@ -77,6 +78,7 @@ function initServer(port, userDataPath, syncEngine, host) {
     app.use("/api", cashRouter);
     app.use("/api", returnsRouter);
     app.use("/api", reportsRouter);
+    app.use("/api", dispatchesRouter);        // truck dispatches — proxied to cloud
 
     const rendererPath = path.join(__dirname, "..", "renderer");
     app.use(express.static(rendererPath));

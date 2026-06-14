@@ -517,4 +517,17 @@ function resetSync() {
 
 function getSessionCookie() { return sessionCookie; }
 
-module.exports = { start, stop, syncOnce, saveCredentials, getCredentials, onStatus, getStatus: () => ({ ...status }), resetSync, getSessionCookie };
+/**
+ * Make an authenticated request to the cloud API, ensuring a valid session
+ * first. Used by routes the desktop's local server doesn't implement yet
+ * (e.g. truck dispatches) so they can be proxied to the cloud — which already
+ * handles them and is where the mobile truck receives them. Throws when offline
+ * or not authenticated so the caller can return a clear error.
+ */
+async function cloudRequest(method, apiPath, data) {
+  const ok = await ensureSession();
+  if (!ok) throw new Error("no cloud session");
+  return request(method, `${REMOTE_BASE}${apiPath}`, data, sessionCookie);
+}
+
+module.exports = { start, stop, syncOnce, saveCredentials, getCredentials, onStatus, getStatus: () => ({ ...status }), resetSync, getSessionCookie, cloudRequest };
