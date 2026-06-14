@@ -56,7 +56,7 @@ export default function NewInvoiceScreen() {
   const colors = useColors();
   const insets = useSafeAreaInsets();
   const { user } = useAuth();
-  const { triggerSync, bumpLocalVersion } = useSync();
+  const { triggerSync, bumpLocalVersion, localVersion } = useSync();
 
   const [step, setStep] = useState<"client" | "products" | "payment">("client");
   const [selectedClient, setSelectedClient] = useState<Client | null>(null);
@@ -87,6 +87,12 @@ export default function NewInvoiceScreen() {
 
   const clientTier = resolveTier(selectedClient);
 
+  // Refresh truck stock from the server as soon as this screen opens, so the
+  // quantities shown below aren't stale (e.g. right after a dispatch/return).
+  useEffect(() => {
+    triggerSync();
+  }, []);
+
   useEffect(() => {
     (async () => {
       const db = await getDb();
@@ -111,7 +117,7 @@ export default function NewInvoiceScreen() {
       setClients(cl);
       setProducts(pr);
     })();
-  }, [user?.truckId]);
+  }, [user?.truckId, localVersion]);
 
   // Re-price cart items to the selected customer's tier (unless manually overridden).
   useEffect(() => {
@@ -390,7 +396,10 @@ export default function NewInvoiceScreen() {
     const isActive = activeProductId === product.sync_id;
     const price = cartItem?.unitPrice ?? priceByType(product, clientTier);
     const tqRaw = (product as any).truck_quantity;
-    const isOutOfStock = tqRaw !== undefined && Number(tqRaw) <= 0;
+    const hasStockInfo = tqRaw !== undefined;
+    const tq = hasStockInfo ? Number(tqRaw) : 0;
+    const isOutOfStock = hasStockInfo && tq <= 0;
+    const lowStock = hasStockInfo && tq > 0 && tq <= 3;
 
     return (
       <Pressable
@@ -398,33 +407,50 @@ export default function NewInvoiceScreen() {
           styles.catCard,
           { width: CARD_W, backgroundColor: colors.card, borderColor: inCart ? colors.primary : colors.border },
           isActive && { borderColor: colors.primary, borderWidth: 2 },
-          isOutOfStock && { opacity: 0.45 },
+          isOutOfStock && { opacity: 0.5 },
         ]}
         onPress={() => {
           if (isActive) return;
           openQtyCard(product, cartItem?.quantity);
         }}
       >
-        <ProductImage
-          imageUrl={product.image_url}
-          localUri={product.local_image_uri}
-          size={IMG_SIZE}
-          radius={12}
-          colors={colors}
-        />
+        <View style={styles.catImageWrap}>
+          <ProductImage
+            imageUrl={product.image_url}
+            localUri={product.local_image_uri}
+            size={IMG_SIZE}
+            radius={12}
+            colors={colors}
+          />
+          {hasStockInfo && (
+            <View
+              style={[
+                styles.stockBadge,
+                {
+                  backgroundColor: isOutOfStock
+                    ? colors.destructive
+                    : lowStock
+                    ? colors.destructive + "cc"
+                    : colors.background + "ee",
+                  borderColor: colors.border,
+                },
+              ]}
+            >
+              <Text
+                style={[
+                  styles.stockBadgeText,
+                  { color: isOutOfStock || lowStock ? "#fff" : colors.mutedForeground },
+                ]}
+              >
+                {isOutOfStock ? "نفد" : tq.toFixed(0)}
+              </Text>
+            </View>
+          )}
+        </View>
         <Text style={[styles.catName, { color: colors.foreground }]} numberOfLines={2}>{product.name}</Text>
         <View style={styles.catPriceRow}>
           <Text style={[styles.catPrice, { color: colors.primary }]}>{price.toLocaleString("fr-DZ")} د.ج</Text>
         </View>
-        {(product as any).truck_quantity !== undefined && (() => {
-          const tq = Number((product as any).truck_quantity);
-          const stockColor = tq <= 3 ? colors.destructive : colors.mutedForeground;
-          return (
-            <Text style={[styles.stockHint, { color: stockColor }]}>
-              {tq <= 0 ? "نفد المخزون" : `في الشاحنة: ${tq.toFixed(0)}`}
-            </Text>
-          );
-        })()}
 
         {isActive ? (
           <View style={[styles.qtyCard, { backgroundColor: colors.background, borderColor: colors.primary + "44" }]}>
@@ -843,12 +869,19 @@ const styles = StyleSheet.create({
   clientPillText: { flex: 1, fontSize: 13, fontFamily: "Cairo_600SemiBold", textAlign: "right" },
 
   catCard: {
-    borderRadius: 14, borderWidth: 1.5, padding: 8, gap: 6, alignItems: "center",
+    borderRadius: 16, borderWidth: 1.5, padding: 10, gap: 6, alignItems: "center",
+    shadowColor: "#000", shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.06,
+    shadowRadius: 6, elevation: 1,
   },
-  catName: { fontSize: 13, fontFamily: "Cairo_600SemiBold", textAlign: "center", minHeight: 36 },
+  catImageWrap: { width: "100%", alignItems: "center" },
+  stockBadge: {
+    position: "absolute", top: 4, left: 4, minWidth: 28, paddingHorizontal: 6, paddingVertical: 3,
+    borderRadius: 8, borderWidth: 1, alignItems: "center", justifyContent: "center",
+  },
+  stockBadgeText: { fontSize: 10, fontFamily: "Cairo_700Bold" },
+  catName: { fontSize: 13, fontFamily: "Cairo_600SemiBold", textAlign: "center", minHeight: 36, marginTop: 2 },
   catPriceRow: { flexDirection: "row-reverse", alignItems: "center", gap: 6, flexWrap: "wrap", justifyContent: "center" },
-  catPrice: { fontSize: 14, fontFamily: "Cairo_700Bold" },
-  stockHint: { fontSize: 10, fontFamily: "Cairo_400Regular", textAlign: "center" },
+  catPrice: { fontSize: 15, fontFamily: "Cairo_700Bold" },
 
   addBtn: {
     flexDirection: "row-reverse", alignItems: "center", justifyContent: "center", gap: 6,
