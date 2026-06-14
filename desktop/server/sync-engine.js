@@ -412,7 +412,15 @@ async function push() {
 
   const tables = {};
   for (const tbl of PUSH_TABLES) {
-    const rows = getLocalChanges(tbl, since);
+    // Never push back rows that ORIGINATED in the cloud but had no sync_id when
+    // pulled: upsertRecord() fabricates a local `cloud_<table>_<id>` sync_id for
+    // them so the local UNIQUE constraint is satisfied. Pushing that fabricated
+    // id back creates a DUPLICATE in the cloud, because the cloud's matching row
+    // still has sync_id = NULL (NULLs never conflict on the unique index). The
+    // cloud is the source of truth for these rows, so exclude them from push.
+    const rows = getLocalChanges(tbl, since).filter(
+      (r) => !(typeof r.sync_id === "string" && r.sync_id.startsWith("cloud_")),
+    );
     if (rows.length) tables[tbl] = rows;
   }
 

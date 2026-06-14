@@ -11,6 +11,7 @@ import {
 } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod/v4";
+import { sql } from "drizzle-orm";
 
 // Branches (نقاط البيع)
 export const branchesTable = pgTable("branches", {
@@ -29,7 +30,7 @@ export const categoriesTable = pgTable("categories", {
   id: serial("id").primaryKey(),
   name: text("name").notNull(),
   createdAt: timestamp("created_at").notNull().defaultNow(),
-  syncId: text("sync_id").unique(),
+  syncId: text("sync_id").unique().default(sql`gen_random_uuid()::text`),
   updatedAt: timestamp("updated_at").notNull().defaultNow(),
   isDeleted: boolean("is_deleted").notNull().default(false),
 });
@@ -51,7 +52,7 @@ export const usersTable = pgTable("users", {
   canSellOnCredit: boolean("can_sell_on_credit").notNull().default(true),
   canViewReports: boolean("can_view_reports").notNull().default(false),
   createdAt: timestamp("created_at").notNull().defaultNow(),
-  syncId: text("sync_id").unique(),
+  syncId: text("sync_id").unique().default(sql`gen_random_uuid()::text`),
   updatedAt: timestamp("updated_at").notNull().defaultNow(),
   isDeleted: boolean("is_deleted").notNull().default(false),
 });
@@ -76,7 +77,7 @@ export const productsTable = pgTable("products", {
   imageUrl: text("image_url"),
   unit: text("unit").notNull().default("unité"),
   createdAt: timestamp("created_at").notNull().defaultNow(),
-  syncId: text("sync_id").unique(),
+  syncId: text("sync_id").unique().default(sql`gen_random_uuid()::text`),
   updatedAt: timestamp("updated_at").notNull().defaultNow(),
   isDeleted: boolean("is_deleted").notNull().default(false),
 });
@@ -92,7 +93,7 @@ export const suppliersTable = pgTable("suppliers", {
   email: text("email"),
   balance: numeric("balance", { precision: 12, scale: 2 }).notNull().default("0"),
   createdAt: timestamp("created_at").notNull().defaultNow(),
-  syncId: text("sync_id").unique(),
+  syncId: text("sync_id").unique().default(sql`gen_random_uuid()::text`),
   updatedAt: timestamp("updated_at").notNull().defaultNow(),
   isDeleted: boolean("is_deleted").notNull().default(false),
 });
@@ -109,7 +110,7 @@ export const purchasesTable = pgTable("purchases", {
   paidAmount: numeric("paid_amount", { precision: 12, scale: 2 }).notNull().default("0"),
   paymentStatus: text("payment_status").notNull().default("pending"), // pending | partial | paid
   createdAt: timestamp("created_at").notNull().defaultNow(),
-  syncId: text("sync_id").unique(),
+  syncId: text("sync_id").unique().default(sql`gen_random_uuid()::text`),
   updatedAt: timestamp("updated_at").notNull().defaultNow(),
   isDeleted: boolean("is_deleted").notNull().default(false),
 });
@@ -124,7 +125,7 @@ export const purchaseItemsTable = pgTable("purchase_items", {
   quantity: numeric("quantity", { precision: 10, scale: 3 }).notNull(),
   purchasePrice: numeric("purchase_price", { precision: 12, scale: 2 }).notNull(),
   subtotal: numeric("subtotal", { precision: 12, scale: 2 }).notNull(),
-  syncId: text("sync_id").unique(),
+  syncId: text("sync_id").unique().default(sql`gen_random_uuid()::text`),
   updatedAt: timestamp("updated_at").notNull().defaultNow(),
   isDeleted: boolean("is_deleted").notNull().default(false),
 });
@@ -156,7 +157,7 @@ export const clientsTable = pgTable("clients", {
   balance: numeric("balance", { precision: 12, scale: 2 }).notNull().default("0"), // negative = debt
   creditLimit: numeric("credit_limit", { precision: 12, scale: 2 }), // null = no limit
   createdAt: timestamp("created_at").notNull().defaultNow(),
-  syncId: text("sync_id").unique(),
+  syncId: text("sync_id").unique().default(sql`gen_random_uuid()::text`),
   updatedAt: timestamp("updated_at").notNull().defaultNow(),
   isDeleted: boolean("is_deleted").notNull().default(false),
 });
@@ -180,7 +181,7 @@ export const trucksTable = pgTable("trucks", {
   latitude: real("latitude"),
   longitude: real("longitude"),
   createdAt: timestamp("created_at").notNull().defaultNow(),
-  syncId: text("sync_id").unique(),
+  syncId: text("sync_id").unique().default(sql`gen_random_uuid()::text`),
   updatedAt: timestamp("updated_at").notNull().defaultNow(),
   isDeleted: boolean("is_deleted").notNull().default(false),
 });
@@ -194,7 +195,7 @@ export const truckStockTable = pgTable("truck_stock", {
   truckId: integer("truck_id").notNull(),
   productId: integer("product_id").notNull(),
   quantity: numeric("quantity", { precision: 10, scale: 3 }).notNull().default("0"),
-  syncId: text("sync_id").unique(),
+  syncId: text("sync_id").unique().default(sql`gen_random_uuid()::text`),
   updatedAt: timestamp("updated_at").notNull().defaultNow(),
   isDeleted: boolean("is_deleted").notNull().default(false),
 }, (table) => ({
@@ -214,7 +215,7 @@ export const stockTransfersTable = pgTable("stock_transfers", {
   fromWarehouse: integer("from_warehouse").default(0),
   note: text("note"),
   createdAt: timestamp("created_at").notNull().defaultNow(),
-  syncId: text("sync_id").unique(),
+  syncId: text("sync_id").unique().default(sql`gen_random_uuid()::text`),
   updatedAt: timestamp("updated_at").notNull().defaultNow(),
   isDeleted: boolean("is_deleted").notNull().default(false),
 });
@@ -227,7 +228,7 @@ export const stockTransferItemsTable = pgTable("stock_transfer_items", {
   transferId: integer("transfer_id").notNull(),
   productId: integer("product_id").notNull(),
   quantity: numeric("quantity", { precision: 10, scale: 3 }).notNull(),
-  syncId: text("sync_id").unique(),
+  syncId: text("sync_id").unique().default(sql`gen_random_uuid()::text`),
   updatedAt: timestamp("updated_at").notNull().defaultNow(),
   isDeleted: boolean("is_deleted").notNull().default(false),
 });
@@ -247,7 +248,7 @@ export const invoicesTable = pgTable("invoices", {
   latitude: real("latitude"),
   longitude: real("longitude"),
   createdAt: timestamp("created_at").notNull().defaultNow(),
-  syncId: text("sync_id").unique(),
+  syncId: text("sync_id").unique().default(sql`gen_random_uuid()::text`),
   updatedAt: timestamp("updated_at").notNull().defaultNow(),
   isDeleted: boolean("is_deleted").notNull().default(false),
 });
@@ -265,7 +266,7 @@ export const invoiceItemsTable = pgTable("invoice_items", {
   unitPrice: numeric("unit_price", { precision: 12, scale: 2 }).notNull(),
   commission: numeric("commission", { precision: 12, scale: 2 }).notNull().default("0"),
   subtotal: numeric("subtotal", { precision: 12, scale: 2 }).notNull(),
-  syncId: text("sync_id").unique(),
+  syncId: text("sync_id").unique().default(sql`gen_random_uuid()::text`),
   updatedAt: timestamp("updated_at").notNull().defaultNow(),
   isDeleted: boolean("is_deleted").notNull().default(false),
 });
@@ -282,7 +283,7 @@ export const returnsTable = pgTable("returns", {
   invoiceId: integer("invoice_id"),
   totalAmount: numeric("total_amount", { precision: 12, scale: 2 }).notNull().default("0"),
   createdAt: timestamp("created_at").notNull().defaultNow(),
-  syncId: text("sync_id").unique(),
+  syncId: text("sync_id").unique().default(sql`gen_random_uuid()::text`),
   updatedAt: timestamp("updated_at").notNull().defaultNow(),
   isDeleted: boolean("is_deleted").notNull().default(false),
 });
@@ -298,7 +299,7 @@ export const returnItemsTable = pgTable("return_items", {
   quantity: numeric("quantity", { precision: 10, scale: 3 }).notNull(),
   unitPrice: numeric("unit_price", { precision: 12, scale: 2 }).notNull(),
   subtotal: numeric("subtotal", { precision: 12, scale: 2 }).notNull(),
-  syncId: text("sync_id").unique(),
+  syncId: text("sync_id").unique().default(sql`gen_random_uuid()::text`),
   updatedAt: timestamp("updated_at").notNull().defaultNow(),
   isDeleted: boolean("is_deleted").notNull().default(false),
 });
@@ -356,7 +357,7 @@ export const cashTransfersTable = pgTable("cash_transfers", {
   status: text("status").notNull().default("pending"), // pending | approved | rejected
   note: text("note"),
   createdAt: timestamp("created_at").notNull().defaultNow(),
-  syncId: text("sync_id").unique(),
+  syncId: text("sync_id").unique().default(sql`gen_random_uuid()::text`),
   updatedAt: timestamp("updated_at").notNull().defaultNow(),
   isDeleted: boolean("is_deleted").notNull().default(false),
 });
