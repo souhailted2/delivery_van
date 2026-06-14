@@ -15,6 +15,7 @@ function formatTruck(t) {
     driverName: t.driver_name, location: t.location,
     cashBalance: Number(t.cash_balance ?? 0),
     latitude: t.latitude, longitude: t.longitude, createdAt: t.created_at,
+    hasPassword: !!(t.password_hash && String(t.password_hash).length > 0),
   };
 }
 
@@ -34,6 +35,7 @@ router.get("/trucks", (_req, res) => {
 router.post("/trucks", (req, res) => {
   const { name, plateNumber, phone, vendeurId, driverName, password, location } = req.body;
   if (!name) return res.status(400).json({ error: "Nom requis" });
+  if (!password || !String(password).trim()) return res.status(400).json({ error: "كلمة المرور مطلوبة" });
   const db = getDb();
   const info = db.prepare(`
     INSERT INTO trucks (name, plate_number, phone, vendeur_id, driver_name, password_hash, location, cash_balance)

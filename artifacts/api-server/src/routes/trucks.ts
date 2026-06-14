@@ -46,6 +46,7 @@ router.get("/trucks", async (req, res) => {
     latitude: trucksTable.latitude,
     longitude: trucksTable.longitude,
     createdAt: trucksTable.createdAt,
+    hasPassword: sql<boolean>`(${trucksTable.passwordHash} IS NOT NULL AND ${trucksTable.passwordHash} != '')`,
   }).from(trucksTable)
     .leftJoin(usersTable, eq(trucksTable.vendeurId, usersTable.id))
     .leftJoin(branchesTable, eq(trucksTable.branchId, branchesTable.id));
@@ -60,6 +61,7 @@ router.get("/trucks", async (req, res) => {
 router.post("/trucks", async (req, res) => {
   const { name, plateNumber, phone, branchId, vendeurId, driverName, password, location } = req.body;
   if (!name) return res.status(400).json({ error: "Nom requis" });
+  if (!password || !String(password).trim()) return res.status(400).json({ error: "كلمة المرور مطلوبة" });
   const sessionBranchId = await getSessionBranchId(req);
   const [truck] = await db.insert(trucksTable).values({
     name,

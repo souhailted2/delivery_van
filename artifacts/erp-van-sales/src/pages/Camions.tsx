@@ -28,6 +28,7 @@ type Truck = {
   location?: string | null;
   cashBalance: number;
   canSellOnCredit?: boolean | null;
+  hasPassword?: boolean;
 };
 
 type TruckForm = {
@@ -348,6 +349,10 @@ export default function Camions() {
             onSubmit={(e) => {
               e.preventDefault();
               if (!addForm.name.trim()) return;
+              if (!addForm.password.trim()) {
+                toast.error("كلمة المرور مطلوبة عند إضافة شاحنة جديدة");
+                return;
+              }
               createTruck.mutate({ data: buildBody(addForm) });
             }}
             className="space-y-4"
@@ -485,6 +490,15 @@ export default function Camions() {
                             {t.name}
                           </Badge>
                           <CopyButton text={t.name} />
+                          {(t as any).hasPassword === false && (
+                            <Badge
+                              variant="destructive"
+                              className="text-xs py-0.5"
+                              title="لم يتم تعيين كلمة مرور لهذه الشاحنة — لن يستطيع السائق تسجيل الدخول من الموبايل"
+                            >
+                              لا توجد كلمة مرور
+                            </Badge>
+                          )}
                         </div>
                       </TableCell>
                       <TableCell className="text-center" onClick={(e) => e.stopPropagation()}>

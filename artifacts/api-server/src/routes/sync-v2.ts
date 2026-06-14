@@ -190,6 +190,12 @@ router.post("/sync/v2/push", requireAuth, async (req, res): Promise<void> => {
         const clean = sanitizeForTable(t, rec);
         if (!clean) continue;
 
+        // Never let a missing/empty local password_hash blank out the cloud's
+        // value (e.g. a desktop truck synced before a password was set).
+        if ((tableName === "trucks" || tableName === "users") && !clean.passwordHash) {
+          delete clean.passwordHash;
+        }
+
         // Upsert by sync_id: only overwrite if incoming updated_at is newer
         await db.insert(t).values(clean)
           .onConflictDoUpdate({
