@@ -17,6 +17,7 @@ import reportsRouter from "./reports";
 import storageRouter from "./storage";
 import settingsRouter from "./settings";
 import syncV2Router from "./sync-v2";
+import dispatchesRouter from "./dispatches";
 
 const router: IRouter = Router();
 
@@ -38,5 +39,6 @@ router.use(cashRouter);
 router.use(reportsRouter);
 router.use(settingsRouter);
 router.use(syncV2Router);
+router.use(dispatchesRouter);
 
 export default router;

@@ -3,7 +3,7 @@ import { db } from "@workspace/db";
 import {
   truckDispatchesTable, truckStockTable, trucksTable, productsTable,
 } from "@workspace/db";
-import { eq, and, desc } from "drizzle-orm";
+import { eq, and, desc, sql } from "drizzle-orm";
 
 const router = Router();
 
@@ -135,25 +135,23 @@ router.post("/dispatches/:id/receive", requireTruck, async (req, res) => {
     if (!claimed) return null;
 
     for (const item of items) {
-      const [existing] = await tx.select().from(truckStockTable)
-        .where(and(
-          eq(truckStockTable.truckId, truckId),
-          eq(truckStockTable.productId, item.productId),
-        )).limit(1);
-
-      if (existing) {
-        await tx.update(truckStockTable)
-          .set({ quantity: String(Number(existing.quantity) + item.quantity), updatedAt: new Date() })
-          .where(eq(truckStockTable.id, existing.id));
-      } else {
-        await tx.insert(truckStockTable).values({
+      // Atomic upsert keyed on (truck_id, product_id) — race-safe with the unique index.
+      await tx.insert(truckStockTable)
+        .values({
           truckId,
           productId: item.productId,
           quantity: String(item.quantity),
           syncId: `ts-${truckId}-${item.productId}-${Date.now()}`,
           updatedAt: new Date(),
+        })
+        .onConflictDoUpdate({
+          target: [truckStockTable.truckId, truckStockTable.productId],
+          set: {
+            quantity: sql`${truckStockTable.quantity} + ${item.quantity}`,
+            updatedAt: new Date(),
+            isDeleted: false,
+          },
         });
-      }
 
       // Deduct from admin/central stock now that the goods physically left the warehouse
       const [product] = await tx.select().from(productsTable)
