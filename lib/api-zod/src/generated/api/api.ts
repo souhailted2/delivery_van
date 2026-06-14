@@ -8,10 +8,90 @@
 import * as zod from "zod";
 
 /**
+ * @summary Get latest app version from GitHub Releases
+ */
+export const GetAppVersionResponse = zod.object({
+  tag: zod.string(),
+  buildNumber: zod
+    .number()
+    .describe(
+      "Numeric build number extracted from the tag (e.g. build-92 → 92)",
+    ),
+  name: zod.string().nullish(),
+  publishedAt: zod.string().nullish(),
+  downloadUrl: zod.string(),
+  releaseUrl: zod.string(),
+});
+
+/**
  * @summary Health check
  */
 export const HealthCheckResponse = zod.object({
   status: zod.string(),
+});
+
+/**
+ * @summary List all branches
+ */
+export const ListBranchesResponseItem = zod.object({
+  id: zod.number(),
+  name: zod.string(),
+  address: zod.string().nullish(),
+  phone: zod.string().nullish(),
+  createdAt: zod.coerce.date(),
+});
+export const ListBranchesResponse = zod.array(ListBranchesResponseItem);
+
+/**
+ * @summary Create branch
+ */
+export const CreateBranchBody = zod.object({
+  name: zod.string(),
+  address: zod.string().nullish(),
+  phone: zod.string().nullish(),
+});
+
+/**
+ * @summary Get branch
+ */
+export const GetBranchParams = zod.object({
+  id: zod.coerce.number(),
+});
+
+export const GetBranchResponse = zod.object({
+  id: zod.number(),
+  name: zod.string(),
+  address: zod.string().nullish(),
+  phone: zod.string().nullish(),
+  createdAt: zod.coerce.date(),
+});
+
+/**
+ * @summary Update branch
+ */
+export const UpdateBranchParams = zod.object({
+  id: zod.coerce.number(),
+});
+
+export const UpdateBranchBody = zod.object({
+  name: zod.string(),
+  address: zod.string().nullish(),
+  phone: zod.string().nullish(),
+});
+
+export const UpdateBranchResponse = zod.object({
+  id: zod.number(),
+  name: zod.string(),
+  address: zod.string().nullish(),
+  phone: zod.string().nullish(),
+  createdAt: zod.coerce.date(),
+});
+
+/**
+ * @summary Delete branch
+ */
+export const DeleteBranchParams = zod.object({
+  id: zod.coerce.number(),
 });
 
 /**
@@ -28,6 +108,8 @@ export const LoginResponse = zod.object({
     username: zod.string(),
     fullName: zod.string(),
     role: zod.enum(["admin", "vendeur", "truck"]),
+    branchId: zod.number().nullish(),
+    branchName: zod.string().nullish(),
     truckId: zod.number().nullish(),
     canDeleteInvoice: zod.boolean(),
     canEditPrice: zod.boolean(),
@@ -46,6 +128,8 @@ export const GetMeResponse = zod.object({
   username: zod.string(),
   fullName: zod.string(),
   role: zod.enum(["admin", "vendeur", "truck"]),
+  branchId: zod.number().nullish(),
+  branchName: zod.string().nullish(),
   truckId: zod.number().nullish(),
   canDeleteInvoice: zod.boolean(),
   canEditPrice: zod.boolean(),
@@ -68,6 +152,8 @@ export const TruckLoginResponse = zod.object({
     username: zod.string(),
     fullName: zod.string(),
     role: zod.enum(["admin", "vendeur", "truck"]),
+    branchId: zod.number().nullish(),
+    branchName: zod.string().nullish(),
     truckId: zod.number().nullish(),
     canDeleteInvoice: zod.boolean(),
     canEditPrice: zod.boolean(),
@@ -86,6 +172,8 @@ export const ListUsersResponseItem = zod.object({
   username: zod.string(),
   fullName: zod.string(),
   role: zod.enum(["admin", "vendeur", "truck"]),
+  branchId: zod.number().nullish(),
+  branchName: zod.string().nullish(),
   truckId: zod.number().nullish(),
   canDeleteInvoice: zod.boolean(),
   canEditPrice: zod.boolean(),
@@ -103,6 +191,7 @@ export const CreateUserBody = zod.object({
   password: zod.string(),
   fullName: zod.string(),
   role: zod.enum(["admin", "vendeur"]),
+  branchId: zod.number().nullish(),
   truckId: zod.number().nullish(),
   canDeleteInvoice: zod.boolean().optional(),
   canEditPrice: zod.boolean().optional(),
@@ -122,6 +211,8 @@ export const GetUserResponse = zod.object({
   username: zod.string(),
   fullName: zod.string(),
   role: zod.enum(["admin", "vendeur", "truck"]),
+  branchId: zod.number().nullish(),
+  branchName: zod.string().nullish(),
   truckId: zod.number().nullish(),
   canDeleteInvoice: zod.boolean(),
   canEditPrice: zod.boolean(),
@@ -140,6 +231,7 @@ export const UpdateUserParams = zod.object({
 export const UpdateUserBody = zod.object({
   fullName: zod.string().optional(),
   role: zod.enum(["admin", "vendeur"]).optional(),
+  branchId: zod.number().nullish(),
   truckId: zod.number().nullish(),
   canDeleteInvoice: zod.boolean().optional(),
   canEditPrice: zod.boolean().optional(),
@@ -152,6 +244,8 @@ export const UpdateUserResponse = zod.object({
   username: zod.string(),
   fullName: zod.string(),
   role: zod.enum(["admin", "vendeur", "truck"]),
+  branchId: zod.number().nullish(),
+  branchName: zod.string().nullish(),
   truckId: zod.number().nullish(),
   canDeleteInvoice: zod.boolean(),
   canEditPrice: zod.boolean(),
@@ -561,6 +655,7 @@ export const ListClientsResponseItem = zod.object({
   name: zod.string(),
   phone: zod.string().nullish(),
   clientType: zod.enum(["retail", "half_wholesale", "wholesale"]),
+  branchId: zod.number().nullish(),
   latitude: zod.number().nullish(),
   longitude: zod.number().nullish(),
   balance: zod.number(),
@@ -591,6 +686,7 @@ export const GetClientResponse = zod.object({
   name: zod.string(),
   phone: zod.string().nullish(),
   clientType: zod.enum(["retail", "half_wholesale", "wholesale"]),
+  branchId: zod.number().nullish(),
   latitude: zod.number().nullish(),
   longitude: zod.number().nullish(),
   balance: zod.number(),
@@ -617,6 +713,7 @@ export const UpdateClientResponse = zod.object({
   name: zod.string(),
   phone: zod.string().nullish(),
   clientType: zod.enum(["retail", "half_wholesale", "wholesale"]),
+  branchId: zod.number().nullish(),
   latitude: zod.number().nullish(),
   longitude: zod.number().nullish(),
   balance: zod.number(),
@@ -631,17 +728,65 @@ export const DeleteClientParams = zod.object({
 });
 
 /**
+ * @summary Get client profile with purchase stats
+ */
+export const GetClientProfileParams = zod.object({
+  id: zod.coerce.number(),
+});
+
+export const GetClientProfileResponse = zod.object({
+  client: zod.object({
+    id: zod.number(),
+    name: zod.string(),
+    phone: zod.string().nullish(),
+    clientType: zod.enum(["retail", "half_wholesale", "wholesale"]),
+    branchId: zod.number().nullish(),
+    latitude: zod.number().nullish(),
+    longitude: zod.number().nullish(),
+    balance: zod.number(),
+    createdAt: zod.coerce.date(),
+  }),
+  totalYearPurchases: zod.number(),
+  invoiceCount: zod.number(),
+  creditInvoiceCount: zod.number(),
+  debtBalance: zod.number(),
+  lastInvoice: zod
+    .union([
+      zod.object({
+        id: zod.number(),
+        totalAmount: zod.number(),
+        createdAt: zod.coerce.date(),
+        paymentType: zod.string(),
+      }),
+      zod.null(),
+    ])
+    .optional(),
+  topProducts: zod.array(
+    zod.object({
+      productId: zod.number(),
+      productName: zod.string(),
+      totalQty: zod.number(),
+      totalValue: zod.number(),
+    }),
+  ),
+});
+
+/**
  * @summary List trucks
  */
 export const ListTrucksResponseItem = zod.object({
   id: zod.number(),
   name: zod.string(),
   plateNumber: zod.string().nullish(),
+  phone: zod.string().nullish(),
+  branchId: zod.number().nullish(),
+  branchName: zod.string().nullish(),
   vendeurId: zod.number().nullish(),
   vendeurName: zod.string().nullish(),
   driverName: zod.string().nullish(),
   location: zod.string().nullish(),
   cashBalance: zod.number(),
+  canSellOnCredit: zod.boolean(),
   latitude: zod.number().nullish(),
   longitude: zod.number().nullish(),
   createdAt: zod.coerce.date(),
@@ -654,10 +799,13 @@ export const ListTrucksResponse = zod.array(ListTrucksResponseItem);
 export const CreateTruckBody = zod.object({
   name: zod.string(),
   plateNumber: zod.string().nullish(),
+  phone: zod.string().nullish(),
+  branchId: zod.number().nullish(),
   vendeurId: zod.number().nullish(),
   driverName: zod.string().nullish(),
   password: zod.string().nullish(),
   location: zod.string().nullish(),
+  canSellOnCredit: zod.boolean().optional(),
 });
 
 /**
@@ -671,11 +819,15 @@ export const GetTruckResponse = zod.object({
   id: zod.number(),
   name: zod.string(),
   plateNumber: zod.string().nullish(),
+  phone: zod.string().nullish(),
+  branchId: zod.number().nullish(),
+  branchName: zod.string().nullish(),
   vendeurId: zod.number().nullish(),
   vendeurName: zod.string().nullish(),
   driverName: zod.string().nullish(),
   location: zod.string().nullish(),
   cashBalance: zod.number(),
+  canSellOnCredit: zod.boolean(),
   latitude: zod.number().nullish(),
   longitude: zod.number().nullish(),
   createdAt: zod.coerce.date(),
@@ -691,21 +843,28 @@ export const UpdateTruckParams = zod.object({
 export const UpdateTruckBody = zod.object({
   name: zod.string(),
   plateNumber: zod.string().nullish(),
+  phone: zod.string().nullish(),
+  branchId: zod.number().nullish(),
   vendeurId: zod.number().nullish(),
   driverName: zod.string().nullish(),
   password: zod.string().nullish(),
   location: zod.string().nullish(),
+  canSellOnCredit: zod.boolean().optional(),
 });
 
 export const UpdateTruckResponse = zod.object({
   id: zod.number(),
   name: zod.string(),
   plateNumber: zod.string().nullish(),
+  phone: zod.string().nullish(),
+  branchId: zod.number().nullish(),
+  branchName: zod.string().nullish(),
   vendeurId: zod.number().nullish(),
   vendeurName: zod.string().nullish(),
   driverName: zod.string().nullish(),
   location: zod.string().nullish(),
   cashBalance: zod.number(),
+  canSellOnCredit: zod.boolean(),
   latitude: zod.number().nullish(),
   longitude: zod.number().nullish(),
   createdAt: zod.coerce.date(),
@@ -716,6 +875,96 @@ export const UpdateTruckResponse = zod.object({
  */
 export const DeleteTruckParams = zod.object({
   id: zod.coerce.number(),
+});
+
+/**
+ * @summary Get truck profile (clients, stock, commission summary)
+ */
+export const GetTruckProfileParams = zod.object({
+  id: zod.coerce.number(),
+});
+
+export const GetTruckProfileResponse = zod.object({
+  clients: zod.array(
+    zod.object({
+      id: zod.number(),
+      name: zod.string(),
+      phone: zod.string().nullish(),
+    }),
+  ),
+  stock: zod.array(
+    zod.object({
+      productId: zod.number(),
+      productName: zod.string(),
+      quantity: zod.number(),
+    }),
+  ),
+  commissionTotal: zod.number(),
+  commissionPaid: zod.number(),
+  commissionBalance: zod.number(),
+});
+
+/**
+ * @summary List commission payments for a truck
+ */
+export const ListTruckCommissionPaymentsParams = zod.object({
+  id: zod.coerce.number(),
+});
+
+export const ListTruckCommissionPaymentsResponseItem = zod.object({
+  id: zod.number(),
+  truckId: zod.number(),
+  amount: zod.number(),
+  note: zod.string().nullish(),
+  paidAt: zod.coerce.date(),
+  createdAt: zod.coerce.date(),
+});
+export const ListTruckCommissionPaymentsResponse = zod.array(
+  ListTruckCommissionPaymentsResponseItem,
+);
+
+/**
+ * @summary Record a commission payment
+ */
+export const CreateTruckCommissionPaymentParams = zod.object({
+  id: zod.coerce.number(),
+});
+
+export const CreateTruckCommissionPaymentBody = zod.object({
+  amount: zod.number(),
+  note: zod.string().nullish(),
+  paidAt: zod.coerce.date().optional(),
+});
+
+/**
+ * @summary Update a commission payment
+ */
+export const UpdateTruckCommissionPaymentParams = zod.object({
+  id: zod.coerce.number(),
+  paymentId: zod.coerce.number(),
+});
+
+export const UpdateTruckCommissionPaymentBody = zod.object({
+  amount: zod.number(),
+  note: zod.string().nullish(),
+  paidAt: zod.coerce.date().optional(),
+});
+
+export const UpdateTruckCommissionPaymentResponse = zod.object({
+  id: zod.number(),
+  truckId: zod.number(),
+  amount: zod.number(),
+  note: zod.string().nullish(),
+  paidAt: zod.coerce.date(),
+  createdAt: zod.coerce.date(),
+});
+
+/**
+ * @summary Delete a commission payment
+ */
+export const DeleteTruckCommissionPaymentParams = zod.object({
+  id: zod.coerce.number(),
+  paymentId: zod.coerce.number(),
 });
 
 /**
@@ -760,6 +1009,7 @@ export const GetMyTruckClientsResponseItem = zod.object({
   name: zod.string(),
   phone: zod.string().nullish(),
   clientType: zod.enum(["retail", "half_wholesale", "wholesale"]),
+  branchId: zod.number().nullish(),
   latitude: zod.number().nullish(),
   longitude: zod.number().nullish(),
   balance: zod.number(),
@@ -800,6 +1050,7 @@ export const UpdateMyTruckClientResponse = zod.object({
   name: zod.string(),
   phone: zod.string().nullish(),
   clientType: zod.enum(["retail", "half_wholesale", "wholesale"]),
+  branchId: zod.number().nullish(),
   latitude: zod.number().nullish(),
   longitude: zod.number().nullish(),
   balance: zod.number(),
@@ -814,6 +1065,8 @@ export const GetMyTruckVendeursResponseItem = zod.object({
   username: zod.string(),
   fullName: zod.string(),
   role: zod.enum(["admin", "vendeur", "truck"]),
+  branchId: zod.number().nullish(),
+  branchName: zod.string().nullish(),
   truckId: zod.number().nullish(),
   canDeleteInvoice: zod.boolean(),
   canEditPrice: zod.boolean(),
@@ -833,6 +1086,7 @@ export const CreateMyTruckVendeurBody = zod.object({
   password: zod.string(),
   fullName: zod.string(),
   role: zod.enum(["admin", "vendeur"]),
+  branchId: zod.number().nullish(),
   truckId: zod.number().nullish(),
   canDeleteInvoice: zod.boolean().optional(),
   canEditPrice: zod.boolean().optional(),
@@ -1411,3 +1665,31 @@ export const GetTopProductsResponseItem = zod.object({
   invoiceCount: zod.number(),
 });
 export const GetTopProductsResponse = zod.array(GetTopProductsResponseItem);
+
+/**
+ * @summary Get company settings
+ */
+export const GetCompanySettingsResponse = zod.object({
+  id: zod.number(),
+  storeName: zod.string(),
+  phone: zod.string(),
+  address: zod.string(),
+  updatedAt: zod.coerce.date(),
+});
+
+/**
+ * @summary Update company settings
+ */
+export const UpdateCompanySettingsBody = zod.object({
+  storeName: zod.string().optional(),
+  phone: zod.string().optional(),
+  address: zod.string().optional(),
+});
+
+export const UpdateCompanySettingsResponse = zod.object({
+  id: zod.number(),
+  storeName: zod.string(),
+  phone: zod.string(),
+  address: zod.string(),
+  updatedAt: zod.coerce.date(),
+});

@@ -27,6 +27,8 @@ export interface User {
   username: string;
   fullName: string;
   role: UserRole;
+  branchId?: number | null;
+  branchName?: string | null;
   truckId?: number | null;
   canDeleteInvoice: boolean;
   canEditPrice: boolean;
@@ -38,6 +40,20 @@ export interface User {
 export interface LoginResponse {
   user: User;
   token?: string;
+}
+
+export interface Branch {
+  id: number;
+  name: string;
+  address?: string | null;
+  phone?: string | null;
+  createdAt: string;
+}
+
+export interface CreateBranchBody {
+  name: string;
+  address?: string | null;
+  phone?: string | null;
 }
 
 export type CreateUserBodyRole =
@@ -53,6 +69,7 @@ export interface CreateUserBody {
   password: string;
   fullName: string;
   role: CreateUserBodyRole;
+  branchId?: number | null;
   truckId?: number | null;
   canDeleteInvoice?: boolean;
   canEditPrice?: boolean;
@@ -71,6 +88,7 @@ export const UpdateUserBodyRole = {
 export interface UpdateUserBody {
   fullName?: string;
   role?: UpdateUserBodyRole;
+  branchId?: number | null;
   truckId?: number | null;
   canDeleteInvoice?: boolean;
   canEditPrice?: boolean;
@@ -198,6 +216,7 @@ export interface Client {
   name: string;
   phone?: string | null;
   clientType: ClientType;
+  branchId?: number | null;
   latitude?: number | null;
   longitude?: number | null;
   balance: number;
@@ -212,15 +231,43 @@ export interface CreateClientBody {
   longitude?: number | null;
 }
 
+export interface ClientProfileTopProduct {
+  productId: number;
+  productName: string;
+  totalQty: number;
+  totalValue: number;
+}
+
+export interface ClientProfileLastInvoice {
+  id: number;
+  totalAmount: number;
+  createdAt: string;
+  paymentType: string;
+}
+
+export interface ClientProfile {
+  client: Client;
+  totalYearPurchases: number;
+  invoiceCount: number;
+  creditInvoiceCount: number;
+  debtBalance: number;
+  lastInvoice?: ClientProfileLastInvoice | null;
+  topProducts: ClientProfileTopProduct[];
+}
+
 export interface Truck {
   id: number;
   name: string;
   plateNumber?: string | null;
+  phone?: string | null;
+  branchId?: number | null;
+  branchName?: string | null;
   vendeurId?: number | null;
   vendeurName?: string | null;
   driverName?: string | null;
   location?: string | null;
   cashBalance: number;
+  canSellOnCredit: boolean;
   latitude?: number | null;
   longitude?: number | null;
   createdAt: string;
@@ -229,10 +276,48 @@ export interface Truck {
 export interface CreateTruckBody {
   name: string;
   plateNumber?: string | null;
+  phone?: string | null;
+  branchId?: number | null;
   vendeurId?: number | null;
   driverName?: string | null;
   password?: string | null;
   location?: string | null;
+  canSellOnCredit?: boolean;
+}
+
+export type TruckProfileClientsItem = {
+  id: number;
+  name: string;
+  phone?: string | null;
+};
+
+export type TruckProfileStockItem = {
+  productId: number;
+  productName: string;
+  quantity: number;
+};
+
+export interface TruckProfile {
+  clients: TruckProfileClientsItem[];
+  stock: TruckProfileStockItem[];
+  commissionTotal: number;
+  commissionPaid: number;
+  commissionBalance: number;
+}
+
+export interface TruckCommissionPayment {
+  id: number;
+  truckId: number;
+  amount: number;
+  note?: string | null;
+  paidAt: string;
+  createdAt: string;
+}
+
+export interface CreateCommissionPaymentBody {
+  amount: number;
+  note?: string | null;
+  paidAt?: string;
 }
 
 export interface TruckLoginBody {
@@ -574,6 +659,30 @@ export interface UploadUrlResponse {
   uploadURL: string;
   objectPath: string;
   metadata?: UploadUrlRequest;
+}
+
+export interface CompanySettings {
+  id: number;
+  storeName: string;
+  phone: string;
+  address: string;
+  updatedAt: string;
+}
+
+export interface UpdateCompanySettingsBody {
+  storeName?: string;
+  phone?: string;
+  address?: string;
+}
+
+export interface AppVersion {
+  tag: string;
+  /** Numeric build number extracted from the tag (e.g. build-92 → 92) */
+  buildNumber: number;
+  name?: string | null;
+  publishedAt?: string | null;
+  downloadUrl: string;
+  releaseUrl: string;
 }
 
 export type UploadProductImageBody = {

@@ -12,6 +12,8 @@ tags:
     description: Health operations
   - name: auth
     description: Authentication
+  - name: branches
+    description: Branch management
   - name: products
     description: Product management
   - name: categories
@@ -38,8 +40,25 @@ tags:
     description: User management
   - name: Storage
     description: Object storage upload and serving endpoints.
+  - name: settings
+    description: Company settings
 
 paths:
+  /app/version:
+    get:
+      operationId: getAppVersion
+      tags: [health]
+      summary: Get latest app version from GitHub Releases
+      responses:
+        "200":
+          description: Latest release info
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AppVersion"
+        "502":
+          description: Failed to reach GitHub
+
   /healthz:
     get:
       operationId: healthCheck
@@ -52,6 +71,94 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/HealthStatus"
+
+  # BRANCHES
+  /branches:
+    get:
+      operationId: listBranches
+      tags: [branches]
+      summary: List all branches
+      responses:
+        "200":
+          description: List of branches
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Branch"
+    post:
+      operationId: createBranch
+      tags: [branches]
+      summary: Create branch
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateBranchBody"
+      responses:
+        "201":
+          description: Branch created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Branch"
+
+  /branches/{id}:
+    get:
+      operationId: getBranch
+      tags: [branches]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      summary: Get branch
+      responses:
+        "200":
+          description: Branch
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Branch"
+    put:
+      operationId: updateBranch
+      tags: [branches]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      summary: Update branch
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateBranchBody"
+      responses:
+        "200":
+          description: Updated branch
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Branch"
+    delete:
+      operationId: deleteBranch
+      tags: [branches]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      summary: Delete branch
+      responses:
+        "204":
+          description: Deleted
 
   # AUTH
   /auth/login:
@@ -724,6 +831,27 @@ paths:
         "204":
           description: Deleted
 
+  /clients/{id}/profile:
+    get:
+      operationId: getClientProfile
+      tags: [clients]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      summary: Get client profile with purchase stats
+      responses:
+        "200":
+          description: Client profile
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ClientProfile"
+        "404":
+          description: Not found
+
   # TRUCKS
   /trucks:
     get:
@@ -808,6 +936,117 @@ paths:
           schema:
             type: integer
       summary: Delete truck
+      responses:
+        "204":
+          description: Deleted
+
+  /trucks/{id}/profile:
+    get:
+      operationId: getTruckProfile
+      tags: [trucks]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      summary: Get truck profile (clients, stock, commission summary)
+      responses:
+        "200":
+          description: Truck profile
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TruckProfile"
+
+  /trucks/{id}/commission-payments:
+    get:
+      operationId: listTruckCommissionPayments
+      tags: [trucks]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      summary: List commission payments for a truck
+      responses:
+        "200":
+          description: Commission payments
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/TruckCommissionPayment"
+    post:
+      operationId: createTruckCommissionPayment
+      tags: [trucks]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      summary: Record a commission payment
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateCommissionPaymentBody"
+      responses:
+        "201":
+          description: Payment created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TruckCommissionPayment"
+
+  /trucks/{id}/commission-payments/{paymentId}:
+    put:
+      operationId: updateTruckCommissionPayment
+      tags: [trucks]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+        - name: paymentId
+          in: path
+          required: true
+          schema:
+            type: integer
+      summary: Update a commission payment
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateCommissionPaymentBody"
+      responses:
+        "200":
+          description: Updated payment
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TruckCommissionPayment"
+    delete:
+      operationId: deleteTruckCommissionPayment
+      tags: [trucks]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+        - name: paymentId
+          in: path
+          required: true
+          schema:
+            type: integer
+      summary: Delete a commission payment
       responses:
         "204":
           description: Deleted
@@ -1397,6 +1636,36 @@ paths:
                 items:
                   $ref: "#/components/schemas/TopProduct"
 
+  /settings/company:
+    get:
+      operationId: getCompanySettings
+      tags: [settings]
+      summary: Get company settings
+      responses:
+        "200":
+          description: Company settings
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CompanySettings"
+    put:
+      operationId: updateCompanySettings
+      tags: [settings]
+      summary: Update company settings
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateCompanySettingsBody"
+      responses:
+        "200":
+          description: Updated company settings
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CompanySettings"
+
 components:
   schemas:
     HealthStatus:
@@ -1428,6 +1697,41 @@ components:
       required:
         - user
 
+    Branch:
+      type: object
+      properties:
+        id:
+          type: integer
+        name:
+          type: string
+        address:
+          type: string
+          nullable: true
+        phone:
+          type: string
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+      required:
+        - id
+        - name
+        - createdAt
+
+    CreateBranchBody:
+      type: object
+      properties:
+        name:
+          type: string
+        address:
+          type: string
+          nullable: true
+        phone:
+          type: string
+          nullable: true
+      required:
+        - name
+
     User:
       type: object
       properties:
@@ -1440,6 +1744,12 @@ components:
         role:
           type: string
           enum: [admin, vendeur, truck]
+        branchId:
+          type: integer
+          nullable: true
+        branchName:
+          type: string
+          nullable: true
         truckId:
           type: integer
           nullable: true
@@ -1477,6 +1787,9 @@ components:
         role:
           type: string
           enum: [admin, vendeur]
+        branchId:
+          type: integer
+          nullable: true
         truckId:
           type: integer
           nullable: true
@@ -1502,6 +1815,9 @@ components:
         role:
           type: string
           enum: [admin, vendeur]
+        branchId:
+          type: integer
+          nullable: true
         truckId:
           type: integer
           nullable: true
@@ -1787,6 +2103,9 @@ components:
           nullable: true
         clientType:
           $ref: "#/components/schemas/ClientType"
+        branchId:
+          type: integer
+          nullable: true
         latitude:
           type: number
           nullable: true
@@ -1824,6 +2143,56 @@ components:
       required:
         - name
 
+    ClientProfileTopProduct:
+      type: object
+      properties:
+        productId:
+          type: integer
+        productName:
+          type: string
+        totalQty:
+          type: number
+        totalValue:
+          type: number
+      required: [productId, productName, totalQty, totalValue]
+
+    ClientProfileLastInvoice:
+      type: object
+      properties:
+        id:
+          type: integer
+        totalAmount:
+          type: number
+        createdAt:
+          type: string
+          format: date-time
+        paymentType:
+          type: string
+      required: [id, totalAmount, createdAt, paymentType]
+
+    ClientProfile:
+      type: object
+      properties:
+        client:
+          $ref: "#/components/schemas/Client"
+        totalYearPurchases:
+          type: number
+        invoiceCount:
+          type: integer
+        creditInvoiceCount:
+          type: integer
+        debtBalance:
+          type: number
+        lastInvoice:
+          oneOf:
+            - $ref: "#/components/schemas/ClientProfileLastInvoice"
+            - type: "null"
+        topProducts:
+          type: array
+          items:
+            $ref: "#/components/schemas/ClientProfileTopProduct"
+      required: [client, totalYearPurchases, invoiceCount, creditInvoiceCount, debtBalance, topProducts]
+
     Truck:
       type: object
       properties:
@@ -1832,6 +2201,15 @@ components:
         name:
           type: string
         plateNumber:
+          type: string
+          nullable: true
+        phone:
+          type: string
+          nullable: true
+        branchId:
+          type: integer
+          nullable: true
+        branchName:
           type: string
           nullable: true
         vendeurId:
@@ -1848,6 +2226,8 @@ components:
           nullable: true
         cashBalance:
           type: number
+        canSellOnCredit:
+          type: boolean
         latitude:
           type: number
           nullable: true
@@ -1861,6 +2241,7 @@ components:
         - id
         - name
         - cashBalance
+        - canSellOnCredit
         - createdAt
 
     CreateTruckBody:
@@ -1870,6 +2251,12 @@ components:
           type: string
         plateNumber:
           type: string
+          nullable: true
+        phone:
+          type: string
+          nullable: true
+        branchId:
+          type: integer
           nullable: true
         vendeurId:
           type: integer
@@ -1883,8 +2270,95 @@ components:
         location:
           type: string
           nullable: true
+        canSellOnCredit:
+          type: boolean
       required:
         - name
+
+    TruckProfile:
+      type: object
+      properties:
+        clients:
+          type: array
+          items:
+            type: object
+            properties:
+              id:
+                type: integer
+              name:
+                type: string
+              phone:
+                type: string
+                nullable: true
+            required:
+              - id
+              - name
+        stock:
+          type: array
+          items:
+            type: object
+            properties:
+              productId:
+                type: integer
+              productName:
+                type: string
+              quantity:
+                type: number
+            required:
+              - productId
+              - productName
+              - quantity
+        commissionTotal:
+          type: number
+        commissionPaid:
+          type: number
+        commissionBalance:
+          type: number
+      required:
+        - clients
+        - stock
+        - commissionTotal
+        - commissionPaid
+        - commissionBalance
+
+    TruckCommissionPayment:
+      type: object
+      properties:
+        id:
+          type: integer
+        truckId:
+          type: integer
+        amount:
+          type: number
+        note:
+          type: string
+          nullable: true
+        paidAt:
+          type: string
+          format: date-time
+        createdAt:
+          type: string
+          format: date-time
+      required:
+        - id
+        - truckId
+        - amount
+        - paidAt
+        - createdAt
+
+    CreateCommissionPaymentBody:
+      type: object
+      properties:
+        amount:
+          type: number
+        note:
+          type: string
+          nullable: true
+        paidAt:
+          type: string
+          format: date-time
+      required:
+        - amount
 
     TruckLoginBody:
       type: object
@@ -2576,3 +3050,49 @@ components:
           type: string
         metadata:
           $ref: '#/components/schemas/UploadUrlRequest'
+
+    CompanySettings:
+      type: object
+      required: [id, storeName, phone, address, updatedAt]
+      properties:
+        id:
+          type: integer
+        storeName:
+          type: string
+        phone:
+          type: string
+        address:
+          type: string
+        updatedAt:
+          type: string
+          format: date-time
+
+    UpdateCompanySettingsBody:
+      type: object
+      properties:
+        storeName:
+          type: string
+        phone:
+          type: string
+        address:
+          type: string
+
+    AppVersion:
+      type: object
+      required: [tag, buildNumber, downloadUrl, releaseUrl]
+      properties:
+        tag:
+          type: string
+        buildNumber:
+          type: integer
+          description: Numeric build number extracted from the tag (e.g. build-92 → 92)
+        name:
+          type: string
+          nullable: true
+        publishedAt:
+          type: string
+          nullable: true
+        downloadUrl:
+          type: string
+        releaseUrl:
+          type: string
