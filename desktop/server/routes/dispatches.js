@@ -97,11 +97,14 @@ async function fetchCloudIdMaps(cookie) {
     throw new Error("sync pull failed: " + r.status);
   }
   const build = (rows) => {
-    const m = new Map();
+    const bySync = new Map();
+    const ids = new Set();
     for (const row of rows || []) {
-      if (row && row.sync_id != null) m.set(String(row.sync_id), row.id);
+      if (!row || row.id == null) continue;
+      ids.add(row.id);
+      if (row.sync_id != null) bySync.set(String(row.sync_id), row.id);
     }
-    return m;
+    return { bySync, ids };
   };
   return {
     at: Date.now(),
@@ -133,18 +136,24 @@ async function resolveCloudId(table, localId, cookie) {
   if (localId == null || Number.isNaN(Number(localId))) return null;
   const sid = localSyncId(table, Number(localId));
   if (!sid) return null;
+  let maps = await getCloudIdMaps(cookie, false);
   // Rows pulled from a cloud row that had a NULL sync_id get a fabricated
   // `cloud_<table>_<cloudId>` sync_id, with the cloud id preserved as the local id.
+  // Only trust it if that cloud id STILL exists — a since-deleted/deduped row would
+  // otherwise produce a dangling reference (phantom truck_stock the mobile can't join).
   const fab = String(sid).match(new RegExp(`^cloud_${table}_(\\d+)$`));
-  if (fab) return Number(fab[1]);
-  let maps = await getCloudIdMaps(cookie, false);
-  let cloudId = maps[table].get(String(sid));
+  const resolve = (m) => {
+    if (fab && m[table].ids.has(Number(fab[1]))) return Number(fab[1]);
+    const bySync = m[table].bySync.get(String(sid));
+    return bySync != null ? bySync : null;
+  };
+  let cloudId = resolve(maps);
   if (cloudId == null) {
     // Cache may be stale (row pushed after last refresh) — refresh once.
     maps = await getCloudIdMaps(cookie, true);
-    cloudId = maps[table].get(String(sid));
+    cloudId = resolve(maps);
   }
-  return cloudId != null ? cloudId : null;
+  return cloudId;
 }
 
 async function proxyDispatch(req, res) {
