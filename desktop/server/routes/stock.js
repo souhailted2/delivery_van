@@ -23,13 +23,21 @@ router.post("/stock/transfer", (req, res) => {
   if (!truckId || !items?.length) return res.status(400).json({ error: "Camion et articles requis" });
   const db = getDb();
 
+  const truckIdNum = parseInt(truckId);
+  if (!Number.isInteger(truckIdNum)) return res.status(400).json({ error: "Camion invalide" });
+  const truckExists = db.prepare("SELECT id FROM trucks WHERE id = ? AND is_deleted = 0").get(truckIdNum);
+  if (!truckExists) return res.status(400).json({ error: "Camion introuvable" });
+
   const doTransfer = db.transaction(() => {
-    const info = db.prepare("INSERT INTO stock_transfers (truck_id) VALUES (?)").run(parseInt(truckId));
+    const info = db.prepare("INSERT INTO stock_transfers (truck_id) VALUES (?)").run(truckIdNum);
     const transferId = info.lastInsertRowid;
 
     for (const item of items) {
       const qty = Number(item.quantity);
       const productId = parseInt(item.productId);
+      if (!Number.isInteger(productId) || !Number.isFinite(qty) || qty <= 0) {
+        throw new Error("Article invalide");
+      }
       const product = db.prepare("SELECT * FROM products WHERE id = ?").get(productId);
       if (!product || Number(product.stock_quantity) < qty) {
         throw new Error(`Stock insuffisant pour ${product?.name ?? "produit"}`);
@@ -38,13 +46,13 @@ router.post("/stock/transfer", (req, res) => {
         .run(Number(product.stock_quantity) - qty, productId);
 
       const existing = db.prepare("SELECT * FROM truck_stock WHERE truck_id = ? AND product_id = ?")
-        .get(parseInt(truckId), productId);
+        .get(truckIdNum, productId);
       if (existing) {
         db.prepare("UPDATE truck_stock SET quantity = ? WHERE id = ?")
           .run(Number(existing.quantity) + qty, existing.id);
       } else {
         db.prepare("INSERT INTO truck_stock (truck_id, product_id, quantity) VALUES (?,?,?)")
-          .run(parseInt(truckId), productId, qty);
+          .run(truckIdNum, productId, qty);
       }
       db.prepare("INSERT INTO stock_transfer_items (transfer_id, product_id, quantity) VALUES (?,?,?)")
         .run(transferId, productId, qty);
@@ -54,7 +62,7 @@ router.post("/stock/transfer", (req, res) => {
 
   try {
     const transferId = doTransfer();
-    const truck = db.prepare("SELECT * FROM trucks WHERE id = ?").get(parseInt(truckId));
+    const truck = db.prepare("SELECT * FROM trucks WHERE id = ?").get(truckIdNum);
     const transferItems = db.prepare(`
       SELECT sti.product_id, p.name AS product_name, sti.quantity
       FROM stock_transfer_items sti LEFT JOIN products p ON sti.product_id = p.id

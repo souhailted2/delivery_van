@@ -12,6 +12,7 @@ import {
   trucksTable, usersTable, purchasesTable, purchaseItemsTable,
   invoicesTable, invoiceItemsTable, returnsTable, returnItemsTable,
   cashTransfersTable, truckStockTable, stockTransfersTable, stockTransferItemsTable,
+  truckCommissionPaymentsTable,
 } from "@workspace/db";
 import { and, eq, gt, or, isNull, sql } from "drizzle-orm";
 import { randomUUID } from "node:crypto";
@@ -71,6 +72,7 @@ const SYNC_TABLES = [
   { name: "truck_stock",          table: truckStockTable,          hasUpdatedAt: true },
   { name: "stock_transfers",      table: stockTransfersTable,      hasUpdatedAt: true },
   { name: "stock_transfer_items", table: stockTransferItemsTable,  hasUpdatedAt: true },
+  { name: "truck_commission_payments", table: truckCommissionPaymentsTable, hasUpdatedAt: true },
 ] as const;
 
 // ─── STATUS ───────────────────────────────────────────────────────────────────
@@ -177,18 +179,65 @@ router.post("/sync/v2/push", requireAuth, async (req, res): Promise<void> => {
     return;
   }
 
+  const results: SyncResults = {};
+
+  // Per-request cache for FK sync_id -> cloud id lookups (C1).
+  const fkCache = new Map<string, number | null>();
+  const resolveFkId = async (tag: string, refTable: any, syncVal: any): Promise<number | null> => {
+    const key = tag + ":" + String(syncVal);
+    if (fkCache.has(key)) return fkCache.get(key)!;
+    const [row] = await db.select({ id: refTable.id }).from(refTable)
+      .where(eq(refTable.syncId, String(syncVal))).limit(1);
+    const id = row?.id ?? null;
+    fkCache.set(key, id);
+    return id;
+  };
+
   for (const [tableName, records] of Object.entries(tables)) {
     const t = tableMap[tableName] as any;
     if (!t || !Array.isArray(records)) continue;
 
+    const tableResult: SyncTableResult = { received: records.length, written: 0, errors: [] };
+    results[tableName] = tableResult;
+    const fkRules = PUSH_FK_RULES[tableName];
+
     for (const rawRecord of records) {
-      if (!rawRecord.sync_id) continue;
+      if (!rawRecord.sync_id) {
+        tableResult.errors.push({ error: "missing sync_id" });
+        continue;
+      }
 
       try {
         const rec = camelCaseRecord(rawRecord);
+
+        // C1: never trust the desktop's raw local FK id — resolve it from the
+        // `*SyncId` companion field the desktop attaches via local joins. A
+        // required FK that can't be resolved means the parent hasn't synced
+        // yet (or never will); reject the row rather than write a wrong/null id.
+        if (fkRules) {
+          let unresolved: FkRule | null = null;
+          for (const rule of fkRules) {
+            const syncVal = rec[rule.syncCol];
+            rec[rule.idCol] = (syncVal != null && syncVal !== "")
+              ? await resolveFkId(rule.tag, rule.refTable, syncVal)
+              : null;
+            if (rule.required && rec[rule.idCol] == null) { unresolved = rule; break; }
+          }
+          if (unresolved) {
+            tableResult.errors.push({
+              syncId: rawRecord.sync_id,
+              error: `unresolved required FK '${unresolved.tag}' (${unresolved.syncCol}=${rec[unresolved.syncCol] ?? "null"})`,
+            });
+            continue;
+          }
+        }
+
         // Remove local-only or unrecognised fields that don't exist in cloud schema
         const clean = sanitizeForTable(t, rec);
-        if (!clean) continue;
+        if (!clean) {
+          tableResult.errors.push({ syncId: rawRecord.sync_id, error: "sanitize failed (missing sync_id after mapping)" });
+          continue;
+        }
 
         // Never let a missing/empty local password_hash blank out the cloud's
         // value (e.g. a desktop truck synced before a password was set).
@@ -202,19 +251,97 @@ router.post("/sync/v2/push", requireAuth, async (req, res): Promise<void> => {
             target: t.syncId,
             set: buildUpdateSet(t, clean),
             setWhere: sql`excluded.updated_at > ${t.updatedAt} OR ${t.updatedAt} IS NULL`,
-          })
-          .catch(() => {/* ignore FK constraint errors */});
-      } catch {
-        // continue on any error
+          });
+        tableResult.written++;
+      } catch (err: any) {
+        const message = err?.message || String(err);
+        tableResult.errors.push({ syncId: rawRecord.sync_id, error: message });
+        req.log?.warn?.({ err, table: tableName, syncId: rawRecord.sync_id }, "sync push: row rejected");
       }
+    }
+
+    if (tableResult.errors.length > 0) {
+      req.log?.warn?.(
+        { table: tableName, received: tableResult.received, written: tableResult.written, errorCount: tableResult.errors.length },
+        "sync push: table completed with errors",
+      );
     }
   }
 
-  res.json({ ok: true, cursor: new Date().toISOString() });
+  res.json({ ok: true, cursor: new Date().toISOString(), results });
 });
 
-// A foreign-key column on a pushed row that the mobile only knows by sync_id.
-type FkRule = { idCol: string; syncCol: string; refTable: any; tag: string };
+// Per-table push outcome, surfaced to the caller so sync errors are never silent.
+type SyncTableResult = { received: number; written: number; errors: Array<{ syncId?: string; error: string }> };
+type SyncResults = Record<string, SyncTableResult>;
+
+// A foreign-key column on a pushed row that the device only knows by sync_id.
+// `required` rows whose FK cannot be resolved are rejected rather than written
+// with a null/wrong id (see PUSH_FK_RULES below for the desktop generic push).
+type FkRule = { idCol: string; syncCol: string; refTable: any; tag: string; required?: boolean };
+
+// FK columns the desktop generic push must translate from local SQLite ids to
+// cloud ids via sync_id (C1). The desktop attaches a `*SyncId` companion field
+// for each rule (see desktop/server/sync-engine.js FK_SYNC_RULES); the cloud
+// resolves it to a real cloud id here and NEVER trusts the raw local id in
+// `idCol`, since local and cloud ids diverge for any row created on desktop
+// after the initial sync. Table order matters: a row's FK targets must be
+// pushed (and resolvable) before the row itself — see PUSH_TABLES order.
+const PUSH_FK_RULES: Record<string, FkRule[]> = {
+  products: [
+    { idCol: "categoryId", syncCol: "categorySyncId", refTable: categoriesTable, tag: "category" },
+  ],
+  trucks: [
+    { idCol: "vendeurId", syncCol: "vendeurSyncId", refTable: usersTable, tag: "user" },
+  ],
+  users: [
+    { idCol: "truckId", syncCol: "truckSyncId", refTable: trucksTable, tag: "truck" },
+  ],
+  clients: [
+    { idCol: "truckId", syncCol: "truckSyncId", refTable: trucksTable, tag: "truck" },
+  ],
+  purchases: [
+    { idCol: "supplierId", syncCol: "supplierSyncId", refTable: suppliersTable, tag: "supplier", required: true },
+  ],
+  purchase_items: [
+    { idCol: "purchaseId", syncCol: "purchaseSyncId", refTable: purchasesTable, tag: "purchase", required: true },
+    { idCol: "productId", syncCol: "productSyncId", refTable: productsTable, tag: "product", required: true },
+  ],
+  invoices: [
+    { idCol: "truckId", syncCol: "truckSyncId", refTable: trucksTable, tag: "truck", required: true },
+    { idCol: "clientId", syncCol: "clientSyncId", refTable: clientsTable, tag: "client", required: true },
+  ],
+  invoice_items: [
+    { idCol: "invoiceId", syncCol: "invoiceSyncId", refTable: invoicesTable, tag: "invoice", required: true },
+    { idCol: "productId", syncCol: "productSyncId", refTable: productsTable, tag: "product", required: true },
+  ],
+  returns: [
+    { idCol: "truckId", syncCol: "truckSyncId", refTable: trucksTable, tag: "truck" },
+    { idCol: "clientId", syncCol: "clientSyncId", refTable: clientsTable, tag: "client" },
+    { idCol: "invoiceId", syncCol: "invoiceSyncId", refTable: invoicesTable, tag: "invoice" },
+  ],
+  return_items: [
+    { idCol: "returnId", syncCol: "returnSyncId", refTable: returnsTable, tag: "return", required: true },
+    { idCol: "productId", syncCol: "productSyncId", refTable: productsTable, tag: "product", required: true },
+  ],
+  cash_transfers: [
+    { idCol: "truckId", syncCol: "truckSyncId", refTable: trucksTable, tag: "truck", required: true },
+  ],
+  truck_stock: [
+    { idCol: "truckId", syncCol: "truckSyncId", refTable: trucksTable, tag: "truck", required: true },
+    { idCol: "productId", syncCol: "productSyncId", refTable: productsTable, tag: "product", required: true },
+  ],
+  stock_transfers: [
+    { idCol: "truckId", syncCol: "truckSyncId", refTable: trucksTable, tag: "truck" },
+  ],
+  stock_transfer_items: [
+    { idCol: "transferId", syncCol: "transferSyncId", refTable: stockTransfersTable, tag: "transfer", required: true },
+    { idCol: "productId", syncCol: "productSyncId", refTable: productsTable, tag: "product", required: true },
+  ],
+  truck_commission_payments: [
+    { idCol: "truckId", syncCol: "truckSyncId", refTable: trucksTable, tag: "truck", required: true },
+  ],
+};
 
 /**
  * Truck (mobile) push: resolve sync_id foreign keys, generate invoice numbers,
@@ -476,33 +603,47 @@ async function handleTruckPush(
 
   // Best-effort tables outside the critical sale path (e.g. stock_transfers,
   // whose mobile schema differs from cloud). Processed per-row so a mismatch can
-  // never abort the sale transaction above.
+  // never abort the sale transaction above. Every outcome is recorded in
+  // `results` so the caller (and desktop UI) can see exactly what failed.
   // Stock transfers from mobile arrive header-first with children that reference
   // the parent only by sync_id. Resolve the parent id before inserting items (the
   // server column is NOT NULL), processing the header first so the lookup can hit.
-  const warnRow = (e: any, table: string) =>
-    req.log?.warn?.({ err: e, table }, "non-critical sync row failed");
+  const results: SyncResults = {};
+  const recordResult = (table: string, syncId: string | undefined, err: any) => {
+    const r = (results[table] ??= { received: 0, written: 0, errors: [] });
+    const message = err?.message || String(err);
+    r.errors.push({ syncId, error: message });
+    req.log?.warn?.({ err, table, syncId }, "non-critical sync row failed");
+  };
+  const recordWritten = (table: string) => {
+    const r = (results[table] ??= { received: 0, written: 0, errors: [] });
+    r.written++;
+  };
+  for (const [tableName, records] of Object.entries(tables)) {
+    if (Array.isArray(records)) (results[tableName] ??= { received: 0, written: 0, errors: [] }).received = records.length;
+  }
 
   const stHeaders = tables["stock_transfers"];
   if (Array.isArray(stHeaders)) {
     for (const raw of stHeaders) {
-      if (!raw.sync_id) continue;
+      if (!raw.sync_id) { recordResult("stock_transfers", undefined, "missing sync_id"); continue; }
       try {
         const clean = sanitizeForTable(stockTransfersTable, camelCaseRecord(raw));
-        if (!clean) continue;
+        if (!clean) { recordResult("stock_transfers", raw.sync_id, "sanitize failed"); continue; }
         await db.insert(stockTransfersTable).values(clean).onConflictDoUpdate({
           target: stockTransfersTable.syncId,
           set: buildUpdateSet(stockTransfersTable, clean),
           setWhere: sql`excluded.updated_at > ${stockTransfersTable.updatedAt} OR ${stockTransfersTable.updatedAt} IS NULL`,
-        }).catch((e: any) => warnRow(e, "stock_transfers"));
-      } catch (e) { warnRow(e, "stock_transfers"); }
+        });
+        recordWritten("stock_transfers");
+      } catch (e) { recordResult("stock_transfers", raw.sync_id, e); }
     }
   }
 
   const stItems = tables["stock_transfer_items"];
   if (Array.isArray(stItems)) {
     for (const raw of stItems) {
-      if (!raw.sync_id) continue;
+      if (!raw.sync_id) { recordResult("stock_transfer_items", undefined, "missing sync_id"); continue; }
       try {
         const rec = camelCaseRecord(raw);
         if (rec.transferId == null && rec.stockTransferSyncId) {
@@ -511,15 +652,16 @@ async function handleTruckPush(
             .where(eq(stockTransfersTable.syncId, String(rec.stockTransferSyncId))).limit(1);
           if (parent) rec.transferId = parent.id;
         }
-        if (rec.transferId == null) continue; // parent unknown — skip rather than violate NOT NULL
+        if (rec.transferId == null) { recordResult("stock_transfer_items", raw.sync_id, "parent stock_transfer not found"); continue; }
         const clean = sanitizeForTable(stockTransferItemsTable, rec);
-        if (!clean) continue;
+        if (!clean) { recordResult("stock_transfer_items", raw.sync_id, "sanitize failed"); continue; }
         await db.insert(stockTransferItemsTable).values(clean).onConflictDoUpdate({
           target: stockTransferItemsTable.syncId,
           set: buildUpdateSet(stockTransferItemsTable, clean),
           setWhere: sql`excluded.updated_at > ${stockTransferItemsTable.updatedAt} OR ${stockTransferItemsTable.updatedAt} IS NULL`,
-        }).catch((e: any) => warnRow(e, "stock_transfer_items"));
-      } catch (e) { warnRow(e, "stock_transfer_items"); }
+        });
+        recordWritten("stock_transfer_items");
+      } catch (e) { recordResult("stock_transfer_items", raw.sync_id, e); }
     }
   }
 
@@ -529,23 +671,24 @@ async function handleTruckPush(
     const t = tableMap[tableName];
     if (!t || !Array.isArray(records)) continue;
     for (const raw of records) {
-      if (!raw.sync_id) continue;
+      if (!raw.sync_id) { recordResult(tableName, undefined, "missing sync_id"); continue; }
       try {
         const rec = camelCaseRecord(raw);
         const clean = sanitizeForTable(t, rec);
-        if (!clean) continue;
+        if (!clean) { recordResult(tableName, raw.sync_id, "sanitize failed"); continue; }
         await db.insert(t).values(clean).onConflictDoUpdate({
           target: t.syncId,
           set: buildUpdateSet(t, clean),
           setWhere: sql`excluded.updated_at > ${t.updatedAt} OR ${t.updatedAt} IS NULL`,
-        }).catch((e: any) => req.log?.warn?.({ err: e, table: tableName }, "non-critical sync row failed"));
+        });
+        recordWritten(tableName);
       } catch (e) {
-        req.log?.warn?.({ err: e, table: tableName }, "non-critical sync row failed");
+        recordResult(tableName, raw.sync_id, e);
       }
     }
   }
 
-  res.json({ ok: true, cursor: new Date().toISOString() });
+  res.json({ ok: true, cursor: new Date().toISOString(), results });
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────

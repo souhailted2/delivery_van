@@ -380,7 +380,7 @@ router.get("/trucks/:id/profile", async (req, res) => {
   const [paidResult] = await db
     .select({ paid: sum(truckCommissionPaymentsTable.amount) })
     .from(truckCommissionPaymentsTable)
-    .where(eq(truckCommissionPaymentsTable.truckId, id));
+    .where(and(eq(truckCommissionPaymentsTable.truckId, id), eq(truckCommissionPaymentsTable.isDeleted, false)));
 
   const commissionTotal = Number(commResult?.total ?? 0);
   const commissionPaid = Number(paidResult?.paid ?? 0);
@@ -404,7 +404,7 @@ router.get("/trucks/:id/commission-payments", async (req, res) => {
   const payments = await db
     .select()
     .from(truckCommissionPaymentsTable)
-    .where(eq(truckCommissionPaymentsTable.truckId, id))
+    .where(and(eq(truckCommissionPaymentsTable.truckId, id), eq(truckCommissionPaymentsTable.isDeleted, false)))
     .orderBy(sql`${truckCommissionPaymentsTable.paidAt} DESC`);
   res.json(payments.map(p => ({ ...p, amount: Number(p.amount) })));
 });
@@ -435,10 +435,15 @@ router.put("/trucks/:id/commission-payments/:paymentId", async (req, res) => {
   if (amount !== undefined) updates.amount = String(amount);
   if (note !== undefined) updates.note = note || null;
   if (paidAt !== undefined) updates.paidAt = new Date(paidAt);
+  updates.updatedAt = new Date();
   const [payment] = await db
     .update(truckCommissionPaymentsTable)
     .set(updates)
-    .where(and(eq(truckCommissionPaymentsTable.id, paymentId), eq(truckCommissionPaymentsTable.truckId, id)))
+    .where(and(
+      eq(truckCommissionPaymentsTable.id, paymentId),
+      eq(truckCommissionPaymentsTable.truckId, id),
+      eq(truckCommissionPaymentsTable.isDeleted, false),
+    ))
     .returning();
   if (!payment) return res.status(404).json({ error: "Paiement non trouvé" });
   res.json({ ...payment, amount: Number(payment.amount) });
@@ -449,8 +454,13 @@ router.delete("/trucks/:id/commission-payments/:paymentId", async (req, res) => 
   const id = parseInt(req.params.id);
   const paymentId = parseInt(req.params.paymentId);
   const [deleted] = await db
-    .delete(truckCommissionPaymentsTable)
-    .where(and(eq(truckCommissionPaymentsTable.id, paymentId), eq(truckCommissionPaymentsTable.truckId, id)))
+    .update(truckCommissionPaymentsTable)
+    .set({ isDeleted: true, updatedAt: new Date() })
+    .where(and(
+      eq(truckCommissionPaymentsTable.id, paymentId),
+      eq(truckCommissionPaymentsTable.truckId, id),
+      eq(truckCommissionPaymentsTable.isDeleted, false),
+    ))
     .returning();
   if (!deleted) return res.status(404).json({ error: "Paiement non trouvé" });
   res.status(204).send();

@@ -343,8 +343,11 @@ export const truckCommissionPaymentsTable = pgTable("truck_commission_payments",
   note: text("note"),
   paidAt: timestamp("paid_at").notNull().defaultNow(),
   createdAt: timestamp("created_at").notNull().defaultNow(),
+  syncId: text("sync_id").unique().default(sql`gen_random_uuid()::text`),
+  updatedAt: timestamp("updated_at").notNull().defaultNow(),
+  isDeleted: boolean("is_deleted").notNull().default(false),
 });
-export const insertTruckCommissionPaymentSchema = createInsertSchema(truckCommissionPaymentsTable).omit({ id: true, createdAt: true });
+export const insertTruckCommissionPaymentSchema = createInsertSchema(truckCommissionPaymentsTable).omit({ id: true, createdAt: true, updatedAt: true });
 export type InsertTruckCommissionPayment = z.infer<typeof insertTruckCommissionPaymentSchema>;
 export type TruckCommissionPayment = typeof truckCommissionPaymentsTable.$inferSelect;
 

@@ -50,4 +50,5 @@ Thumbs.db
 
 # Desktop build outputs (rebuilt by GitHub Actions)
 desktop/dist-installer/
+desktop/dist-electron/
 desktop/renderer/

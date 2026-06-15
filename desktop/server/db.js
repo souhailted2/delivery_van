@@ -156,7 +156,8 @@ function createSchema() {
       amount     REAL NOT NULL,
       note       TEXT,
       paid_at    TEXT NOT NULL DEFAULT (${NOW_EXPR}),
-      created_at TEXT NOT NULL DEFAULT (${NOW_EXPR})
+      created_at TEXT NOT NULL DEFAULT (${NOW_EXPR}),
+      ${SYNC_COLS}
     );
 
     CREATE TABLE IF NOT EXISTS truck_stock (
@@ -275,6 +276,7 @@ function runMigrations() {
     "categories","users","suppliers","products","purchases","purchase_items",
     "clients","trucks","truck_stock","stock_transfers","stock_transfer_items",
     "invoices","invoice_items","returns","return_items","cash_transfers",
+    "truck_commission_payments",
   ];
   for (const tbl of syncables) {
     try { db.exec(`ALTER TABLE ${tbl} ADD COLUMN sync_id TEXT`); } catch {}
@@ -310,6 +312,7 @@ function createTriggers() {
     "categories","users","suppliers","products","purchases","purchase_items",
     "clients","trucks","truck_stock","stock_transfers","stock_transfer_items",
     "invoices","invoice_items","returns","return_items","cash_transfers",
+    "truck_commission_payments",
   ];
   for (const tbl of tables) {
     db.exec(`
@@ -374,6 +377,8 @@ function createIndexes() {
     CREATE UNIQUE INDEX IF NOT EXISTS idx_cash_transfers_sync_id    ON cash_transfers(sync_id);
     CREATE UNIQUE INDEX IF NOT EXISTS idx_users_sync_id             ON users(sync_id);
     CREATE UNIQUE INDEX IF NOT EXISTS idx_truck_stock_sync_id       ON truck_stock(sync_id);
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_truck_commission_payments_sync_id ON truck_commission_payments(sync_id);
+    CREATE INDEX IF NOT EXISTS idx_truck_commission_payments_truck_id  ON truck_commission_payments(truck_id);
   `);
 }
 

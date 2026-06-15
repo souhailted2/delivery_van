@@ -3,8 +3,12 @@ import cors from "cors";
 import pinoHttp from "pino-http";
 import cookieParser from "cookie-parser";
 import session from "express-session";
+import createPgSession from "connect-pg-simple";
+import { pool } from "@workspace/db";
 import router from "./routes";
 import { logger } from "./lib/logger";
+
+const PgSession = createPgSession(session);
 
 const app: Express = express();
 
@@ -37,6 +41,12 @@ app.use(express.urlencoded({ extended: true }));
 app.use(cookieParser());
 
 app.use(session({
+  store: new PgSession({
+    pool,
+    tableName: "user_sessions",
+    createTableIfMissing: true,
+    pruneSessionInterval: 60 * 60, // prune expired sessions every hour
+  }),
   secret: process.env.SESSION_SECRET || "erp-van-sales-secret-dzd",
   resave: false,
   saveUninitialized: false,

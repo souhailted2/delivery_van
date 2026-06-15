@@ -37,19 +37,85 @@ const PULL_TABLES = [
   "returns", "return_items",
   "cash_transfers", "truck_stock",
   "stock_transfers", "stock_transfer_items",
+  "truck_commission_payments",
 ];
-const PUSH_TABLES = [
-  "categories", "suppliers", "clients", "trucks", "products", "users",
-  "purchases", "purchase_items",
-  "invoices", "invoice_items",
-  "returns", "return_items",
-  "cash_transfers", "truck_stock",
-  "stock_transfers", "stock_transfer_items",
-];
+// Push order must also respect FK dependencies: a row's FK targets must be
+// pushed (and thus resolvable by sync_id on the cloud, see C1/FK_SYNC_RULES
+// below) before the row itself, so reuse the same dependency-safe ordering
+// as PULL_TABLES.
+const PUSH_TABLES = PULL_TABLES;
 
 // Only exclude SQLite internal rowid — we KEEP the cloud `id` to preserve
 // FK references (invoice.truck_id, invoice.client_id, etc.)
 const EXCLUDE_ON_UPSERT = new Set(["rowid"]);
+
+// FK columns that reference local-id rows of another synced table. Before
+// push, each row gets a `*_sync_id` companion field (resolved via a local
+// join) so the cloud can translate the local FK id to its own cloud id by
+// sync_id instead of trusting the raw local id (C1) — local and cloud ids
+// diverge for any row created on desktop after the initial sync.
+const FK_SYNC_RULES = {
+  products:             [{ idCol: "category_id", refTable: "categories",      syncCol: "category_sync_id" }],
+  trucks:               [{ idCol: "vendeur_id",   refTable: "users",          syncCol: "vendeur_sync_id" }],
+  users:                [{ idCol: "truck_id",     refTable: "trucks",         syncCol: "truck_sync_id" }],
+  clients:              [{ idCol: "truck_id",     refTable: "trucks",         syncCol: "truck_sync_id" }],
+  purchases:            [{ idCol: "supplier_id",  refTable: "suppliers",      syncCol: "supplier_sync_id" }],
+  purchase_items:       [
+    { idCol: "purchase_id", refTable: "purchases", syncCol: "purchase_sync_id" },
+    { idCol: "product_id",  refTable: "products",  syncCol: "product_sync_id" },
+  ],
+  invoices: [
+    { idCol: "truck_id",  refTable: "trucks",  syncCol: "truck_sync_id" },
+    { idCol: "client_id", refTable: "clients", syncCol: "client_sync_id" },
+  ],
+  invoice_items: [
+    { idCol: "invoice_id", refTable: "invoices", syncCol: "invoice_sync_id" },
+    { idCol: "product_id", refTable: "products",  syncCol: "product_sync_id" },
+  ],
+  returns: [
+    { idCol: "truck_id",   refTable: "trucks",   syncCol: "truck_sync_id" },
+    { idCol: "client_id",  refTable: "clients",  syncCol: "client_sync_id" },
+    { idCol: "invoice_id", refTable: "invoices", syncCol: "invoice_sync_id" },
+  ],
+  return_items: [
+    { idCol: "return_id",  refTable: "returns",  syncCol: "return_sync_id" },
+    { idCol: "product_id", refTable: "products", syncCol: "product_sync_id" },
+  ],
+  cash_transfers: [{ idCol: "truck_id", refTable: "trucks", syncCol: "truck_sync_id" }],
+  truck_stock: [
+    { idCol: "truck_id",   refTable: "trucks",   syncCol: "truck_sync_id" },
+    { idCol: "product_id", refTable: "products", syncCol: "product_sync_id" },
+  ],
+  stock_transfers: [{ idCol: "truck_id", refTable: "trucks", syncCol: "truck_sync_id" }],
+  stock_transfer_items: [
+    { idCol: "transfer_id", refTable: "stock_transfers", syncCol: "transfer_sync_id" },
+    { idCol: "product_id",  refTable: "products",        syncCol: "product_sync_id" },
+  ],
+  truck_commission_payments: [{ idCol: "truck_id", refTable: "trucks", syncCol: "truck_sync_id" }],
+};
+
+/** Attach `*_sync_id` companion fields to each row for FK translation on push (C1). */
+function attachFkSyncIds(tableName, rows) {
+  const rules = FK_SYNC_RULES[tableName];
+  if (!rules || !rows.length) return rows;
+  const db = getDb();
+  const cache = new Map(); // "refTable:id" -> sync_id | null
+  for (const row of rows) {
+    for (const rule of rules) {
+      const localId = row[rule.idCol];
+      if (localId == null) { row[rule.syncCol] = null; continue; }
+      const key = rule.refTable + ":" + localId;
+      let syncId = cache.get(key);
+      if (syncId === undefined) {
+        const found = db.prepare(`SELECT sync_id FROM ${rule.refTable} WHERE id = ?`).get(localId);
+        syncId = found ? found.sync_id : null;
+        cache.set(key, syncId);
+      }
+      row[rule.syncCol] = syncId;
+    }
+  }
+  return rows;
+}
 
 let syncTimer   = null;
 let onlineTimer = null;
@@ -65,6 +131,9 @@ const status = {
   lastPullReceived:   0,    // total records received from server in last pull
   lastPullWritten:    0,    // total records written to SQLite in last pull
   lastPullFirstError: null, // first upsert error message (diagnostic)
+  lastPushTables:     {},   // per-table { received, written, errors } from last push
+  lastPushFirstError: null, // first push row-rejection message (diagnostic)
+  lastPushErrors:     {},   // per-table arrays of { syncId, error } from last push
 };
 
 const listeners = new Set();
@@ -212,14 +281,32 @@ function upsertRecord(tableName, record) {
   try {
     // Find existing local row by sync_id first, then by id
     let existingId = null;
-    const bySyncId = db.prepare(`SELECT id FROM ${tableName} WHERE sync_id = ? LIMIT 1`)
+    let existingSyncId = null;
+    const bySyncId = db.prepare(`SELECT id, sync_id FROM ${tableName} WHERE sync_id = ? LIMIT 1`)
                        .get(record.sync_id);
     if (bySyncId) {
       existingId = bySyncId.id;
+      existingSyncId = bySyncId.sync_id;
     } else if (record.id != null) {
-      const byId = db.prepare(`SELECT id FROM ${tableName} WHERE id = ? LIMIT 1`)
+      const byId = db.prepare(`SELECT id, sync_id FROM ${tableName} WHERE id = ? LIMIT 1`)
                      .get(record.id);
-      if (byId) existingId = byId.id;
+      if (byId) { existingId = byId.id; existingSyncId = byId.sync_id; }
+    }
+
+    // Upgrade a locally-fabricated "cloud_<table>_<id>" placeholder sync_id to the
+    // real cloud-assigned sync_id as soon as the cloud sends one for this row,
+    // regardless of the updated_at gate below. Without this, attachFkSyncIds()/
+    // resolveFkId() keep matching FK children against the placeholder, which the
+    // cloud never has, so FK resolution on push fails forever for that row.
+    if (
+      existingId != null &&
+      existingSyncId &&
+      existingSyncId.startsWith(`cloud_${tableName}_`) &&
+      record.sync_id &&
+      record.sync_id !== existingSyncId &&
+      !record.sync_id.startsWith(`cloud_${tableName}_`)
+    ) {
+      db.prepare(`UPDATE ${tableName} SET sync_id = ? WHERE id = ?`).run(record.sync_id, existingId);
     }
 
     if (existingId != null) {
@@ -421,7 +508,7 @@ async function push() {
     const rows = getLocalChanges(tbl, since).filter(
       (r) => !(typeof r.sync_id === "string" && r.sync_id.startsWith("cloud_")),
     );
-    if (rows.length) tables[tbl] = rows;
+    if (rows.length) tables[tbl] = attachFkSyncIds(tbl, rows);
   }
 
   if (!Object.keys(tables).length) return; // nothing to push
@@ -446,6 +533,22 @@ async function push() {
   if (r.status !== 200) {
     throw new Error(`Push failed: HTTP ${r.status}`);
   }
+
+  // Surface per-row sync errors instead of silently discarding them: the server
+  // returns { results: { [table]: { received, written, errors: [...] } } } so a
+  // row rejected by the cloud (e.g. FK violation) is visible in the sync status
+  // instead of vanishing — the row's updated_at is still bumped, so without this
+  // it would never be retried or reported.
+  const results = r.data?.results || {};
+  let firstError = null;
+  const tableErrors = {};
+  for (const [table, info] of Object.entries(results)) {
+    if (info?.errors?.length) {
+      tableErrors[table] = info.errors;
+      if (!firstError) firstError = `${table}: ${info.errors[0].error}`;
+    }
+  }
+  emit({ lastPushTables: results, lastPushFirstError: firstError, lastPushErrors: tableErrors });
 
   setSyncMeta("last_push_at", new Date().toISOString());
 }

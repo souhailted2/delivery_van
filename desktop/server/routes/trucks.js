@@ -415,7 +415,7 @@ router.get("/trucks/:id/profile", (req, res) => {
 
   const paidRow = db.prepare(`
     SELECT COALESCE(SUM(amount), 0) AS paid
-    FROM truck_commission_payments WHERE truck_id = ?
+    FROM truck_commission_payments WHERE truck_id = ? AND is_deleted = 0
   `).get(id);
 
   const commissionTotal = Number(commissionRow.total);
@@ -436,7 +436,7 @@ router.get("/trucks/:id/commission-payments", (req, res) => {
   const id = parseInt(req.params.id);
   const db = getDb();
   const payments = db.prepare(`
-    SELECT * FROM truck_commission_payments WHERE truck_id = ? ORDER BY paid_at DESC
+    SELECT * FROM truck_commission_payments WHERE truck_id = ? AND is_deleted = 0 ORDER BY paid_at DESC
   `).all(id);
   res.json(payments.map(p => ({ ...p, amount: Number(p.amount) })));
 });
@@ -461,7 +461,7 @@ router.put("/trucks/:id/commission-payments/:paymentId", (req, res) => {
   const paymentId = parseInt(req.params.paymentId);
   const { amount, note, paidAt } = req.body;
   const db = getDb();
-  const existing = db.prepare("SELECT * FROM truck_commission_payments WHERE id = ? AND truck_id = ?").get(paymentId, id);
+  const existing = db.prepare("SELECT * FROM truck_commission_payments WHERE id = ? AND truck_id = ? AND is_deleted = 0").get(paymentId, id);
   if (!existing) return res.status(404).json({ error: "Paiement non trouvé" });
   const newAmount = amount !== undefined ? Number(amount) : Number(existing.amount);
   const newNote = note !== undefined ? (note || null) : existing.note;
@@ -476,7 +476,9 @@ router.delete("/trucks/:id/commission-payments/:paymentId", (req, res) => {
   const id = parseInt(req.params.id);
   const paymentId = parseInt(req.params.paymentId);
   const db = getDb();
-  const info = db.prepare("DELETE FROM truck_commission_payments WHERE id = ? AND truck_id = ?").run(paymentId, id);
+  const info = db.prepare(
+    "UPDATE truck_commission_payments SET is_deleted = 1, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id = ? AND truck_id = ? AND is_deleted = 0"
+  ).run(paymentId, id);
   if (info.changes === 0) return res.status(404).json({ error: "Paiement non trouvé" });
   res.status(204).send();
 });
