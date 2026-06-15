@@ -62,32 +62,63 @@ const toBody = (f: typeof emptyForm) => ({
   imageUrl: f.imageUrl.trim() || null,
 });
 
-const CANVAS_COMPRESSIBLE = new Set(["image/jpeg", "image/jpg", "image/png", "image/webp", "image/avif", "image/bmp", "image/gif"]);
+// Formats the browser's <img>/<canvas> can reliably decode client-side.
+// HEIC/HEIF (default on iPhones) generally can't be decoded this way — those
+// are sent as-is and optimized server-side instead.
+const CANVAS_DECODABLE = new Set(["image/jpeg", "image/jpg", "image/png", "image/webp", "image/avif", "image/bmp", "image/gif"]);
 const CANVAS_MAX_DIM = 1200;
 const CANVAS_QUALITY = 0.85;
+const CANVAS_DECODE_TIMEOUT_MS = 15000;
 
+const MAX_UPLOAD_BYTES = 25 * 1024 * 1024;
+const IMAGE_EXTENSION_RE = /\.(jpe?g|png|webp|heic|heif|gif|bmp|avif|tiff?)$/i;
+
+/**
+ * Best-effort client-side resize/compress to JPEG. Never throws and never
+ * hangs — on any decode/encode failure (including canvas size limits on very
+ * high-resolution photos, or formats the browser can't decode like HEIC),
+ * resolves with the original file so the upload can proceed and be optimized
+ * server-side.
+ */
 async function compressClientSide(file: File): Promise<File> {
-  if (!CANVAS_COMPRESSIBLE.has(file.type)) return file;
-  return new Promise((resolve) => {
+  if (!CANVAS_DECODABLE.has(file.type)) return file;
+
+  return new Promise<File>((resolve) => {
     const img = new Image();
     const url = URL.createObjectURL(file);
-    img.onload = () => {
+    let settled = false;
+
+    const finish = (result: File) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
       URL.revokeObjectURL(url);
-      let { width, height } = img;
-      if (width > CANVAS_MAX_DIM || height > CANVAS_MAX_DIM) {
-        if (width >= height) { height = Math.round(height * CANVAS_MAX_DIM / width); width = CANVAS_MAX_DIM; }
-        else { width = Math.round(width * CANVAS_MAX_DIM / height); height = CANVAS_MAX_DIM; }
-      }
-      const canvas = document.createElement("canvas");
-      canvas.width = width; canvas.height = height;
-      const ctx = canvas.getContext("2d")!;
-      ctx.drawImage(img, 0, 0, width, height);
-      canvas.toBlob((blob) => {
-        if (!blob) { resolve(file); return; }
-        resolve(new File([blob], file.name.replace(/\.[^.]+$/, ".jpg"), { type: "image/jpeg" }));
-      }, "image/jpeg", CANVAS_QUALITY);
+      resolve(result);
     };
-    img.onerror = () => { URL.revokeObjectURL(url); resolve(file); };
+
+    const timer = setTimeout(() => finish(file), CANVAS_DECODE_TIMEOUT_MS);
+
+    img.onload = () => {
+      try {
+        let { width, height } = img;
+        if (width > CANVAS_MAX_DIM || height > CANVAS_MAX_DIM) {
+          if (width >= height) { height = Math.round(height * CANVAS_MAX_DIM / width); width = CANVAS_MAX_DIM; }
+          else { width = Math.round(width * CANVAS_MAX_DIM / height); height = CANVAS_MAX_DIM; }
+        }
+        const canvas = document.createElement("canvas");
+        canvas.width = width; canvas.height = height;
+        const ctx = canvas.getContext("2d");
+        if (!ctx) { finish(file); return; }
+        ctx.drawImage(img, 0, 0, width, height);
+        canvas.toBlob((blob) => {
+          if (!blob) { finish(file); return; }
+          finish(new File([blob], file.name.replace(/\.[^.]+$/, ".jpg"), { type: "image/jpeg" }));
+        }, "image/jpeg", CANVAS_QUALITY);
+      } catch {
+        finish(file);
+      }
+    };
+    img.onerror = () => finish(file);
     img.src = url;
   });
 }
@@ -130,8 +161,13 @@ function ImageUpload({
   const uploadDisabled = false;
 
   const processFile = async (file: File) => {
-    if (!file.type.startsWith("image/")) {
+    // Some browsers/OSes send an empty or generic mimetype for HEIC/HEIF files
+    if (!file.type.startsWith("image/") && !IMAGE_EXTENSION_RE.test(file.name)) {
       const msg = "يُسمح برفع ملفات الصور فقط";
+      setError(msg); toast.error(msg); return;
+    }
+    if (file.size > MAX_UPLOAD_BYTES) {
+      const msg = "حجم الصورة يتجاوز الحد الأقصى المسموح (25 ميجابايت)";
       setError(msg); toast.error(msg); return;
     }
     if (uploadDisabled) {
@@ -147,6 +183,9 @@ function ImageUpload({
     setUploading(true);
     try {
       const compressed = await compressClientSide(file);
+      if (compressed.size > MAX_UPLOAD_BYTES) {
+        throw new Error("حجم الصورة يتجاوز الحد الأقصى المسموح (25 ميجابايت)");
+      }
       const formData = new FormData();
       formData.append("file", compressed);
 
@@ -254,7 +293,7 @@ function ImageUpload({
           <input
             ref={fileRef}
             type="file"
-            accept="image/*"
+            accept="image/*,.heic,.heif"
             className="hidden"
             onChange={handleFile}
           />
@@ -270,7 +309,7 @@ function ImageUpload({
 
           {!uploading && !error && !displaySrc && (
             <p className="text-xs text-muted-foreground">
-              JPG · PNG · WebP · HEIC وغيرها — أي حجم
+              JPG · PNG · WebP · HEIC · HEIF — حتى 25 ميجابايت
             </p>
           )}
 

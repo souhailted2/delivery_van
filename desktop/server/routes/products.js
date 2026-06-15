@@ -5,17 +5,49 @@ const multer = require("multer");
 const path = require("path");
 const fs = require("fs");
 const crypto = require("crypto");
+const sharp = require("sharp");
 
 const router = Router();
 
+const MAX_IMAGE_BYTES = 25 * 1024 * 1024;
+const MAX_DIMENSION = 1200;
+const JPEG_QUALITY = 82;
+const WEBP_QUALITY = 82;
+
+/** Some browsers/OSes send an empty or generic mimetype for HEIC/HEIF files */
+const IMAGE_EXTENSION_RE = /\.(jpe?g|png|webp|heic|heif|gif|bmp|avif|tiff?)$/i;
+
 const upload = multer({
   storage: multer.memoryStorage(),
-  limits: { fileSize: 20 * 1024 * 1024 },
+  limits: { fileSize: MAX_IMAGE_BYTES },
   fileFilter: (_req, file, cb) => {
-    if (file.mimetype.startsWith("image/")) cb(null, true);
+    if (file.mimetype.startsWith("image/") || IMAGE_EXTENSION_RE.test(file.originalname)) cb(null, true);
     else cb(new Error("يُسمح برفع ملفات الصور فقط"));
   },
 });
+
+/**
+ * Resizes to MAX_DIMENSION and re-encodes for storage, mirroring the cloud
+ * pipeline (artifacts/api-server/src/routes/products.ts). Accepts JPEG, PNG,
+ * WebP, HEIC, HEIF (and most other formats sharp/libvips can decode). Images
+ * with an alpha channel are encoded as WebP (to preserve transparency);
+ * everything else is encoded as JPEG.
+ */
+async function optimizeImage(buffer) {
+  const pipeline = sharp(buffer, { failOn: "none" })
+    .rotate()
+    .resize(MAX_DIMENSION, MAX_DIMENSION, { fit: "inside", withoutEnlargement: true });
+
+  const metadata = await pipeline.metadata();
+
+  if (metadata.hasAlpha) {
+    const out = await pipeline.webp({ quality: WEBP_QUALITY }).toBuffer();
+    return { buffer: out, extension: "webp", contentType: "image/webp" };
+  }
+
+  const out = await pipeline.jpeg({ quality: JPEG_QUALITY, mozjpeg: true }).toBuffer();
+  return { buffer: out, extension: "jpg", contentType: "image/jpeg" };
+}
 
 router.post("/products/upload-image", (req, res, next) => {
   if (!req.session?.userId && !req.session?.truckId) {
@@ -24,16 +56,31 @@ router.post("/products/upload-image", (req, res, next) => {
   next();
 }, (req, res, next) => {
   upload.single("file")(req, res, (err) => {
-    if (err) return res.status(400).json({ error: err.message || "خطأ في معالجة الملف" });
+    if (err) {
+      let msg = "خطأ في معالجة الملف";
+      if (err instanceof multer.MulterError && err.code === "LIMIT_FILE_SIZE") {
+        msg = "حجم الصورة يتجاوز الحد الأقصى المسموح (25 ميجابايت)";
+      } else if (err.message) {
+        msg = err.message;
+      }
+      return res.status(400).json({ error: msg });
+    }
     next();
   });
-}, (req, res) => {
+}, async (req, res) => {
   if (!req.file) return res.status(400).json({ error: "ملف الصورة مطلوب" });
   try {
+    let optimized;
+    try {
+      optimized = await optimizeImage(req.file.buffer);
+    } catch {
+      return res.status(400).json({ error: "الملف المرفوع تالف أو غير مدعوم. تأكد من أن الملف صورة صالحة." });
+    }
+
     const uploadsDir = path.join(getUserDataPath(), "uploads");
     fs.mkdirSync(uploadsDir, { recursive: true });
-    const filename = `${crypto.randomUUID()}.jpg`;
-    fs.writeFileSync(path.join(uploadsDir, filename), req.file.buffer);
+    const filename = `${crypto.randomUUID()}.${optimized.extension}`;
+    fs.writeFileSync(path.join(uploadsDir, filename), optimized.buffer);
     res.json({ imageUrl: `/api/storage/uploads/${filename}` });
   } catch (err) {
     console.error("Image upload error:", err);
@@ -41,12 +88,20 @@ router.post("/products/upload-image", (req, res, next) => {
   }
 });
 
+const CONTENT_TYPE_BY_EXT = {
+  ".jpg": "image/jpeg",
+  ".jpeg": "image/jpeg",
+  ".png": "image/png",
+  ".webp": "image/webp",
+};
+
 router.get("/storage/uploads/:filename", (req, res) => {
   const filename = path.basename(req.params.filename);
   const filePath = path.join(getUserDataPath(), "uploads", filename);
 
   if (fs.existsSync(filePath)) {
-    res.setHeader("Content-Type", "image/jpeg");
+    const ext = path.extname(filePath).toLowerCase();
+    res.setHeader("Content-Type", CONTENT_TYPE_BY_EXT[ext] || "image/jpeg");
     return res.sendFile(filePath);
   }
 

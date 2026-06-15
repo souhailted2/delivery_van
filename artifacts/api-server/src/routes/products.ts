@@ -12,18 +12,22 @@ import sharp from "sharp";
 const router = Router();
 const objectStorageService = new ObjectStorageService();
 
-const MAX_IMAGE_BYTES = 20 * 1024 * 1024;
+const MAX_IMAGE_BYTES = 25 * 1024 * 1024;
 const MAX_DIMENSION = 1200;
 const JPEG_QUALITY = 82;
+const WEBP_QUALITY = 82;
 
 const STORAGE_MODE = process.env.STORAGE_MODE || "gcs";
 const UPLOADS_DIR = process.env.UPLOADS_DIR || "/var/www/erp-uploads";
+
+/** Some browsers/OSes send an empty or generic mimetype for HEIC/HEIF files */
+const IMAGE_EXTENSION_RE = /\.(jpe?g|png|webp|heic|heif|gif|bmp|avif|tiff?)$/i;
 
 const upload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: MAX_IMAGE_BYTES },
   fileFilter: (_req, file, cb) => {
-    if (file.mimetype.startsWith("image/")) {
+    if (file.mimetype.startsWith("image/") || IMAGE_EXTENSION_RE.test(file.originalname)) {
       cb(null, true);
     } else {
       cb(new Error("يُسمح برفع ملفات الصور فقط"));
@@ -31,20 +35,36 @@ const upload = multer({
   },
 });
 
-async function compressToJpeg(buffer: Buffer): Promise<Buffer> {
-  return sharp(buffer)
+/**
+ * Resizes to MAX_DIMENSION and re-encodes for storage. Accepts JPEG, PNG,
+ * WebP, HEIC, HEIF (and most other formats sharp/libvips can decode).
+ * Images with an alpha channel are encoded as WebP (to preserve
+ * transparency); everything else is encoded as JPEG.
+ */
+async function optimizeImage(
+  buffer: Buffer,
+): Promise<{ buffer: Buffer; extension: string; contentType: string }> {
+  const pipeline = sharp(buffer, { failOn: "none" })
     .rotate()
-    .resize(MAX_DIMENSION, MAX_DIMENSION, { fit: "inside", withoutEnlargement: true })
-    .jpeg({ quality: JPEG_QUALITY, mozjpeg: true })
-    .toBuffer();
+    .resize(MAX_DIMENSION, MAX_DIMENSION, { fit: "inside", withoutEnlargement: true });
+
+  const metadata = await pipeline.metadata();
+
+  if (metadata.hasAlpha) {
+    const out = await pipeline.webp({ quality: WEBP_QUALITY }).toBuffer();
+    return { buffer: out, extension: "webp", contentType: "image/webp" };
+  }
+
+  const out = await pipeline.jpeg({ quality: JPEG_QUALITY, mozjpeg: true }).toBuffer();
+  return { buffer: out, extension: "jpg", contentType: "image/jpeg" };
 }
 
 /**
  * POST /products/upload-image
  * multipart/form-data, field name "file"
- * Accepts any image format (JPEG/PNG/WebP/HEIC/TIFF/etc), up to 20MB.
- * Automatically resizes (max 1200px), converts to JPEG and compresses (quality 82).
- * Returns { imageUrl }.
+ * Accepts any image format (JPEG/PNG/WebP/HEIC/HEIF/TIFF/etc), up to 25MB.
+ * Automatically resizes (max 1200px) and re-encodes as JPEG (or WebP if the
+ * source has transparency) at quality 82. Returns { imageUrl }.
  */
 router.post(
   "/products/upload-image",
@@ -59,10 +79,12 @@ router.post(
   (req, res, next) => {
     upload.single("file")(req, res, (err: unknown) => {
       if (err) {
-        const msg =
-          err instanceof Error
-            ? err.message
-            : "خطأ في معالجة الملف";
+        let msg = "خطأ في معالجة الملف";
+        if (err instanceof multer.MulterError && err.code === "LIMIT_FILE_SIZE") {
+          msg = "حجم الصورة يتجاوز الحد الأقصى المسموح (25 ميجابايت)";
+        } else if (err instanceof Error) {
+          msg = err.message;
+        }
         res.status(400).json({ error: msg });
         return;
       }
@@ -76,9 +98,9 @@ router.post(
     }
 
     try {
-      let compressed: Buffer;
+      let optimized: { buffer: Buffer; extension: string; contentType: string };
       try {
-        compressed = await compressToJpeg(req.file.buffer);
+        optimized = await optimizeImage(req.file.buffer);
       } catch {
         res.status(400).json({ error: "الملف المرفوع تالف أو غير مدعوم. تأكد من أن الملف صورة صالحة." });
         return;
@@ -86,9 +108,9 @@ router.post(
 
       if (STORAGE_MODE === "local") {
         fs.mkdirSync(UPLOADS_DIR, { recursive: true });
-        const filename = `${randomUUID()}.jpg`;
+        const filename = `${randomUUID()}.${optimized.extension}`;
         const filePath = path.join(UPLOADS_DIR, filename);
-        fs.writeFileSync(filePath, compressed);
+        fs.writeFileSync(filePath, optimized.buffer);
         const imageUrl = `/api/storage/uploads/${filename}`;
         res.json({ imageUrl });
         return;
@@ -99,8 +121,8 @@ router.post(
 
       const uploadRes = await fetch(uploadURL, {
         method: "PUT",
-        headers: { "Content-Type": "image/jpeg" },
-        body: compressed,
+        headers: { "Content-Type": optimized.contentType },
+        body: optimized.buffer,
         signal: AbortSignal.timeout(30_000),
       });
 
