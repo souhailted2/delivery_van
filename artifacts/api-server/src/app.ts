@@ -40,11 +40,16 @@ app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 app.use(cookieParser());
 
+// createTableIfMissing is off: connect-pg-simple's table.sql hardcodes the
+// "session_pkey"/"IDX_session_expire" constraint/index names, which collide
+// with any other app on this DB using the default "session" table name.
+// The "user_sessions" table + "user_sessions_pkey"/"IDX_user_sessions_expire"
+// are created by migration instead.
 app.use(session({
   store: new PgSession({
     pool,
     tableName: "user_sessions",
-    createTableIfMissing: true,
+    createTableIfMissing: false,
     pruneSessionInterval: 60 * 60, // prune expired sessions every hour
   }),
   secret: process.env.SESSION_SECRET || "erp-van-sales-secret-dzd",
