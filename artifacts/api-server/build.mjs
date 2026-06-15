@@ -100,6 +100,8 @@ async function buildAll() {
       "puppeteer",
       "puppeteer-core",
       "electron",
+      // reads its own table.sql via __dirname at runtime; bundling breaks that path
+      "connect-pg-simple",
     ],
     sourcemap: "linked",
     plugins: [
