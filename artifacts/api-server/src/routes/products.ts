@@ -275,4 +275,72 @@ router.delete("/products/:id", async (req, res) => {
   res.status(204).send();
 });
 
+/**
+ * POST /products/bulk
+ * Body: { products: ParsedProduct[], duplicateAction: "update" | "skip" }
+ * Used by the Excel import dialog. Matches existing products by name;
+ * "update" adds the imported quantity to the existing stock, "skip" leaves
+ * the existing product untouched. New names are inserted.
+ */
+router.post("/products/bulk", async (req, res) => {
+  const { products, duplicateAction } = req.body as {
+    products: Array<{
+      name: string; barcode?: string; categoryId?: number | null;
+      stockQuantity?: number; purchasePrice?: number;
+      sellingPriceRetail?: number; sellingPriceHalfWholesale?: number;
+      sellingPriceWholesale?: number; commissionRetail?: number;
+      commissionHalf?: number; commissionWholesale?: number; unit?: string;
+    }>;
+    duplicateAction: "update" | "skip";
+  };
+
+  if (!Array.isArray(products) || products.length === 0) {
+    res.status(400).json({ error: "لا توجد منتجات للاستيراد" });
+    return;
+  }
+
+  let added = 0, updated = 0, skipped = 0;
+  const errors: string[] = [];
+
+  for (const p of products) {
+    if (!p.name?.trim()) continue;
+    try {
+      const [existing] = await db.select({ id: productsTable.id, stockQuantity: productsTable.stockQuantity })
+        .from(productsTable).where(eq(productsTable.name, p.name.trim())).limit(1);
+
+      if (existing) {
+        if (duplicateAction === "update") {
+          await db.update(productsTable).set({
+            stockQuantity: String(Number(existing.stockQuantity) + Number(p.stockQuantity ?? 0)),
+          }).where(eq(productsTable.id, existing.id));
+          updated++;
+        } else {
+          skipped++;
+        }
+      } else {
+        await db.insert(productsTable).values({
+          name: p.name.trim(),
+          barcode: p.barcode?.trim() || null,
+          categoryId: p.categoryId ?? null,
+          stockQuantity: String(p.stockQuantity ?? 0),
+          purchasePrice: String(p.purchasePrice ?? 0),
+          sellingPriceRetail: String(p.sellingPriceRetail ?? 0),
+          sellingPriceHalfWholesale: String(p.sellingPriceHalfWholesale ?? 0),
+          sellingPriceWholesale: String(p.sellingPriceWholesale ?? 0),
+          commissionRetail: String(p.commissionRetail ?? 0),
+          commissionHalf: String(p.commissionHalf ?? 0),
+          commissionWholesale: String(p.commissionWholesale ?? 0),
+          unit: p.unit?.trim() || "قطعة",
+        });
+        added++;
+      }
+    } catch (err) {
+      req.log.error({ err, product: p.name }, "Error importing product");
+      errors.push(p.name);
+    }
+  }
+
+  res.json({ added, updated, skipped, total: added + updated + skipped, errors });
+});
+
 export default router;

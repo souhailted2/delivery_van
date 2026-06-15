@@ -185,4 +185,64 @@ router.delete("/products/:id", (req, res) => {
   res.status(204).send();
 });
 
+// POST /products/bulk — Excel import dialog. Matches existing products by
+// name; "update" adds the imported quantity to the existing stock, "skip"
+// leaves the existing product untouched. New names are inserted.
+router.post("/products/bulk", (req, res) => {
+  const { products, duplicateAction } = req.body || {};
+
+  if (!Array.isArray(products) || products.length === 0) {
+    return res.status(400).json({ error: "لا توجد منتجات للاستيراد" });
+  }
+
+  const db = getDb();
+  let added = 0, updated = 0, skipped = 0;
+  const errors = [];
+
+  const findExisting = db.prepare("SELECT id, stock_quantity FROM products WHERE name = ? AND is_deleted = 0");
+  const updateStock = db.prepare("UPDATE products SET stock_quantity = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id = ?");
+  const insertProduct = db.prepare(`
+    INSERT INTO products (name, barcode, category_id, stock_quantity, purchase_price,
+      selling_price_retail, selling_price_half_wholesale, selling_price_wholesale,
+      commission_retail, commission_half, commission_wholesale, unit)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+  `);
+
+  for (const p of products) {
+    if (!p.name?.trim()) continue;
+    try {
+      const existing = findExisting.get(p.name.trim());
+      if (existing) {
+        if (duplicateAction === "update") {
+          updateStock.run(Number(existing.stock_quantity ?? 0) + Number(p.stockQuantity ?? 0), existing.id);
+          updated++;
+        } else {
+          skipped++;
+        }
+      } else {
+        insertProduct.run(
+          p.name.trim(),
+          p.barcode?.trim() || null,
+          p.categoryId ?? null,
+          Number(p.stockQuantity ?? 0),
+          Number(p.purchasePrice ?? 0),
+          Number(p.sellingPriceRetail ?? 0),
+          Number(p.sellingPriceHalfWholesale ?? 0),
+          Number(p.sellingPriceWholesale ?? 0),
+          Number(p.commissionRetail ?? 0),
+          Number(p.commissionHalf ?? 0),
+          Number(p.commissionWholesale ?? 0),
+          p.unit?.trim() || "قطعة",
+        );
+        added++;
+      }
+    } catch (err) {
+      console.error("Error importing product:", p.name, err);
+      errors.push(p.name);
+    }
+  }
+
+  res.json({ added, updated, skipped, total: added + updated + skipped, errors });
+});
+
 module.exports = router;
