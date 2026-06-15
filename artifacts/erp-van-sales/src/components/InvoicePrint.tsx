@@ -28,7 +28,7 @@ export function InvoicePrint({ invoiceId, onClose }: Props) {
   const dateStr = createdAt?.toLocaleDateString("ar-DZ", { year: "numeric", month: "2-digit", day: "2-digit" }) ?? "";
   const timeStr = createdAt?.toLocaleTimeString("ar-DZ", { hour: "2-digit", minute: "2-digit" }) ?? "";
 
-  const storeName = companySettings?.storeName || "VanSales ERP";
+  const storeName = companySettings?.storeName || "ALLAL DELIVERY";
   const storePhone = companySettings?.phone || "";
   const storeAddress = companySettings?.address || "";
 

@@ -2,7 +2,7 @@ import { useState } from "react";
 import { useListTrucks, useCreateTruck, useUpdateTruck, useDeleteTruck } from "@workspace/api-client-react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { formatCurrency } from "@/lib/utils";
+import { formatCurrency, cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -12,12 +12,20 @@ import {
   AlertDialogContent, AlertDialogDescription, AlertDialogFooter,
   AlertDialogHeader, AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
-import { Plus, Pencil, Search, X, Eye, EyeOff, ChevronLeft, Trash2, Smartphone, Copy, Check } from "lucide-react";
+import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
+import {
+  Plus, Pencil, Search, X, Eye, EyeOff, ChevronLeft, Trash2, Smartphone, Copy, Check,
+  Truck as TruckIcon, MapPin, Phone, User, Wallet, ShieldCheck, ShieldOff, Package,
+  LayoutGrid, TableProperties, CreditCard,
+} from "lucide-react";
 import { Switch } from "@/components/ui/switch";
 import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
+import { motion } from "framer-motion";
 import { TruckProfileSheet } from "@/components/TruckProfileSheet";
 import { Badge } from "@/components/ui/badge";
+import { StatCard } from "@/components/StatCard";
+import { fadeUp } from "@/lib/motion-tokens";
 
 type Truck = {
   id: number;
@@ -199,6 +207,140 @@ function TruckFormFields({
   );
 }
 
+function TruckCard({
+  truck,
+  index,
+  onOpenProfile,
+  onEdit,
+  onDelete,
+}: {
+  truck: Truck;
+  index: number;
+  onOpenProfile: (t: Truck) => void;
+  onEdit: (t: Truck) => void;
+  onDelete: (t: Truck) => void;
+}) {
+  const hasPassword = (truck as any).hasPassword !== false;
+  const hasLocation = !!truck.location?.trim();
+
+  return (
+    <motion.div
+      variants={fadeUp}
+      initial="hidden"
+      animate="show"
+      transition={{ duration: 0.3, delay: Math.min(index, 16) * 0.04, ease: "easeOut" }}
+    >
+      <Card
+        className="group cursor-pointer overflow-hidden border-card-border bg-card/60 backdrop-blur-sm transition-all hover:shadow-lg hover:shadow-black/5 hover:-translate-y-0.5"
+        onClick={() => onOpenProfile(truck)}
+      >
+        <CardContent className="p-0">
+          {/* Header */}
+          <div className="flex items-start justify-between gap-3 p-4 pb-3">
+            <div className="flex items-center gap-3 min-w-0">
+              <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-primary/15 text-primary ring-1 ring-primary/25">
+                <TruckIcon className="h-5 w-5" />
+              </div>
+              <div className="min-w-0">
+                <div className="flex items-center gap-1.5">
+                  <h3 className="font-bold text-base truncate">{truck.name}</h3>
+                  <ChevronLeft className="h-3.5 w-3.5 text-muted-foreground/50 shrink-0 transition-transform group-hover:-translate-x-0.5" />
+                </div>
+                {truck.plateNumber && (
+                  <p className="text-xs text-muted-foreground font-mono mt-0.5">{truck.plateNumber}</p>
+                )}
+              </div>
+            </div>
+            <Badge
+              variant="outline"
+              className={cn(
+                "shrink-0 gap-1 text-[10px] py-0.5",
+                truck.canSellOnCredit
+                  ? "text-warning border-warning/30 bg-warning/10"
+                  : "text-muted-foreground border-border"
+              )}
+            >
+              <CreditCard className="h-3 w-3" />
+              {truck.canSellOnCredit ? "بيع بالآجل" : "نقدي فقط"}
+            </Badge>
+          </div>
+
+          {/* Driver / contact info */}
+          <div className="grid grid-cols-2 gap-2 px-4 pb-3 text-sm">
+            <div className="flex items-center gap-1.5 text-muted-foreground min-w-0">
+              <User className="h-3.5 w-3.5 shrink-0" />
+              <span className="truncate">{truck.driverName || "غير معيّن"}</span>
+            </div>
+            <div className="flex items-center gap-1.5 text-muted-foreground min-w-0">
+              <Phone className="h-3.5 w-3.5 shrink-0" />
+              <span className="truncate">{truck.phone || "-"}</span>
+            </div>
+          </div>
+
+          {/* Location placeholder */}
+          <div className="flex items-center gap-1.5 px-4 pb-3 text-sm text-muted-foreground">
+            <MapPin className="h-3.5 w-3.5 shrink-0" />
+            {hasLocation ? (
+              <span className="truncate">{truck.location}</span>
+            ) : (
+              <span className="italic text-muted-foreground/70">لا يوجد موقع محدد</span>
+            )}
+          </div>
+
+          {/* Cash summary */}
+          <div className="mx-4 mb-3 flex items-center justify-between rounded-lg bg-success/10 ring-1 ring-success/20 px-3 py-2.5">
+            <div className="flex items-center gap-2 text-success">
+              <Wallet className="h-4 w-4" />
+              <span className="text-xs font-medium">صندوق الشاحنة</span>
+            </div>
+            <span className="text-base font-bold tabular-nums text-success">
+              {formatCurrency(truck.cashBalance)}
+            </span>
+          </div>
+
+          {/* Mobile login status */}
+          <div
+            className="flex items-center justify-between gap-2 px-4 pb-3"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center gap-1.5 min-w-0">
+              <Badge variant="secondary" className="font-mono text-xs gap-1 py-0.5 max-w-[140px]">
+                <Smartphone className="h-3 w-3 shrink-0" />
+                <span className="truncate">{truck.name}</span>
+              </Badge>
+              <CopyButton text={truck.name} />
+            </div>
+            {hasPassword ? (
+              <Badge variant="outline" className="gap-1 text-[10px] py-0.5 text-success border-success/30 bg-success/10">
+                <ShieldCheck className="h-3 w-3" /> مفعّل
+              </Badge>
+            ) : (
+              <Badge variant="destructive" className="gap-1 text-[10px] py-0.5" title="لا توجد كلمة مرور — لن يستطيع السائق تسجيل الدخول">
+                <ShieldOff className="h-3 w-3" /> بلا كلمة مرور
+              </Badge>
+            )}
+          </div>
+
+          {/* Actions */}
+          <div className="flex items-center gap-2 border-t border-border/60 p-3" onClick={(e) => e.stopPropagation()}>
+            <Button size="sm" variant="outline" className="flex-1" onClick={() => onEdit(truck)}>
+              <Pencil className="h-3.5 w-3.5 ml-1" /> تعديل
+            </Button>
+            <Button
+              size="sm"
+              variant="outline"
+              className="text-destructive hover:text-destructive hover:bg-destructive/10 border-destructive/30"
+              onClick={() => onDelete(truck)}
+            >
+              <Trash2 className="h-3.5 w-3.5" />
+            </Button>
+          </div>
+        </CardContent>
+      </Card>
+    </motion.div>
+  );
+}
+
 export default function Camions() {
   const { data, isLoading } = useListTrucks();
   const trucks = Array.isArray(data) ? data : [];
@@ -229,6 +371,11 @@ export default function Camions() {
   const [deleteName, setDeleteName] = useState("");
 
   const [profileTruck, setProfileTruck] = useState<Truck | null>(null);
+  const [view, setView] = useState<"cards" | "table">("cards");
+
+  const totalCash = trucks.reduce((sum, t) => sum + (t.cashBalance ?? 0), 0);
+  const creditEnabledCount = trucks.filter((t) => t.canSellOnCredit).length;
+  const noPasswordCount = trucks.filter((t) => (t as any).hasPassword === false).length;
 
   const invalidate = () => queryClient.invalidateQueries({ queryKey: ["/api/trucks"] });
 
@@ -315,23 +462,53 @@ export default function Camions() {
         </Button>
       </div>
 
-      {/* Search */}
-      <div className="relative">
-        <Search className="absolute right-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-        <Input
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-          placeholder="ابحث بالاسم أو اللوحة أو السائق أو الهاتف..."
-          className="pr-9 pl-9"
+      {/* Stats */}
+      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+        <StatCard index={0} label="عدد الشاحنات" value={trucks.length} icon={TruckIcon} accent="primary" />
+        <StatCard index={1} label="إجمالي صندوق الأسطول" value={formatCurrency(totalCash)} icon={Wallet} accent="success" />
+        <StatCard index={2} label="بيع بالآجل مسموح" value={creditEnabledCount} icon={CreditCard} accent="warning" hint="من إجمالي الشاحنات" />
+        <StatCard
+          index={3}
+          label="بلا كلمة مرور موبايل"
+          value={noPasswordCount}
+          icon={ShieldOff}
+          accent={noPasswordCount ? "destructive" : "muted"}
+          hint="لن يستطيع السائق تسجيل الدخول"
         />
-        {search && (
-          <button
-            onClick={() => setSearch("")}
-            className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
-          >
-            <X className="h-4 w-4" />
-          </button>
-        )}
+      </div>
+
+      {/* Toolbar */}
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+        <div className="relative max-w-sm w-full">
+          <Search className="absolute right-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+          <Input
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="ابحث بالاسم أو اللوحة أو السائق أو الهاتف..."
+            className="pr-9 pl-9"
+          />
+          {search && (
+            <button
+              onClick={() => setSearch("")}
+              className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+            >
+              <X className="h-4 w-4" />
+            </button>
+          )}
+        </div>
+        <ToggleGroup
+          type="single"
+          value={view}
+          onValueChange={(v) => v && setView(v as "cards" | "table")}
+          className="self-start sm:self-auto"
+        >
+          <ToggleGroupItem value="cards" aria-label="عرض البطاقات">
+            <LayoutGrid className="h-4 w-4" />
+          </ToggleGroupItem>
+          <ToggleGroupItem value="table" aria-label="عرض الجدول">
+            <TableProperties className="h-4 w-4" />
+          </ToggleGroupItem>
+        </ToggleGroup>
       </div>
       {search.trim() && (
         <p className="text-sm text-muted-foreground -mt-2">
@@ -428,6 +605,56 @@ export default function Camions() {
         onClose={() => setProfileTruck(null)}
       />
 
+      {view === "cards" && (
+        <>
+          {isLoading ? (
+            <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+              {Array.from({ length: 4 }).map((_, i) => (
+                <Card key={i} className="border-card-border overflow-hidden">
+                  <CardContent className="p-4 space-y-3">
+                    <div className="flex items-center gap-3">
+                      <div className="h-11 w-11 rounded-xl bg-muted animate-pulse" />
+                      <div className="flex-1 space-y-2">
+                        <div className="h-3.5 w-2/3 rounded bg-muted animate-pulse" />
+                        <div className="h-3 w-1/3 rounded bg-muted animate-pulse" />
+                      </div>
+                    </div>
+                    <div className="h-9 rounded-lg bg-muted animate-pulse" />
+                    <div className="h-8 rounded-lg bg-muted animate-pulse" />
+                  </CardContent>
+                </Card>
+              ))}
+            </div>
+          ) : filtered.length === 0 ? (
+            <div className="flex flex-col items-center justify-center gap-3 rounded-xl border border-dashed border-border py-16 text-center">
+              <TruckIcon className="h-10 w-10 text-muted-foreground/40" />
+              <p className="text-muted-foreground">
+                {search.trim() ? "لا توجد نتائج مطابقة" : "لا توجد شاحنات"}
+              </p>
+            </div>
+          ) : (
+            <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+              {filtered.map((t, i) => (
+                <TruckCard
+                  key={t.id}
+                  truck={t as Truck}
+                  index={i}
+                  onOpenProfile={(truck) => setProfileTruck(truck)}
+                  onEdit={openEdit}
+                  onDelete={openDelete}
+                />
+              ))}
+            </div>
+          )}
+          {filtered.length > 0 && (
+            <p className="text-sm text-muted-foreground text-center">
+              عرض {filtered.length} من أصل {trucks.length} شاحنة
+            </p>
+          )}
+        </>
+      )}
+
+      {view === "table" && (
       <Card>
         <CardContent className="p-0">
           <div className="overflow-x-auto">
@@ -524,6 +751,7 @@ export default function Camions() {
           </div>
         </CardContent>
       </Card>
+      )}
     </div>
   );
 }

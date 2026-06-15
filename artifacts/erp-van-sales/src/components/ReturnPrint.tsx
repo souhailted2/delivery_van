@@ -23,7 +23,7 @@ function ReturnPrintContent({ returnId, onClose }: { returnId: number; onClose: 
   const { data: ret, isLoading } = useGetReturn(returnId);
   const { data: companySettings } = useGetCompanySettings();
 
-  const storeName = companySettings?.storeName || "VanSales ERP";
+  const storeName = companySettings?.storeName || "ALLAL DELIVERY";
   const storePhone = companySettings?.phone || "";
   const storeAddress = companySettings?.address || "";
 

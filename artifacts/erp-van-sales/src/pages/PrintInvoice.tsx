@@ -25,7 +25,7 @@ export default function PrintInvoice() {
     enabled: !!user,
   });
 
-  const storeName = companySettings?.storeName || "VanSales ERP";
+  const storeName = companySettings?.storeName || "ALLAL DELIVERY";
   const storePhone = companySettings?.phone || "";
   const storeAddress = companySettings?.address || "";
 

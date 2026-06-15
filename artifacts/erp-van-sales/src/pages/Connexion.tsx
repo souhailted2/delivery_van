@@ -65,9 +65,11 @@ export default function Connexion() {
           <div className="h-12 w-12 bg-primary rounded-full flex items-center justify-center mb-4">
             <Truck className="h-6 w-6 text-primary-foreground" />
           </div>
-          <CardTitle className="text-2xl font-bold">تسجيل الدخول</CardTitle>
+          <CardTitle className="text-2xl font-bold">
+            ALLAL <span className="text-primary">DELIVERY</span>
+          </CardTitle>
           <CardDescription>
-            مرحباً بك في نظام إدارة مبيعات الشاحنات
+            مركز القيادة اللوجستي — تسجيل الدخول
           </CardDescription>
         </CardHeader>
         <CardContent>

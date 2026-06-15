@@ -6,18 +6,41 @@ import {
 } from "@workspace/api-client-react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { formatCurrency } from "@/lib/utils";
+import { cn, formatCurrency } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { ArrowRightLeft, Search, X } from "lucide-react";
+import { ArrowRightLeft, Search, X, Boxes, Wallet, PackageX, AlertTriangle } from "lucide-react";
 import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
+import { StatCard } from "@/components/StatCard";
 
 type TransferRow = { productId: number; quantity: string };
+
+function getStockHealth(quantity: number) {
+  if (quantity <= 0) {
+    return {
+      label: "نفد المخزون",
+      className: "text-destructive border-destructive/30 bg-destructive/10",
+      dot: "bg-destructive",
+    };
+  }
+  if (quantity < 10) {
+    return {
+      label: "مخزون منخفض",
+      className: "text-warning border-warning/30 bg-warning/10",
+      dot: "bg-warning",
+    };
+  }
+  return {
+    label: "متوفر",
+    className: "text-success border-success/30 bg-success/10",
+    dot: "bg-success",
+  };
+}
 
 export default function Stock() {
   const { data, isLoading } = useGetWarehouseStock();
@@ -27,6 +50,10 @@ export default function Stock() {
   const trucks = Array.isArray(trucksData) ? trucksData : [];
 
   const queryClient = useQueryClient();
+
+  const totalValue = stock.reduce((sum, s) => sum + s.quantity * s.purchasePrice, 0);
+  const outOfStockCount = stock.filter((s) => s.quantity <= 0).length;
+  const lowStockCount = stock.filter((s) => s.quantity > 0 && s.quantity < 10).length;
 
   const [search, setSearch] = useState("");
   const filtered = search.trim()
@@ -123,6 +150,27 @@ export default function Stock() {
         <Button onClick={openDialog} disabled={stock.length === 0}>
           <ArrowRightLeft className="ml-2 h-4 w-4" /> تحويل إلى شاحنة
         </Button>
+      </div>
+
+      {/* Inventory intelligence */}
+      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+        <StatCard index={0} label="عدد المنتجات" value={stock.length} icon={Boxes} accent="primary" />
+        <StatCard index={1} label="قيمة المخزون" value={formatCurrency(totalValue)} icon={Wallet} accent="success" hint="بسعر الشراء" />
+        <StatCard
+          index={2}
+          label="مخزون منخفض"
+          value={lowStockCount}
+          icon={AlertTriangle}
+          accent={lowStockCount ? "warning" : "muted"}
+          hint="أقل من 10 وحدات"
+        />
+        <StatCard
+          index={3}
+          label="نفد المخزون"
+          value={outOfStockCount}
+          icon={PackageX}
+          accent={outOfStockCount ? "destructive" : "muted"}
+        />
       </div>
 
       {/* Search */}
@@ -272,29 +320,41 @@ export default function Stock() {
                 <TableHead>المنتج</TableHead>
                 <TableHead>الفئة</TableHead>
                 <TableHead>الكمية</TableHead>
+                <TableHead>الحالة</TableHead>
                 <TableHead>سعر الشراء</TableHead>
+                <TableHead>القيمة الإجمالية</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
               {isLoading ? (
                 <TableRow>
-                  <TableCell colSpan={4} className="text-center py-8">جارٍ التحميل...</TableCell>
+                  <TableCell colSpan={6} className="text-center py-8">جارٍ التحميل...</TableCell>
                 </TableRow>
               ) : filtered.length === 0 ? (
                 <TableRow>
-                  <TableCell colSpan={4} className="text-center py-8">{search.trim() ? "لا توجد نتائج مطابقة" : "لا توجد منتجات في المخزن"}</TableCell>
+                  <TableCell colSpan={6} className="text-center py-8">{search.trim() ? "لا توجد نتائج مطابقة" : "لا توجد منتجات في المخزن"}</TableCell>
                 </TableRow>
               ) : (
-                filtered.map((s) => (
-                  <TableRow key={s.productId}>
-                    <TableCell className="font-medium">{s.productName}</TableCell>
-                    <TableCell>{s.categoryName || "-"}</TableCell>
-                    <TableCell className={s.quantity < 10 ? "text-destructive font-bold" : ""}>
-                      {s.quantity} {s.unit}
-                    </TableCell>
-                    <TableCell>{formatCurrency(s.purchasePrice)}</TableCell>
-                  </TableRow>
-                ))
+                filtered.map((s) => {
+                  const health = getStockHealth(s.quantity);
+                  return (
+                    <TableRow key={s.productId}>
+                      <TableCell className="font-medium">{s.productName}</TableCell>
+                      <TableCell>{s.categoryName || "-"}</TableCell>
+                      <TableCell className={cn("tabular-nums", s.quantity < 10 && "font-bold")}>
+                        {s.quantity} {s.unit}
+                      </TableCell>
+                      <TableCell>
+                        <Badge variant="outline" className={cn("gap-1.5 text-xs", health.className)}>
+                          <span className={cn("h-1.5 w-1.5 rounded-full", health.dot)} />
+                          {health.label}
+                        </Badge>
+                      </TableCell>
+                      <TableCell className="tabular-nums">{formatCurrency(s.purchasePrice)}</TableCell>
+                      <TableCell className="tabular-nums font-medium">{formatCurrency(s.quantity * s.purchasePrice)}</TableCell>
+                    </TableRow>
+                  );
+                })
               )}
             </TableBody>
           </Table>
