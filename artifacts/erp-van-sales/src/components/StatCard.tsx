@@ -11,6 +11,7 @@ export function StatCard({
   accent = "muted",
   hint,
   index = 0,
+  reveal = true,
 }: {
   label: string;
   value: string | number;
@@ -18,16 +19,19 @@ export function StatCard({
   accent?: Accent;
   hint?: string;
   index?: number;
+  /** When false the card stays hidden — used to gate the Dashboard reveal to
+   *  the cinematic curtain-lift. Defaults true so every other page is normal. */
+  reveal?: boolean;
 }) {
   const styles = accentStyles[accent];
   return (
     <motion.div
       variants={fadeUp}
       initial="hidden"
-      animate="show"
-      transition={{ duration: 0.35, delay: index * 0.05, ease: "easeOut" }}
+      animate={reveal ? "show" : "hidden"}
+      transition={{ duration: 0.45, delay: index * 0.06, ease: [0.22, 1, 0.36, 1] }}
     >
-      <Card className="overflow-hidden border-card-border bg-card/60 backdrop-blur-sm transition-shadow hover:shadow-lg hover:shadow-black/5">
+      <Card className="overflow-hidden border-card-border bg-card/88 backdrop-blur-md transition-shadow hover:shadow-lg hover:shadow-black/30">
         <CardContent className="flex items-center justify-between gap-4 p-5">
           <div className="space-y-1.5">
             <p className="text-sm font-medium text-muted-foreground">{label}</p>

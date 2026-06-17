@@ -1,0 +1,15 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "erp-van-sales-web",
+      "runtimeExecutable": "pnpm",
+      "runtimeArgs": ["--filter", "@workspace/erp-van-sales", "run", "dev"],
+      "port": 22606,
+      "env": {
+        "PORT": "22606",
+        "BASE_PATH": "/"
+      }
+    }
+  ]
+}

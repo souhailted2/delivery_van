@@ -23,6 +23,7 @@ import {
 } from "lucide-react";
 import { fadeUp, accentStyles, type Accent } from "@/lib/motion-tokens";
 import { StatCard as KpiCard } from "@/components/StatCard";
+import { useArrival } from "@/experience/ArrivalProvider";
 
 const aiInsights: {
   icon: typeof PackageSearch;
@@ -70,6 +71,8 @@ const aiInsights: {
 
 export default function Dashboard() {
   const { data: stats, isLoading } = useGetDashboardStats();
+  // Gate the reveal to the cinematic curtain-lift (true for normal navigation).
+  const { dashboardReady } = useArrival();
 
   if (isLoading) {
     return (
@@ -100,7 +103,13 @@ export default function Dashboard() {
 
   return (
     <div className="space-y-6">
-      <div className="flex flex-col gap-1 sm:flex-row sm:items-end sm:justify-between">
+      <motion.div
+        variants={fadeUp}
+        initial="hidden"
+        animate={dashboardReady ? "show" : "hidden"}
+        transition={{ duration: 0.5, ease: [0.22, 1, 0.36, 1] }}
+        className="flex flex-col gap-1 sm:flex-row sm:items-end sm:justify-between"
+      >
         <div>
           <h1 className="text-3xl font-bold tracking-tight text-foreground">
             مركز قيادة <span className="text-primary">ALLAL DELIVERY</span>
@@ -110,12 +119,13 @@ export default function Dashboard() {
         <Badge variant="outline" className="self-start sm:self-auto text-xs font-medium text-muted-foreground border-border">
           {today}
         </Badge>
-      </div>
+      </motion.div>
 
       {/* العمليات اليومية */}
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
         <KpiCard
           index={0}
+          reveal={dashboardReady}
           label="مبيعات اليوم"
           value={formatCurrency(stats?.todaySales ?? 0)}
           icon={DollarSign}
@@ -123,6 +133,7 @@ export default function Dashboard() {
         />
         <KpiCard
           index={1}
+          reveal={dashboardReady}
           label="مبيعات الشهر"
           value={formatCurrency(stats?.monthSales ?? 0)}
           icon={TrendingUp}
@@ -130,6 +141,7 @@ export default function Dashboard() {
         />
         <KpiCard
           index={2}
+          reveal={dashboardReady}
           label="فواتير اليوم"
           value={stats?.todayInvoices ?? 0}
           icon={ShoppingBag}
@@ -137,6 +149,7 @@ export default function Dashboard() {
         />
         <KpiCard
           index={3}
+          reveal={dashboardReady}
           label="الشاحنات النشطة"
           value={stats?.activeTrucks ?? 0}
           icon={Truck}
@@ -148,6 +161,7 @@ export default function Dashboard() {
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
         <KpiCard
           index={4}
+          reveal={dashboardReady}
           label="مبيعات نقدية اليوم"
           value={formatCurrency(stats?.todayCashSales ?? 0)}
           icon={Banknote}
@@ -155,6 +169,7 @@ export default function Dashboard() {
         />
         <KpiCard
           index={5}
+          reveal={dashboardReady}
           label="مبيعات بالدين اليوم"
           value={formatCurrency(stats?.todayCreditSales ?? 0)}
           icon={CreditCard}
@@ -162,6 +177,7 @@ export default function Dashboard() {
         />
         <KpiCard
           index={6}
+          reveal={dashboardReady}
           label="ديون العملاء"
           value={formatCurrency(stats?.totalClientsDebt ?? 0)}
           icon={Users}
@@ -169,6 +185,7 @@ export default function Dashboard() {
         />
         <KpiCard
           index={7}
+          reveal={dashboardReady}
           label="ديون الموردين"
           value={formatCurrency(stats?.totalSuppliersDebt ?? 0)}
           icon={Building2}
@@ -180,6 +197,7 @@ export default function Dashboard() {
       <div className="grid gap-4 sm:grid-cols-2">
         <KpiCard
           index={8}
+          reveal={dashboardReady}
           label="تحويلات معلقة"
           value={stats?.pendingCashTransfers ?? 0}
           icon={ArrowRightLeft}
@@ -188,6 +206,7 @@ export default function Dashboard() {
         />
         <KpiCard
           index={9}
+          reveal={dashboardReady}
           label="منتجات بمخزون منخفض"
           value={stats?.lowStockProducts ?? 0}
           icon={AlertCircle}
@@ -201,8 +220,8 @@ export default function Dashboard() {
         <motion.div
           variants={fadeUp}
           initial="hidden"
-          animate="show"
-          transition={{ duration: 0.35, delay: 0.45, ease: "easeOut" }}
+          animate={dashboardReady ? "show" : "hidden"}
+          transition={{ duration: 0.45, delay: 0.62, ease: [0.22, 1, 0.36, 1] }}
           className="lg:col-span-2"
         >
           <Card className="border-card-border h-full">
@@ -253,8 +272,8 @@ export default function Dashboard() {
         <motion.div
           variants={fadeUp}
           initial="hidden"
-          animate="show"
-          transition={{ duration: 0.35, delay: 0.5, ease: "easeOut" }}
+          animate={dashboardReady ? "show" : "hidden"}
+          transition={{ duration: 0.45, delay: 0.7, ease: [0.22, 1, 0.36, 1] }}
         >
           <Card className="border-card-border h-full bg-gradient-to-br from-primary/10 via-card to-card">
             <CardHeader className="flex flex-row items-center gap-2 pb-2">
