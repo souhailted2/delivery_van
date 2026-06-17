@@ -71,8 +71,12 @@ const aiInsights: {
 
 export default function Dashboard() {
   const { data: stats, isLoading } = useGetDashboardStats();
-  // Gate the reveal to the cinematic curtain-lift (true for normal navigation).
-  const { dashboardReady } = useArrival();
+  // dashboardReady: cards stagger IN as the arrival curtain lifts.
+  // isLeaving:      cards retreat OUT during Phase 8 (ack stage of logout).
+  const { dashboardReady, isLeaving } = useArrival();
+  // The cards' actual animate state — shown when the dashboard is ready AND
+  // the user isn't leaving. Otherwise they retreat (reverse-stagger).
+  const cardsShown = dashboardReady && !isLeaving;
 
   if (isLoading) {
     return (
@@ -106,7 +110,7 @@ export default function Dashboard() {
       <motion.div
         variants={fadeUp}
         initial="hidden"
-        animate={dashboardReady ? "show" : "hidden"}
+        animate={cardsShown ? "show" : "hidden"}
         transition={{ duration: 0.5, ease: [0.22, 1, 0.36, 1] }}
         className="flex flex-col gap-1 sm:flex-row sm:items-end sm:justify-between"
       >
@@ -125,7 +129,7 @@ export default function Dashboard() {
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
         <KpiCard
           index={0}
-          reveal={dashboardReady}
+          reveal={cardsShown}
           label="مبيعات اليوم"
           value={formatCurrency(stats?.todaySales ?? 0)}
           icon={DollarSign}
@@ -133,7 +137,7 @@ export default function Dashboard() {
         />
         <KpiCard
           index={1}
-          reveal={dashboardReady}
+          reveal={cardsShown}
           label="مبيعات الشهر"
           value={formatCurrency(stats?.monthSales ?? 0)}
           icon={TrendingUp}
@@ -141,7 +145,7 @@ export default function Dashboard() {
         />
         <KpiCard
           index={2}
-          reveal={dashboardReady}
+          reveal={cardsShown}
           label="فواتير اليوم"
           value={stats?.todayInvoices ?? 0}
           icon={ShoppingBag}
@@ -149,7 +153,7 @@ export default function Dashboard() {
         />
         <KpiCard
           index={3}
-          reveal={dashboardReady}
+          reveal={cardsShown}
           label="الشاحنات النشطة"
           value={stats?.activeTrucks ?? 0}
           icon={Truck}
@@ -161,7 +165,7 @@ export default function Dashboard() {
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
         <KpiCard
           index={4}
-          reveal={dashboardReady}
+          reveal={cardsShown}
           label="مبيعات نقدية اليوم"
           value={formatCurrency(stats?.todayCashSales ?? 0)}
           icon={Banknote}
@@ -169,7 +173,7 @@ export default function Dashboard() {
         />
         <KpiCard
           index={5}
-          reveal={dashboardReady}
+          reveal={cardsShown}
           label="مبيعات بالدين اليوم"
           value={formatCurrency(stats?.todayCreditSales ?? 0)}
           icon={CreditCard}
@@ -177,7 +181,7 @@ export default function Dashboard() {
         />
         <KpiCard
           index={6}
-          reveal={dashboardReady}
+          reveal={cardsShown}
           label="ديون العملاء"
           value={formatCurrency(stats?.totalClientsDebt ?? 0)}
           icon={Users}
@@ -185,7 +189,7 @@ export default function Dashboard() {
         />
         <KpiCard
           index={7}
-          reveal={dashboardReady}
+          reveal={cardsShown}
           label="ديون الموردين"
           value={formatCurrency(stats?.totalSuppliersDebt ?? 0)}
           icon={Building2}
@@ -197,7 +201,7 @@ export default function Dashboard() {
       <div className="grid gap-4 sm:grid-cols-2">
         <KpiCard
           index={8}
-          reveal={dashboardReady}
+          reveal={cardsShown}
           label="تحويلات معلقة"
           value={stats?.pendingCashTransfers ?? 0}
           icon={ArrowRightLeft}
@@ -206,7 +210,7 @@ export default function Dashboard() {
         />
         <KpiCard
           index={9}
-          reveal={dashboardReady}
+          reveal={cardsShown}
           label="منتجات بمخزون منخفض"
           value={stats?.lowStockProducts ?? 0}
           icon={AlertCircle}
@@ -220,7 +224,7 @@ export default function Dashboard() {
         <motion.div
           variants={fadeUp}
           initial="hidden"
-          animate={dashboardReady ? "show" : "hidden"}
+          animate={cardsShown ? "show" : "hidden"}
           transition={{ duration: 0.45, delay: 0.62, ease: [0.22, 1, 0.36, 1] }}
           className="lg:col-span-2"
         >
@@ -272,7 +276,7 @@ export default function Dashboard() {
         <motion.div
           variants={fadeUp}
           initial="hidden"
-          animate={dashboardReady ? "show" : "hidden"}
+          animate={cardsShown ? "show" : "hidden"}
           transition={{ duration: 0.45, delay: 0.7, ease: [0.22, 1, 0.36, 1] }}
         >
           <Card className="border-card-border h-full bg-gradient-to-br from-primary/10 via-card to-card">

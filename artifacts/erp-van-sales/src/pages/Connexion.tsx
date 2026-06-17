@@ -19,7 +19,7 @@ export default function Connexion() {
   const truckLogin = useTruckLogin();
   const queryClient = useQueryClient();
   const reduce = useReducedMotion();
-  const { startArrival, isArriving } = useArrival();
+  const { startArrival, isArriving, startClickCascade, clickPhase } = useArrival();
 
   const [tab, setTab] = useState<Tab>("user");
   const [username, setUsername] = useState("");
@@ -36,14 +36,16 @@ export default function Connexion() {
     if (interior) { const i = new Image(); i.src = interior; }
   }, []);
 
-  // On success: start the arrival cinematic and navigate. The dashboard mounts
-  // BEHIND the overlay; when the overlay fades out at ~2.18s, it reveals a
-  // fully-settled UI. AppTransition skips its own hero variant during arrival
-  // so there's only ONE cinematic playing.
-  const succeed = () => {
+  // On success: play the 800ms HQ REACTION CASCADE (Director's Plan Phase 2)
+  // BEFORE navigating. The user must feel the BUILDING reacted to their
+  // command — truck headlights flare, entrance lamp brightens, wall display
+  // pulses — before they are taken inside. Only AFTER the world has answered
+  // do we navigate and raise the arrival cinematic.
+  const succeed = async () => {
     queryClient.invalidateQueries();
-    startArrival();
-    setLocation("/");
+    await startClickCascade();             // 800ms: building responds in place
+    startArrival();                         // raise the overlay
+    setLocation("/");                       // navigate behind the overlay
   };
 
   const handleUserSubmit = (e: React.FormEvent) => {
@@ -93,7 +95,7 @@ export default function Connexion() {
         dir="rtl"
         variants={cardV}
         initial="hidden"
-        animate={isArriving ? "leaving" : "in"}
+        animate={(isArriving || clickPhase === "cascading") ? "leaving" : "in"}
         className="relative w-full max-w-[22.5rem] rounded-2xl border border-white/15 bg-[#08111e]/92 backdrop-blur-[28px] supports-[backdrop-filter]:bg-[#08111e]/82 p-7 shadow-[0_50px_140px_-30px_rgba(0,0,0,0.9),0_0_0_1px_rgba(255,255,255,0.04)_inset] overflow-hidden"
       >
         {/* premium glass highlights */}
@@ -154,11 +156,22 @@ export default function Connexion() {
                   {showPw ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
                 </button>
               </motion.div>
-              <motion.div variants={itemV} className="pt-2">
-                <Button type="submit" disabled={pending} className="group h-10 w-full gap-2 text-[0.9rem] font-semibold shadow-[0_8px_24px_-8px_rgba(14,154,167,0.6)]">
+              <motion.div variants={itemV} className="pt-2 relative">
+                <Button type="submit" disabled={pending} className="group h-10 w-full gap-2 text-[0.9rem] font-semibold shadow-[0_8px_24px_-8px_rgba(14,154,167,0.6)] relative overflow-visible">
                   {pending ? <Loader2 className="h-4 w-4 animate-spin" /> : <ArrowLeft className="h-4 w-4 transition-transform group-hover:-translate-x-0.5" />}
                   {pending ? "جارٍ تسجيل الدخول..." : "تسجيل الدخول"}
                 </Button>
+                {/* Charge ring — Phase 2 Director's Plan. Pulses outward from the
+                    button during the 200ms charge before the building reacts. */}
+                {clickPhase !== "idle" && (
+                  <motion.span
+                    aria-hidden
+                    className="pointer-events-none absolute inset-0 rounded-md"
+                    initial={{ opacity: 0.8, scale: 1, boxShadow: "0 0 0 0 rgba(14,154,167,0.7)" }}
+                    animate={{ opacity: 0, scale: 1.15, boxShadow: "0 0 0 14px rgba(14,154,167,0)" }}
+                    transition={{ duration: 0.6, ease: "easeOut" }}
+                  />
+                )}
               </motion.div>
             </form>
           ) : (

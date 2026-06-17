@@ -94,17 +94,19 @@ function App() {
       <ThemeProvider>
         <TooltipProvider>
           <WouterRouter base={import.meta.env.BASE_URL.replace(/\/$/, "")}>
-            {/* ALLAL cinematic experience — one persistent session behind the UI.
-                Each route is a scene; navigation is a cinematic camera move. */}
-            <ExperienceBackground />
-            {/* App content composited ABOVE the cinematic layer (UI is the hero). */}
-            <div style={{ position: "relative", zIndex: 1 }}>
-              <AuthProvider>
-                <ArrivalProvider>
+            <AuthProvider>
+              <ArrivalProvider>
+                {/* ALLAL cinematic experience — one persistent session behind the UI.
+                    Each route is a scene; navigation is a cinematic camera move.
+                    Mounted INSIDE ArrivalProvider so its reactive overlays can
+                    read the global click cascade phase from useArrival(). */}
+                <ExperienceBackground />
+                {/* App content composited ABOVE the cinematic layer (UI is the hero). */}
+                <div style={{ position: "relative", zIndex: 1 }}>
                   <Router />
-                </ArrivalProvider>
-              </AuthProvider>
-            </div>
+                </div>
+              </ArrivalProvider>
+            </AuthProvider>
           </WouterRouter>
           <Toaster />
           <SonnerToaster />

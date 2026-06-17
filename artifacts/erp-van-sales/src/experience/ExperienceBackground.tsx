@@ -16,6 +16,9 @@ import { Volume2, VolumeX } from "lucide-react";
 import { routeToScene, type SceneDef } from "./scenes";
 import { ambient } from "./ambient-audio";
 import { ease as cinEase, dur as cinDur } from "./cinematic";
+import { useArrival } from "./ArrivalProvider";
+import { HQReactiveLayer, type HQPhase } from "./HQReactiveLayer";
+import { OCReactiveLayer } from "./OCReactiveLayer";
 
 const COVER = { position: "absolute", inset: 0, width: "100%", height: "100%", objectFit: "cover" } as const;
 
@@ -61,10 +64,20 @@ export function ExperienceBackground() {
   const reduced = useReducedMotion();
   const prevRef = useRef(scene);
   const [audioOn, setAudioOn] = useState(false);
+  const { clickPhase } = useArrival();
 
   const dir = Math.sign(scene.order - prevRef.current.order) || 1;
   const hero = prevRef.current.id === "login" && scene.id === "dashboard";
   const meta: Meta = { dir, hero, reduced: !!reduced };
+
+  // Map global click cascade phase → HQReactiveLayer phase.
+  // 'idle' → "standby" (idle micro-life)
+  // 'charging' → "charge" (notice level)
+  // 'cascading' → "cascade" (full reaction choreography)
+  const hqPhase: HQPhase =
+    clickPhase === "cascading" ? "cascade"
+    : clickPhase === "charging" ? "charge"
+    : "standby";
 
   useEffect(() => {
     ambient.setScene(scene.id);
@@ -93,6 +106,11 @@ export function ExperienceBackground() {
             style={{ position: "absolute", inset: 0, willChange: "transform, opacity, filter" }}
           >
             <SceneLayer scene={scene} />
+            {/* ── Reactive overlays — make the photograph respond to the user.
+                  Login HQ: idle micro-life + click cascade.
+                  Dashboard OC: resting micro-life (sparse, infrequent events). */}
+            {isLogin && <HQReactiveLayer phase={hqPhase} />}
+            {isDashboard && <OCReactiveLayer phase="resting" />}
           </motion.div>
         </AnimatePresence>
 

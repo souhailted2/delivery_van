@@ -26,6 +26,7 @@ import { useTheme } from "@/contexts/ThemeContext";
 import { useLogout } from "@workspace/api-client-react";
 import { ElectronSyncButton } from "@/components/ElectronSync";
 import { NAV, isItemActive, isChildActive, type NavItem } from "./nav";
+import { useArrival } from "@/experience/ArrivalProvider";
 
 function Brand() {
   return (
@@ -98,11 +99,16 @@ function ProfileMenu() {
   const { theme, toggleTheme } = useTheme();
   const logout = useLogout();
   const [, setLocation] = useLocation();
+  const { startLogout } = useArrival();
   const roleLabel = user?.role === "admin" ? "مدير" : "بائع";
   const initial = user?.fullName?.charAt(0) || "م";
 
+  // Phase 8 — play the reverse cinematic, then fire the actual logout +
+  // navigation at the moment the user "arrives outside" (commit point).
   const handleLogout = () =>
-    logout.mutate(undefined, { onSuccess: () => setLocation("/connexion") });
+    startLogout(() => {
+      logout.mutate(undefined, { onSuccess: () => setLocation("/connexion") });
+    });
 
   return (
     <DropdownMenu>
