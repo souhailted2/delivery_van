@@ -1,10 +1,9 @@
 name: Build Windows Installer — Electron
 
 on:
-  push:
-    branches: [main]
-    tags:
-      - 'v*.*.*'
+  # Desktop installer builds run ONLY on manual dispatch — decoupled from the
+  # cloud deploy so a `main` push or release tag does NOT auto-build the desktop
+  # app. Trigger intentionally via the Actions "Run workflow" button or `gh`.
   workflow_dispatch:
 
 permissions:

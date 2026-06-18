@@ -1,11 +1,8 @@
 name: Build Android APK
 
 on:
-  push:
-    branches:
-      - main
-    tags:
-      - "v*"
+  # APK builds run ONLY on manual dispatch — decoupled from the cloud deploy (see
+  # build-exe.yml). Trigger intentionally when ready to release the mobile app.
   workflow_dispatch:
 
 jobs:
