@@ -18,7 +18,11 @@ jobs:
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
         with:
-          version: 10
+          # pnpm 9 — must match the lockfileVersion 9.0 in pnpm-lock.yaml (and the
+          # Windows installer workflow, which also uses pnpm 9). pnpm 10 computes a
+          # stricter `overrides` hash and rejects the v9 lockfile under
+          # --frozen-lockfile (ERR_PNPM_LOCKFILE_CONFIG_MISMATCH).
+          version: 9
 
       - name: Setup Node.js 20
         uses: actions/setup-node@v4
