@@ -1,0 +1,3 @@
+node_modules/
+__bettershim.cjs
+shimclass.cjs
