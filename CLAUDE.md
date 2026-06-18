@@ -42,12 +42,20 @@ separate codebase — assume nothing is shared unless verified.
   `stock_transfers`, `truck_commission_payments`, `truck_dispatches` are all
   empty. Pre-reset backup: `/root/erp-backup-pre-factory-reset-20260615.dump`
   on the Hetzner host.
-- This was a **hard delete**, which violates Sync Rule #2 below. Any
-  previously-synced Desktop/Mobile device that hasn't had its local SQLite
-  DB wiped + sync cursors reset can **resurrect the deleted rows** on its
-  next sync push. Do this cleanup (PROJECT_CONTEXT.md §22) before relying on
-  production row counts being stable, and re-check counts if a stale device
-  may have synced.
+- This was a **hard delete**, which violates Sync Rule #2 below. Resurrection
+  risk is now **gated** for epoch-aware clients: migration `0001_sync_state_epoch`
+  was applied to production **2026-06-18**, so `sync_state.epoch = 2` and the
+  cloud rejects any stale-epoch push with `409 {resetRequired, epoch:2}` (the
+  client then wipes + re-pulls). **v1.2.0 Desktop/Mobile clients are protected.**
+  HOWEVER, **un-updated old clients that send no epoch are NOT gated** (lenient
+  for gradual rollout) and can still resurrect rows — keep doing the
+  per-device local-DB wipe (PROJECT_CONTEXT.md §22) for any device that synced
+  before 2026-06-15 until it is on v1.2.0. (Current prod row counts as of
+  2026-06-18: products 65, clients 1, invoices 1 — not the post-reset 57.)
+- **Releases & branch state (2026-06-18)**: `main` is authoritative and carries
+  the Command-Center redesign + Security Phase 1 + the four certified Sync P0
+  fixes. Tag **`v1.2.0`** is the final client release (Desktop installer + APK
+  published on its GitHub Release). `v1.1.0` = the earlier cloud-only baseline.
 - **Truck driver logins are currently broken** (`trucks` table is empty) and
   only `admin` (no `vendeur1` etc.) can log in — expected until trucks/users
   are recreated.
@@ -107,8 +115,9 @@ session/CORS handling. Do not regress these:
   single-user). The shared frontend also ships an `ErrorBoundary` + global 401
   redirect (`App.tsx`).
 - **CI revert hazard**: `deploy-hetzner.yml` deploys `main`. Keep these changes
-  on `main`, or a deploy from an older `main` will re-expose the API. (Closed
-  once the redesign branch is merged to `main`.)
+  on `main`, or a deploy from an older `main` will re-expose the API. ✅ **Closed
+  2026-06-18** — the redesign + Security Phase 1 + Sync P0 fixes are all merged
+  to `main` (release `v1.2.0`), so a CI deploy now ships the hardened code.
 
 ## Synchronization Rules (do not violate)
 
@@ -140,6 +149,16 @@ session/CORS handling. Do not regress these:
    `REMOTE_BASE = "https://deleveri.alllal.com/api"` (production). Never point
    this at a different URL in a commit; if testing against staging, edit
    locally only and revert before commit.
+8. **Sync epoch (P0-2 resurrection gate)** — `sync_state.epoch` (singleton
+   table, prod value `2`, owned by DB role `erpadmin` so `getSyncEpoch()` can
+   read it; if absent it returns 0 = gate OFF). Cloud `pull` returns `epoch`;
+   `push` carrying a mismatched epoch is rejected with
+   `409 {resetRequired, epoch}` **before** any upsert. Clients (`sync-engine.js`,
+   mobile `lib/sync.ts`) store the epoch, `wipeAndAdoptEpoch()` on mismatch
+   (pull) or on 409 (push). To perform a FUTURE destructive reset, **bump the
+   epoch**: `UPDATE sync_state SET epoch = epoch + 1 WHERE id = 1;` — every
+   epoch-aware device then wipes + re-pulls. Migration files:
+   `artifacts/api-server/migrations/0001_sync_state_epoch.{up,down}.sql`.
 
 ## Files Requiring Explicit Approval Before Modifying
 
@@ -206,19 +225,29 @@ session/CORS handling. Do not regress these:
   via `.github/workflows/deploy-hetzner.yml` (builds, scp, pm2 reload, health
   check on `/api/healthz`). Does **not** run schema migrations — apply
   `drizzle-kit push`/SQL to production Postgres separately when schema
-  changes.
-- Desktop: `.github/workflows/build-exe.yml` builds the Windows installer on
-  push to `main`/`v*.*.*` tags, publishes a GitHub Release
-  (`build-<run_number>`). **Editing `desktop/server/*` source has zero effect
-  on installed apps** until a new installer is built AND the user
+  changes. Hand-apply migrations live as the DB owner; see
+  `artifacts/api-server/migrations/README.md` (migration `0001` already applied
+  2026-06-18; pre-migration dump at
+  `/root/erp-backups/erpvansales_pre_migration0001_20260618_053029.dump`).
+- Desktop + APK builds are **manual-dispatch ONLY** (changed 2026-06-18): both
+  `build-exe.yml` and `build-android.yml` trigger on `workflow_dispatch`
+  only — a `main` push or tag does NOT auto-build clients (so cloud deploys
+  don't drag along client builds). Trigger intentionally per release.
+  `build-android.yml` uses **pnpm 9** (must match the `lockfileVersion 9.0`
+  lockfile; pnpm 10 fails `--frozen-lockfile` with `LOCKFILE_CONFIG_MISMATCH`).
+- Desktop: `build-exe.yml` publishes a GitHub Release (tag name for `v*` tags,
+  else `build-<run_number>`). **Editing `desktop/server/*` source has zero
+  effect on installed apps** until a new installer is built AND the user
   downloads/reinstalls it (bundled in `app.asar`).
-- Mobile: `.github/workflows/build-android.yml` builds the APK on push to
-  `main`/`v*` tags, publishes a GitHub Release. Only rebuild/notify users for
-  this if the change actually touches
+- Mobile: `build-android.yml` publishes the APK to a GitHub Release. Only
+  rebuild/notify users if the change actually touches
   `artifacts/erp-van-sales-mobile` — most fixes don't.
-- `gh` CLI may be unavailable in sandboxes — use `curl` against
-  `https://api.github.com/repos/souhailted2/delivery_van/...` (public repo,
-  no auth needed) for CI run status.
+- **`gh` CLI is NOT installed** on the dev machine. For CI run status use
+  `curl` against `https://api.github.com/repos/souhailted2/delivery_van/...`
+  (public repo, no auth for reads). To **dispatch** a workflow or read run
+  logs, get a token from `git credential fill` (`printf 'protocol=https\nhost=github.com\n\n' | git credential fill`
+  → `gho_…`, scopes gist/repo/workflow) and `POST …/actions/workflows/<file>/dispatches`
+  with `{"ref":"<branch-or-tag>"}` (HTTP 204 = queued).
 - After any change, identify which of the three artifacts (cloud/desktop/
   mobile) actually need a rebuild and tell the user explicitly — don't assume
   all three.

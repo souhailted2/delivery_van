@@ -1,11 +1,14 @@
 # PROJECT_CONTEXT.md — ERP Van Sales (Delivery Van)
 
-> Generated 2026-06-15, last updated 2026-06-15 (same day: production factory
-> reset executed, warehouse→truck transfer removal started but NOT committed).
+> Generated 2026-06-15, last updated **2026-06-18** (v1.2.0 final client
+> release: Sync P0 fixes merged to `main` + cloud-deployed, Desktop installer +
+> Android APK published, migration `0001` applied → epoch gate ACTIVE, client
+> builds decoupled to manual dispatch). **§26 is the authoritative latest
+> state** — read it first; earlier sections (esp. §20–§24) predate it and are
+> partially superseded where they conflict.
 > This document is meant to let a new Claude Code session understand the
 > project without re-analyzing the whole repository. It summarizes
-> architecture, workflows, sync internals, deployment, and current status as
-> of this date.
+> architecture, workflows, sync internals, deployment, and current status.
 
 ---
 
@@ -537,7 +540,9 @@ changes must be applied to production Postgres separately/manually.
 
 ### Desktop Windows Installer (`.github/workflows/build-exe.yml`)
 
-Triggers on push to `main` or `v*.*.*` tags:
+> **Trigger changed 2026-06-18: `workflow_dispatch` ONLY** (no longer on push
+> to `main`/tags) — a cloud deploy no longer drags along a desktop build.
+> Dispatch intentionally per release (see §26).
 1. Checkout, Node 20, pnpm 9. Patches `pnpm-workspace.yaml` to strip
    Windows-incompatible platform overrides (esbuild/lightningcss/tailwind
    oxide/rollup win32 variants).
@@ -556,8 +561,11 @@ Triggers on push to `main` or `v*.*.*` tags:
 
 ### Android APK (`.github/workflows/build-android.yml`)
 
-Triggers on push to `main` or `v*` tags:
-1. Checkout, pnpm 10, Node 20, `pnpm install --frozen-lockfile`.
+> **Trigger changed 2026-06-18: `workflow_dispatch` ONLY** (no longer on push
+> to `main`/tags). **Now uses pnpm 9** (was pnpm 10 — which failed
+> `--frozen-lockfile` with `ERR_PNPM_LOCKFILE_CONFIG_MISMATCH` against the
+> `lockfileVersion 9.0` lockfile; pnpm 10 hashes `overrides` differently).
+1. Checkout, **pnpm 9**, Node 20, `pnpm install --frozen-lockfile`.
 2. Sets `expo.android.versionCode` = `github.run_number` in `app.json`.
 3. Java 17 + Android SDK (platform 35, build-tools 35.0.0, NDK
    27.1.12297006).
@@ -737,13 +745,21 @@ out all active sessions).
 **Backup**: `pg_dump` taken before the reset →
 `/root/erp-backup-pre-factory-reset-20260615.dump` (79K) on the Hetzner host.
 
+> **UPDATE 2026-06-18 — resurrection now gated (see §26).** Migration `0001`
+> set `sync_state.epoch = 2`; the cloud rejects stale-epoch pushes with
+> `409 {resetRequired}`. **v1.2.0 (epoch-aware) clients are protected** and
+> self-wipe on mismatch. The per-device manual wipe below is now only needed
+> for **un-updated pre-v1.2.0 clients** (they send no epoch and stay lenient/
+> ungated until upgraded).
+
 **Important consequences / outstanding follow-ups**:
 - This was a **hard delete**, which violates Sync Rule #2
   (never hard-delete a syncable row — always soft-delete). A coordinated
-  sync-cleanup is required before any previously-synced Desktop or Mobile
-  device reconnects, or it can **push its stale local cache back and
+  sync-cleanup is required before any previously-synced **un-updated** Desktop
+  or Mobile device reconnects, or it can **push its stale local cache back and
   resurrect the deleted rows** (cloud `onConflictDoUpdate` falls back to
-  plain `INSERT` when the pushed `sync_id` no longer exists).
+  plain `INSERT` when the pushed `sync_id` no longer exists). Epoch-aware
+  v1.2.0 clients are gated and no longer at risk.
 - **Required cleanup per device** (not yet performed):
   - Desktop: fully close the Electron app, delete
     `%APPDATA%\ERP Van Sales\erp-van-sales.db` (+ `-wal`/`-shm` if present),
@@ -892,3 +908,79 @@ No automated backup of `erpvansales` (the 6-hourly `/root/auto-backup.sh` cron
 dumps the unrelated `tpl_factory` DB); zero `updated_at`/FK indexes on the prod
 DB (Phase 3); no HSTS header; deferred P1s — SHA256 password hashing, no login
 rate-limiting, non-atomic financial writes.
+
+---
+
+## 26. Sync P0 Fixes + v1.2.0 Final Client Release (2026-06-18) — AUTHORITATIVE LATEST
+
+This section supersedes §20–§24 where they conflict. As of 2026-06-18 the
+project shipped its **final client release `v1.2.0`** (Desktop installer +
+Android APK), built on the redesign + Security Phase 1 baseline plus four
+certified **Sync P0 data-integrity fixes**, with the cloud sync-v2 deployed and
+the epoch migration applied to production.
+
+### 26.1 Branch / release state
+- `main` is authoritative: redesign + Security Phase 1 + the four Sync P0 fixes,
+  merged via `08066fe`, + a pnpm-9 CI fix (`2944a35`).
+- Tag **`v1.2.0`** (`72dbce4`) = final client release. Its **public GitHub
+  Release** carries both artifacts: `ERP.Van.Sales.Setup.1.0.0.exe` (83.3 MB,
+  Windows) and `erp-van-sales.apk` (95.8 MB, Android). `v1.1.0` = the earlier
+  cloud-only baseline (no clients).
+- The four sync fixes were developed on `feature/sync-p0-fixes` with proof
+  harnesses under `_synctest/` (node:sqlite desktop reproduction + a real
+  PGlite/Drizzle integration test; 11/11 / 6-scenario PASS).
+- **NOTE: internal app versions still read `1.0.0`** (`desktop/package.json`,
+  mobile `app.json`) vs the `v1.2.0` git tag — cosmetic; bumping needs a rebuild.
+
+### 26.2 The four Sync P0 fixes
+| ID | Bug | Fix (files) |
+|---|---|---|
+| **P0-1** | Push cursor advanced past **rejected** rows → silent data loss. | Desktop `sync-engine.js`: cursor stops just before the earliest rejected row; mobile `lib/sync.ts`: clears `_pending` only for accepted rows. |
+| **P0-2** | Deletion **resurrection** after the 2026-06-15 hard reset. | **Sync epoch gate**: cloud `sync-v2.ts` `getSyncEpoch()` + pull `epoch` + push `409 {resetRequired}`; clients `wipeAndAdoptEpoch()` on mismatch/409. Activated by migration `0001` (§26.4). |
+| **P0-3** | An empty/garbled authoritative pull **pruned** valid local rows. | Never prune on an empty pull set (desktop + mobile). |
+| **P0-4** | **Lost update**: a desktop/admin push clobbered server-authoritative balances. | Cloud `sync-v2.ts` `RECONCILED_COLUMNS` protects `trucks.cashBalance` / `clients.balance` / `suppliers.balance` / `truck_stock.quantity` from generic-push overwrite; admin-path effect reconciliation re-applies genuinely-new invoice/return effects (stock GREATEST-deduct, cash +=, balance -=). |
+
+`sync-v2.ts` and `sync-engine.js` are sync-core — re-run the `_synctest`
+harnesses after any change (CLAUDE.md "Files Requiring Explicit Approval").
+
+### 26.3 Cloud deploy
+`main` push auto-deployed the new `sync-v2.ts` to Hetzner (backward-compatible:
+`getSyncEpoch()` returns 0 when `sync_state` is absent, so the gate is inert
+until the migration). Verified post-deploy: `healthz` 200, unauth `/api/*` 401,
+`/api/sync/v2/pull` 401 (loads cleanly).
+
+### 26.4 Migration 0001 applied → epoch gate ACTIVE
+- Files: `artifacts/api-server/migrations/0001_sync_state_epoch.{up,down}.sql`
+  (+ `README.md`). Creates singleton `sync_state(id=1, epoch)`, seeds `epoch=2`
+  (idempotent `ON CONFLICT … GREATEST`).
+- **Applied to production `erpvansales` 2026-06-18** as superuser, then
+  `ALTER TABLE sync_state OWNER TO erpadmin` — **the API DB role must own/read
+  it**, else `getSyncEpoch()`'s try/catch silently returns 0 and the gate stays
+  off. Pre-migration dump:
+  `/root/erp-backups/erpvansales_pre_migration0001_20260618_053029.dump`.
+- **Verified live**: `sync_state=(1,2)`; pull → `epoch:2`; push `epoch:1`/`99`
+  → `409 {resetRequired,epoch:2}`; push `epoch:2` → `200`; push **no epoch**
+  → `200` (old clients lenient); no regression (login + products/clients/
+  invoices/trucks/returns/`reports/dashboard`/`stock/*` all 200; full pull = 97
+  rows intact).
+- **Rollback**: `DROP TABLE sync_state` (`0001_…down.sql`) — gate falls back to
+  inert, no restart, no data loss. **Future destructive reset**: `UPDATE
+  sync_state SET epoch = epoch + 1 WHERE id = 1;`.
+
+### 26.5 CI changes
+- `build-exe.yml` + `build-android.yml` are now **`workflow_dispatch` ONLY**
+  (decoupled from `main` push / tags) so cloud deploys don't auto-build clients.
+- `build-android.yml` pinned to **pnpm 9** (matches `lockfileVersion 9.0`;
+  pnpm 10 fails `--frozen-lockfile`).
+- `gh` CLI is **not installed**; dispatch via the GitHub REST API using the
+  `gho_` token from `git credential fill` (`POST …/actions/workflows/<file>/dispatches`
+  `{"ref":"v1.2.0"}`).
+
+### 26.6 Still open after v1.2.0
+- **Un-updated (pre-v1.2.0) clients are ungated** (send no epoch) — keep the
+  per-device local-DB wipe (§22) until every device runs v1.2.0; the gate can
+  later be tightened to also reject no-epoch pushes once `serverEpoch > 0`.
+- Cosmetic version bump to `1.2.0` (needs a rebuild); no live-device GUI
+  acceptance test was performed (build + runtime logic verified, not a physical
+  install); the §18 deferred items (automated `erpvansales` backup, prod indexes,
+  HSTS, password-hash hardening, rate-limiting, atomic financial writes) remain.
