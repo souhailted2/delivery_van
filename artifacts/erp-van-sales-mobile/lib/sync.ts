@@ -29,6 +29,19 @@ async function getDeviceId(db: SQLiteDatabase): Promise<string> {
   return id;
 }
 
+// P0-2: wipe every syncable table, reset cursors, and adopt a new sync epoch.
+// Triggered when the cloud's sync epoch changes (e.g. after a factory reset) so a
+// stale device starts clean and re-pulls instead of re-pushing rows the cloud
+// deleted (which would resurrect them). Pending local changes are intentionally
+// discarded — the cloud was reset, so they are no longer valid.
+async function wipeAndAdoptEpoch(db: SQLiteDatabase, newEpoch: unknown): Promise<void> {
+  for (const t of PULL_TABLES) {
+    try { await db.runAsync(`DELETE FROM ${t}`); } catch {}
+  }
+  await setSyncMeta(db, "last_pull_at", "1970-01-01T00:00:00.000Z");
+  await setSyncMeta(db, "sync_epoch", String(newEpoch));
+}
+
 export async function pullSync(
   cookie: string,
   options?: {
@@ -57,6 +70,18 @@ export async function pullSync(
   const authoritativeTables: string[] = Array.isArray(payload.authoritativeTables)
     ? payload.authoritativeTables
     : [];
+
+  // P0-2: if the cloud's sync epoch changed (destructive reset), wipe local and
+  // re-pull clean BEFORE applying anything — stale rows can never be re-pushed.
+  const serverEpoch = payload.epoch;
+  if (serverEpoch != null) {
+    const storedEpoch = await getSyncMeta(db, "sync_epoch");
+    if (storedEpoch != null && String(serverEpoch) !== String(storedEpoch)) {
+      await wipeAndAdoptEpoch(db, serverEpoch);
+      return; // next pull re-fills from a clean state under the new epoch
+    }
+    if (storedEpoch == null) await setSyncMeta(db, "sync_epoch", String(serverEpoch));
+  }
 
   for (const [tableName, records] of Object.entries(tables)) {
     if (!PULL_TABLES.includes(tableName) || !Array.isArray(records)) continue;
@@ -94,18 +119,13 @@ export async function pullSync(
               receivedIds,
             );
           }
-        } else {
-          // Server returned an empty authoritative set → prune all committed local rows
-          if (hasSoftDelete) {
-            await db.runAsync(
-              `UPDATE ${tableName} SET is_deleted = 1 WHERE is_deleted = 0 AND _pending = 0`,
-            );
-          } else {
-            await db.runAsync(
-              `DELETE FROM ${tableName} WHERE _pending = 0`,
-            );
-          }
         }
+        // NOTE: an EMPTY authoritative set is intentionally NOT pruned. An empty
+        // set is ambiguous — it can mean the cloud genuinely has zero rows, OR
+        // that the server's per-table query failed and was swallowed to [].
+        // Pruning on empty previously wiped the device's entire customer / truck
+        // -stock list on a single transient error (reproduced P0-3). Leaving
+        // stale rows is harmless and self-corrects on the next non-empty pull.
       } catch {
         // Prune failure is non-fatal — stale rows will be pruned on the next pull
       }
@@ -174,18 +194,41 @@ export async function pushSync(cookie: string): Promise<void> {
   const res = await fetch(`${pushUrl}/api/sync/v2/push`, {
     method: "POST",
     headers: { "Content-Type": "application/json", Cookie: `connect.sid=${cookie}` },
-    body: JSON.stringify({ deviceId, tables }),
+    body: JSON.stringify({ deviceId, tables, epoch: await getSyncMeta(db, "sync_epoch") }),
   });
+  // P0-2: the cloud rejects a stale-epoch push (it would resurrect deleted rows).
+  // Wipe + adopt the new epoch; the next pull re-fills from a clean state.
+  if (res.status === 409) {
+    const body = (await res.json().catch(() => ({}))) as { resetRequired?: boolean; epoch?: unknown };
+    if (body?.resetRequired) { await wipeAndAdoptEpoch(db, body.epoch); return; }
+  }
   if (!res.ok) throw new Error(`Push ${res.status}`);
 
-  // Clear _pending only for the rows that were actually pushed
+  // Read per-row results: a row the cloud REJECTED (e.g. an unresolved FK whose
+  // parent will sync later) must keep _pending = 1 so it is RETRIED, not
+  // silently marked synced and dropped (reproduced P0-1). The server returns
+  // { results: { [table]: { errors: [{ sync_id }] } } }.
+  const body = await res.json().catch(() => ({} as Record<string, unknown>));
+  const results = ((body as Record<string, unknown>)?.results || {}) as Record<
+    string,
+    { errors?: Array<{ sync_id?: string }> }
+  >;
+
+  // Clear _pending only for rows that were actually pushed AND not rejected.
   for (const t of PUSH_TABLES) {
+    const rejected = (results[t]?.errors || [])
+      .map((e) => e.sync_id)
+      .filter((id): id is string => !!id);
+    const keepRejected = rejected.length
+      ? ` AND sync_id NOT IN (${rejected.map(() => "?").join(", ")})`
+      : "";
     if (t === "products") {
       await db.runAsync(
-        "UPDATE products SET _pending = 0 WHERE _pending = 1 AND (local_image_uri IS NULL OR local_image_uri = '' OR (image_url IS NOT NULL AND image_url != ''))"
+        `UPDATE products SET _pending = 0 WHERE _pending = 1 AND (local_image_uri IS NULL OR local_image_uri = '' OR (image_url IS NOT NULL AND image_url != ''))${keepRejected}`,
+        rejected,
       );
     } else {
-      await db.runAsync(`UPDATE ${t} SET _pending = 0 WHERE _pending = 1`);
+      await db.runAsync(`UPDATE ${t} SET _pending = 0 WHERE _pending = 1${keepRejected}`, rejected);
     }
   }
 }

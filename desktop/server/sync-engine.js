@@ -377,6 +377,18 @@ async function pull() {
     throw new Error(`Pull failed: HTTP ${r.status} — ${JSON.stringify(r.data).slice(0,100)}`);
   }
 
+  // P0-2: if the cloud's sync epoch changed (destructive reset), wipe local and
+  // re-pull clean BEFORE applying anything — stale rows can never be re-pushed.
+  const serverEpoch = r.data?.epoch;
+  if (serverEpoch != null) {
+    const storedEpoch = getSyncMeta("sync_epoch");
+    if (storedEpoch != null && String(serverEpoch) !== String(storedEpoch)) {
+      wipeAndAdoptEpoch(serverEpoch);
+      return; // next cycle pulls a clean full set under the new epoch
+    }
+    if (storedEpoch == null) setSyncMeta("sync_epoch", String(serverEpoch));
+  }
+
   const tables = r.data?.tables || {};
   const db = getDb();
 
@@ -529,7 +541,13 @@ async function push() {
     tables.products = updated;
   }
 
-  const r = await request("POST", `${REMOTE_BASE}/sync/v2/push`, { deviceId, tables }, sessionCookie);
+  const r = await request("POST", `${REMOTE_BASE}/sync/v2/push`, { deviceId, tables, epoch: getSyncMeta("sync_epoch") }, sessionCookie);
+  // P0-2: the cloud rejects a stale-epoch push (it would resurrect deleted rows).
+  // Wipe + adopt the new epoch; the next pull re-fills from a clean state.
+  if (r.status === 409 && r.data?.resetRequired) {
+    wipeAndAdoptEpoch(r.data.epoch);
+    return;
+  }
   if (r.status !== 200) {
     throw new Error(`Push failed: HTTP ${r.status}`);
   }
@@ -542,15 +560,40 @@ async function push() {
   const results = r.data?.results || {};
   let firstError = null;
   const tableErrors = {};
+  const rejectedSyncIds = new Set();
   for (const [table, info] of Object.entries(results)) {
     if (info?.errors?.length) {
       tableErrors[table] = info.errors;
       if (!firstError) firstError = `${table}: ${info.errors[0].error}`;
+      for (const e of info.errors) if (e && e.sync_id) rejectedSyncIds.add(e.sync_id);
     }
   }
   emit({ lastPushTables: results, lastPushFirstError: firstError, lastPushErrors: tableErrors });
 
-  setSyncMeta("last_push_at", new Date().toISOString());
+  // Advance the push cursor WITHOUT skipping past rejected rows. A row the cloud
+  // rejected per-row (e.g. an unresolved FK whose parent syncs later) must be
+  // RETRIED, not silently dropped. If every row was accepted, advance to now();
+  // otherwise move the cursor to just before the earliest rejected row so it
+  // (and anything after) is re-selected next cycle, while earlier accepted rows
+  // are not needlessly re-pushed (the cloud upsert is idempotent regardless).
+  if (rejectedSyncIds.size === 0) {
+    setSyncMeta("last_push_at", new Date().toISOString());
+  } else {
+    let earliest = null;
+    for (const rows of Object.values(tables)) {
+      for (const row of rows) {
+        if (rejectedSyncIds.has(row.sync_id) && row.updated_at &&
+            (earliest === null || row.updated_at < earliest)) {
+          earliest = row.updated_at;
+        }
+      }
+    }
+    if (earliest) {
+      setSyncMeta("last_push_at", new Date(new Date(earliest).getTime() - 1).toISOString());
+    }
+    // If the rejected row's timestamp couldn't be located, leave the cursor
+    // unchanged (== since) so nothing is skipped — a full, safe retry next cycle.
+  }
 }
 
 // ─── Main sync cycle ──────────────────────────────────────────────────────────
@@ -609,6 +652,28 @@ function stop() {
   if (syncTimer)   { clearInterval(syncTimer);   syncTimer   = null; }
   if (onlineTimer) { clearInterval(onlineTimer); onlineTimer = null; }
   sessionCookie = null;
+}
+
+/** P0-2: wipe every syncable table, reset cursors, and adopt a new sync epoch.
+ *  Triggered when the cloud's sync epoch changes (e.g. after a factory reset),
+ *  so a stale device starts clean and re-pulls instead of re-pushing rows the
+ *  cloud deleted (which would resurrect them). */
+function wipeAndAdoptEpoch(newEpoch) {
+  const db = getDb();
+  db.pragma("foreign_keys = OFF");
+  try {
+    db.exec("BEGIN");
+    try {
+      for (const tbl of PULL_TABLES) {
+        try { db.prepare(`DELETE FROM ${tbl}`).run(); } catch {}
+      }
+      db.exec("COMMIT");
+    } catch (e) { try { db.exec("ROLLBACK"); } catch {} throw e; }
+  } finally { db.pragma("foreign_keys = ON"); }
+  setSyncMeta("last_pull_at", "1970-01-01T00:00:00.000Z");
+  setSyncMeta("last_push_at", "1970-01-01T00:00:00.000Z");
+  setSyncMeta("sync_epoch", String(newEpoch));
+  emit({ epochReset: true, epoch: String(newEpoch) });
 }
 
 /** Reset sync cursors — forces a full re-pull on the next sync cycle */

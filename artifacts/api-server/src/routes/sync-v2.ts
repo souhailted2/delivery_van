@@ -14,7 +14,7 @@ import {
   cashTransfersTable, truckStockTable, stockTransfersTable, stockTransferItemsTable,
   truckCommissionPaymentsTable,
 } from "@workspace/db";
-import { and, eq, gt, or, isNull, sql } from "drizzle-orm";
+import { and, eq, gt, or, isNull, sql, getTableName, inArray } from "drizzle-orm";
 import { randomUUID } from "node:crypto";
 
 const router = Router();
@@ -81,6 +81,20 @@ router.get("/sync/status", requireAuth, async (_req, res) => {
   res.json({ ok: true, version: "v2", timestamp: new Date().toISOString() });
 });
 
+// P0-2: server sync epoch (bumped on destructive resets). Read from sync_state;
+// returns 0 if the table isn't migrated yet, which leaves the epoch gate INACTIVE
+// (safe default — zero behaviour change until the migration is applied).
+async function getSyncEpoch(): Promise<number> {
+  try {
+    const r: any = await db.execute(sql`SELECT epoch FROM sync_state WHERE id = 1 LIMIT 1`);
+    const rows = r?.rows ?? r;
+    const e = rows?.[0]?.epoch;
+    return e == null ? 0 : Number(e);
+  } catch {
+    return 0;
+  }
+}
+
 // ─── PULL ─────────────────────────────────────────────────────────────────────
 
 router.get("/sync/v2/pull", requireAuth, async (req, res) => {
@@ -135,15 +149,30 @@ router.get("/sync/v2/pull", requireAuth, async (req, res) => {
     tables: result,
     cursor: new Date().toISOString(),
     authoritativeTables,
+    epoch: await getSyncEpoch(),
   });
 });
 
 // ─── PUSH ─────────────────────────────────────────────────────────────────────
 
 router.post("/sync/v2/push", requireAuth, async (req, res): Promise<void> => {
-  const { tables } = req.body as { deviceId?: string; tables?: Record<string, any[]> };
+  const { tables } = req.body as { deviceId?: string; tables?: Record<string, any[]>; epoch?: number };
   if (!tables || typeof tables !== "object") {
     res.status(400).json({ error: "tables object required" }); return;
+  }
+
+  // P0-2 (resurrection) — SYNC-EPOCH GATE. The server bumps `sync_state.epoch`
+  // on any destructive reset (e.g. the 2026-06-15 factory reset). A device that
+  // last synced under an OLDER epoch still holds rows the cloud hard-deleted; if
+  // it pushed, the upsert's ON CONFLICT would miss (sync_id gone) and INSERT,
+  // RESURRECTING them. We reject such a push and tell the client to wipe + re-pull
+  // before it may push again. Clients that don't yet send an epoch are not gated
+  // (safe rollout); once they send it AND it mismatches, the gate engages.
+  const clientEpoch = (req.body as any)?.epoch;
+  const serverEpoch = await getSyncEpoch();
+  if (serverEpoch > 0 && clientEpoch != null && Number(clientEpoch) !== serverEpoch) {
+    res.status(409).json({ resetRequired: true, epoch: serverEpoch });
+    return;
   }
 
   // Upgraded installs may carry cash_transfers rows whose `direction` column was
@@ -192,6 +221,21 @@ router.post("/sync/v2/push", requireAuth, async (req, res): Promise<void> => {
     fkCache.set(key, id);
     return id;
   };
+
+  // P0-4: snapshot which pushed invoices/returns ALREADY exist, so after the
+  // generic upsert we reconcile ONLY the genuinely-new ones, exactly once.
+  const pushedInvoiceSyncIds = (tables.invoices ?? []).map((r: any) => r?.sync_id).filter(Boolean) as string[];
+  const pushedReturnSyncIds = (tables.returns ?? []).map((r: any) => r?.sync_id).filter(Boolean) as string[];
+  const preExistingInvoiceSyncIds = new Set<string>(
+    pushedInvoiceSyncIds.length
+      ? (await db.select({ s: invoicesTable.syncId }).from(invoicesTable).where(inArray(invoicesTable.syncId, pushedInvoiceSyncIds))).map((r: any) => r.s)
+      : [],
+  );
+  const preExistingReturnSyncIds = new Set<string>(
+    pushedReturnSyncIds.length
+      ? (await db.select({ s: returnsTable.syncId }).from(returnsTable).where(inArray(returnsTable.syncId, pushedReturnSyncIds))).map((r: any) => r.s)
+      : [],
+  );
 
   for (const [tableName, records] of Object.entries(tables)) {
     const t = tableMap[tableName] as any;
@@ -266,6 +310,41 @@ router.post("/sync/v2/push", requireAuth, async (req, res): Promise<void> => {
         "sync push: table completed with errors",
       );
     }
+  }
+
+  // P0-4: reconcile the genuinely-new invoices/returns (apply stock/cash/balance
+  // deltas server-side) so a DESKTOP sale additively updates the cloud balance
+  // instead of overwriting it. The cumulative columns themselves are protected
+  // from the generic upsert (RECONCILED_COLUMNS), so the only way they change is
+  // via these once-per-invoice deltas. Atomic per request; effect applied once.
+  try {
+    const newInvoiceSyncIds = pushedInvoiceSyncIds.filter((s) => !preExistingInvoiceSyncIds.has(s));
+    const newReturnSyncIds = pushedReturnSyncIds.filter((s) => !preExistingReturnSyncIds.has(s));
+    if (newInvoiceSyncIds.length || newReturnSyncIds.length) {
+      await db.transaction(async (tx) => {
+        if (newInvoiceSyncIds.length) {
+          const invs = await tx.select({
+            id: invoicesTable.id, truckId: invoicesTable.truckId,
+            clientId: invoicesTable.clientId, paymentType: invoicesTable.paymentType,
+          }).from(invoicesTable).where(inArray(invoicesTable.syncId, newInvoiceSyncIds));
+          for (const inv of invs) {
+            if (inv.truckId == null) continue;
+            await applyInvoiceEffects(tx, { id: inv.id, truckId: inv.truckId, clientId: inv.clientId ?? null, paymentType: inv.paymentType }, req);
+          }
+        }
+        if (newReturnSyncIds.length) {
+          const rets = await tx.select({ id: returnsTable.id, truckId: returnsTable.truckId, type: returnsTable.type })
+            .from(returnsTable).where(inArray(returnsTable.syncId, newReturnSyncIds));
+          for (const ret of rets) {
+            if (ret.type === "client_return" && ret.truckId != null) {
+              await applyClientReturnEffects(tx, { id: ret.id, truckId: ret.truckId }, req);
+            }
+          }
+        }
+      });
+    }
+  } catch (err: any) {
+    req.log?.error?.({ err }, "sync push (admin): invoice/return reconciliation failed");
   }
 
   res.json({ ok: true, cursor: new Date().toISOString(), results });
@@ -737,13 +816,92 @@ function sanitizeForTable(t: any, rec: any): any | null {
 }
 
 /** Build the SET clause for ON CONFLICT DO UPDATE (all cols except id and syncId) */
+// Cumulative money/stock columns are CLOUD-AUTHORITATIVE: the cloud derives them
+// by applying invoice/return/transfer effects as atomic deltas (see
+// applyInvoiceEffects / handleTruckPush). A client's full-row push must NEVER
+// overwrite them — doing so let a desktop sale clobber a concurrent mobile cash
+// delta (reproduced P0-4: lost update). We strip these columns from the generic
+// upsert SET, so a client push can update profile fields but never the balance.
+// (On a first INSERT the row's value is still used; only the on-conflict UPDATE
+// is protected.) Keyed by SQL table name -> camelCase column names.
+const RECONCILED_COLUMNS: Record<string, Set<string>> = {
+  trucks: new Set(["cashBalance"]),
+  clients: new Set(["balance"]),
+  suppliers: new Set(["balance"]),
+  truck_stock: new Set(["quantity"]),
+};
+
 function buildUpdateSet(t: any, clean: any): any {
+  const protectedCols = RECONCILED_COLUMNS[getTableName(t)];
   const set: any = {};
   for (const [k, v] of Object.entries(clean)) {
     if (k === "id" || k === "syncId" || k === "createdAt") continue;
+    if (protectedCols && protectedCols.has(k)) continue; // server-reconciled, never overwritten by a push
     set[k] = sql.raw("excluded." + k.replace(/([A-Z])/g, m => "_" + m.toLowerCase()));
   }
   return set;
+}
+
+// ── Shared invoice/return reconciliation (server-authoritative money/stock) ──
+// Applies a NEW invoice's effects ONCE: deduct truck_stock per line (capped to
+// available), recompute the invoice total from accepted lines, then credit the
+// truck cash_balance (cash) or debit the client balance (credit) — all as atomic
+// SQL deltas. This is the mechanism that makes balances cloud-authoritative, so a
+// client's pushed balance is never trusted (P0-4 fix). Mirrors the truck-push
+// reconciliation in handleTruckPush — keep the two in sync (dedupe after staging
+// validation). Caller MUST invoke this inside a db.transaction and only for
+// invoices it just inserted (RETURNING-gated) so the effect is applied once.
+async function applyInvoiceEffects(
+  tx: any,
+  inv: { id: number; truckId: number; clientId: number | null; paymentType: string },
+  req: any,
+) {
+  const items = await tx.select({
+    syncId: invoiceItemsTable.syncId, productId: invoiceItemsTable.productId,
+    quantity: invoiceItemsTable.quantity, unitPrice: invoiceItemsTable.unitPrice,
+  }).from(invoiceItemsTable).where(eq(invoiceItemsTable.invoiceId, inv.id));
+
+  let actualTotal = 0;
+  for (const it of items) {
+    const qty = Number(it.quantity);
+    const unitPrice = Number(it.unitPrice ?? 0);
+    if (!qty || it.productId == null) continue;
+    const [stockRow] = await tx.select({ quantity: truckStockTable.quantity }).from(truckStockTable)
+      .where(and(eq(truckStockTable.truckId, inv.truckId), eq(truckStockTable.productId, it.productId))).limit(1);
+    const available = Number(stockRow?.quantity ?? 0);
+    const cappedQty = Math.min(qty, available);
+    if (qty > available) {
+      req.log?.warn?.({ truckId: inv.truckId, invoiceId: inv.id, syncId: it.syncId, available, requestedQty: qty, cappedQty }, "sync push (admin): invoice line qty exceeds truck stock — capping");
+      await tx.update(invoiceItemsTable).set({ quantity: String(cappedQty), subtotal: (cappedQty * unitPrice).toFixed(2) }).where(eq(invoiceItemsTable.syncId, it.syncId!));
+    }
+    actualTotal += cappedQty * unitPrice;
+    if (cappedQty <= 0) continue;
+    await tx.update(truckStockTable).set({
+      quantity: sql`GREATEST(0, ${truckStockTable.quantity} - ${cappedQty})`, updatedAt: new Date(),
+    }).where(and(eq(truckStockTable.truckId, inv.truckId), eq(truckStockTable.productId, it.productId)));
+  }
+
+  await tx.update(invoicesTable).set({ totalAmount: actualTotal.toFixed(2) }).where(eq(invoicesTable.id, inv.id));
+  if (inv.paymentType === "cash" && actualTotal > 0) {
+    await tx.update(trucksTable).set({ cashBalance: sql`${trucksTable.cashBalance} + ${actualTotal}`, updatedAt: new Date() }).where(eq(trucksTable.id, inv.truckId));
+  }
+  if (inv.paymentType === "credit" && actualTotal > 0 && inv.clientId != null) {
+    await tx.update(clientsTable).set({ balance: sql`${clientsTable.balance} - ${actualTotal}`, updatedAt: new Date() }).where(eq(clientsTable.id, inv.clientId));
+  }
+}
+
+async function applyClientReturnEffects(tx: any, ret: { id: number; truckId: number }, _req: any) {
+  const items = await tx.select({ productId: returnItemsTable.productId, quantity: returnItemsTable.quantity })
+    .from(returnItemsTable).where(eq(returnItemsTable.returnId, ret.id));
+  for (const it of items) {
+    const qty = Number(it.quantity);
+    if (!qty || it.productId == null) continue;
+    const updated = await tx.update(truckStockTable).set({ quantity: sql`${truckStockTable.quantity} + ${qty}`, updatedAt: new Date() })
+      .where(and(eq(truckStockTable.truckId, ret.truckId), eq(truckStockTable.productId, it.productId))).returning({ id: truckStockTable.id });
+    if (updated.length === 0) {
+      await tx.insert(truckStockTable).values({ truckId: ret.truckId, productId: it.productId, quantity: String(qty), syncId: randomUUID(), updatedAt: new Date() });
+    }
+  }
 }
 
 export default router;
