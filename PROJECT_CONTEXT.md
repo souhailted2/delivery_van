@@ -580,7 +580,8 @@ Triggers on push to `main` or `v*` tags:
 | `DATABASE_URL` | `lib/db/src/index.ts` (api-server) | Postgres connection string. **Required** — throws at import if missing. |
 | `PORT` | api-server (`src/index.ts`), frontend `vite.config.ts` | HTTP listen port / Vite dev port. Required. |
 | `BASE_PATH` | frontend `vite.config.ts` | Vite `base` path for asset URLs. `/` for production/desktop builds. Required. |
-| `SESSION_SECRET` | api-server `app.ts` | express-session secret (falls back to a hardcoded default if unset — should be set in production). |
+| `SESSION_SECRET` | api-server `app.ts` | express-session secret. **REQUIRED in production** (since Phase 1, 2026-06-18): `app.ts` throws on boot if `NODE_ENV=production` and it is unset/empty. A throwaway dev fallback is used only when not production. Set in `/etc/erp.env` on Hetzner (persists across deploys). |
+| `CORS_ORIGINS` | api-server `app.ts` | Optional comma-separated browser-origin allowlist for CORS. Defaults to `https://deleveri.alllal.com`. Server-to-server callers (no Origin) are always allowed. |
 | `EXPO_PUBLIC_API_URL` | mobile app | Cloud API base URL (`https://deleveri.alllal.com` in production builds). |
 | `NODE_ENV` | mobile build | `production` for release APK builds. |
 | `HETZNER_HOST` / `HETZNER_USER` / `HETZNER_PASSWORD` | `deploy-hetzner.yml` (GitHub secret) | SSH/SCP credentials for the deploy target. |
@@ -824,3 +825,70 @@ already-installed desktop apps).
   tables still pushing raw integer FKs.
 - Harden CI (`deploy-hetzner.yml`) to actually package/sync `node_modules`
   correctly (flagged pending task).
+
+---
+
+## 25. Command-Center Redesign + Security Phase 1 (deployed 2026-06-18)
+
+The shared frontend (`artifacts/erp-van-sales`) was rebuilt into a cinematic
+"Operations Center" command-center experience, and the cloud API received its
+first authentication hardening pass. **This is the version running on
+production** (`deleveri.alllal.com`) as of 2026-06-18.
+
+### Frontend (UI / experience)
+- One persistent command-center shell (top Command Bar + contextual subnav, no
+  sidebar). The single Operations Center environment sits behind the whole app
+  (`ExperienceBackground`), dimmed on work pages, bright on the dashboard.
+- Login/logout are the only cinematic transitions, owned by the Arrival overlay
+  and driven by ONE canonical video (`public/scenes/arrival.mp4` + the two
+  poster frames). Login plays it forward; logout plays it in reverse. Page
+  navigation is a fast content fade (`AppTransition`).
+- Consolidation removed the old per-room scene machinery — deleted
+  `experience/scenes.tsx`, `DoorwayDilation.tsx`, `HQReactiveLayer.tsx`,
+  `OCReactiveLayer.tsx`; `cinematic.ts` trimmed to `ease`/`dur`. New single
+  source of truth: `experience/arrival-asset.ts` (video warmer + adoption).
+- Resilience: a root `ErrorBoundary` (`components/ErrorBoundary.tsx`) catches
+  render errors (no more white screen); the `QueryClient` redirects to
+  `/connexion` on any non-`/me` 401 and does not retry 4xx.
+- Layout-stability: `html { overflow-y: scroll; scrollbar-gutter: stable }`
+  (no per-route width jump). Hero heading has a scrim/text-shadow for
+  readability over the bright OC wall.
+- `arrival.mp4` is the optimized **1920×1440 @ ~10 Mbps H.264** encode
+  (~6.1 MB, yuv420p, faststart), re-encoded 2026-06-18 from a 2903×2176 /
+  50.9 Mbps source whose non-standard dimensions + bitrate caused
+  hardware-decode stutter on real devices (`MediaCapabilities.smooth`
+  false→true). Cinematic, timing, camera path, and posters are unchanged —
+  only the encoding. nginx caches `.mp4` (30-day `Cache-Control`) so the video
+  is not re-downloaded on every login. A frontend code-split for the ~1.4 MB
+  JS bundle remains a future optimization.
+
+### Cloud API security (Phase 1)
+See CLAUDE.md "API Security — Cloud" for the authoritative list: global
+`requireAuth` gate, `requireAdmin`, `SESSION_SECRET` enforcement, CORS
+allowlist, secure cookies + `trust proxy`, global error handler. **Cloud-only**
+— `desktop/server` (loopback, single-user) was intentionally not changed.
+
+### Production state after the 2026-06-18 deploy
+- `SESSION_SECRET` set in `/etc/erp.env` (was empty); unauthenticated `/api/*`
+  now returns 401 (verified); login issues a `Secure; HttpOnly; SameSite=Lax`
+  cookie; CORS rejects non-allowlisted origins.
+- ufw: public `8080/tcp` rule removed (the API was directly reachable over
+  plain HTTP, bypassing nginx/TLS). nginx still proxies via loopback
+  `127.0.0.1:8080`.
+- nginx already forwards `X-Forwarded-Proto`; TLS via Let's Encrypt
+  (`certbot.timer` active). Box is shared (2 vCPU / 3.7 GB, ~82% disk) with
+  other apps.
+- Rollback assets retained on the box under `/root/erp-backups/` (timestamp
+  `20260618_012041`): pre-deploy DB dump, env, and `dist`/`frontend` copies.
+- The deploy was a **manual controlled rollout** (build → scp → swap →
+  `pm2 restart` → verify). For CI parity, the redesign branch must be merged to
+  `main` so `deploy-hetzner.yml` deploys the same code; the box's
+  `SESSION_SECRET` persists across CI deploys (CI does not touch `/etc/erp.env`,
+  and the server-side deploy script copies only `dist/` + `frontend/`, never
+  `node_modules`, so the existing `connect-pg-simple` is reused).
+
+### Still open (not done in this deploy)
+No automated backup of `erpvansales` (the 6-hourly `/root/auto-backup.sh` cron
+dumps the unrelated `tpl_factory` DB); zero `updated_at`/FK indexes on the prod
+DB (Phase 3); no HSTS header; deferred P1s — SHA256 password hashing, no login
+rate-limiting, non-atomic financial writes.

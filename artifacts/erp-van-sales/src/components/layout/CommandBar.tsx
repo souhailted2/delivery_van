@@ -5,7 +5,7 @@
 // teal underline that slides between items (shared layoutId). Utility cluster
 // at the end: search · notifications · profile (theme + sync + logout).
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Link, useLocation } from "wouter";
 import { motion, useReducedMotion } from "framer-motion";
 import {
@@ -27,6 +27,7 @@ import { useLogout } from "@workspace/api-client-react";
 import { ElectronSyncButton } from "@/components/ElectronSync";
 import { NAV, isItemActive, isChildActive, type NavItem } from "./nav";
 import { useArrival } from "@/experience/ArrivalProvider";
+import { preloadArrivalVideo } from "@/experience/arrival-asset";
 
 function Brand() {
   return (
@@ -103,12 +104,24 @@ function ProfileMenu() {
   const roleLabel = user?.role === "admin" ? "مدير" : "بائع";
   const initial = user?.fullName?.charAt(0) || "م";
 
-  // Phase 8 — play the reverse cinematic, then fire the actual logout +
-  // navigation at the moment the user "arrives outside" (commit point).
-  const handleLogout = () =>
-    startLogout(() => {
-      logout.mutate(undefined, { onSuccess: () => setLocation("/connexion") });
-    });
+  // Warm the arrival video at idle so the reverse logout sequence plays from a
+  // fully-buffered clip — even for returning users who resumed a live session
+  // without replaying the arrival this visit.
+  useEffect(() => {
+    const w = window as unknown as { requestIdleCallback?: (cb: () => void) => number };
+    if (w.requestIdleCallback) w.requestIdleCallback(() => preloadArrivalVideo());
+    else window.setTimeout(preloadArrivalVideo, 2500);
+  }, []);
+
+  // DECOUPLED DEPARTURE: start the reverse cinematic ON CLICK, navigate to
+  // /connexion IMMEDIATELY (so the login exterior is prepared UNDER the overlay
+  // before the reverse ends — the overlay fades to the login screen, never back
+  // to the Operations Center), and clear the session IN PARALLEL.
+  const handleLogout = () => {
+    startLogout();
+    setLocation("/connexion");
+    logout.mutate(undefined);
+  };
 
   return (
     <DropdownMenu>
@@ -238,9 +251,22 @@ export function CommandBar() {
   const [location] = useLocation();
   const reduce = !!useReducedMotion();
   const commandCenter = location === "/";
+  // SECOND CUT — Phase 6 handover. On the dashboard, the Command Bar
+  // DESCENDS from above the screen at the moment the room welcomes the
+  // operator (dashboardReady flips true post-silent-hold). On logout it
+  // retreats upward. On every other route it stays at rest. The descent
+  // is a single transform-only beat; no glow, no pulse.
+  const { dashboardReady, isLeaving } = useArrival();
+  const showBar = !commandCenter || (dashboardReady && !isLeaving);
 
   return (
-    <header
+    <motion.header
+      initial={false}
+      animate={{
+        y:       reduce ? 0    : (showBar ? 0 : -32),
+        opacity: showBar ? 1 : 0,
+      }}
+      transition={{ duration: 0.55, ease: [0.22, 1, 0.36, 1] }}
       className={cn(
         "sticky top-0 z-40 flex h-16 items-center gap-1 border-b px-4 lg:px-6 backdrop-blur-xl",
         commandCenter ? "border-white/8 bg-background/78" : "border-white/8 bg-background/85"
@@ -271,6 +297,6 @@ export function CommandBar() {
         <ProfileMenu />
         <MobileSheet location={location} />
       </div>
-    </header>
+    </motion.header>
   );
 }

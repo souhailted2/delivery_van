@@ -29,7 +29,7 @@ export function StatCard({
       variants={fadeUp}
       initial="hidden"
       animate={reveal ? "show" : "hidden"}
-      transition={{ duration: 0.45, delay: index * 0.06, ease: [0.22, 1, 0.36, 1] }}
+      transition={{ duration: 0.55, delay: index * 0.08, ease: [0.22, 1, 0.36, 1] }}
     >
       <Card className="overflow-hidden border-card-border bg-card/88 backdrop-blur-md transition-shadow hover:shadow-lg hover:shadow-black/30">
         <CardContent className="flex items-center justify-between gap-4 p-5">

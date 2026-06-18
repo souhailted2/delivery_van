@@ -18,12 +18,24 @@ import storageRouter from "./storage";
 import settingsRouter from "./settings";
 import syncV2Router from "./sync-v2";
 import dispatchesRouter from "./dispatches";
+import { requireAuth } from "../lib/authMiddleware";
 
 const router: IRouter = Router();
 
+// ── PUBLIC routes (no session required) ──────────────────────────────────────
+// Health check (deploy probe) and the auth endpoints themselves. `/auth/me`
+// returns 401 on its own when there is no session.
 router.use(healthRouter);
-router.use(storageRouter);
 router.use(authRouter);
+
+// ── GLOBAL AUTH GATE ─────────────────────────────────────────────────────────
+// Everything mounted below requires an authenticated session (user OR truck).
+// This is the single enforcement point that closes the previous gap where most
+// data/mutation routes were reachable with no session at all. Routers that need
+// finer rules (truck-vs-user, admin-only) still apply their own checks on top.
+router.use(requireAuth);
+
+router.use(storageRouter);
 router.use(usersRouter);
 router.use(branchesRouter);
 router.use(categoriesRouter);

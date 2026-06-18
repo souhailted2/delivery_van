@@ -3,6 +3,7 @@ import { db } from "@workspace/db";
 import { usersTable } from "@workspace/db";
 import { eq } from "drizzle-orm";
 import { hashPassword } from "./auth";
+import { requireAdmin } from "../lib/authMiddleware";
 
 const router = Router();
 
@@ -22,7 +23,7 @@ router.get("/users", async (req, res) => {
   res.json(users);
 });
 
-router.post("/users", async (req, res) => {
+router.post("/users", requireAdmin, async (req, res) => {
   const { username, password, fullName, role, truckId, canDeleteInvoice, canEditPrice, canSellOnCredit, canViewReports } = req.body;
   if (!username || !password || !fullName) {
     return res.status(400).json({ error: "Champs requis manquants" });
@@ -60,7 +61,7 @@ router.get("/users/:id", async (req, res) => {
   res.json(user);
 });
 
-router.put("/users/:id", async (req, res) => {
+router.put("/users/:id", requireAdmin, async (req, res) => {
   const id = parseInt(req.params.id);
   const { fullName, role, truckId, canDeleteInvoice, canEditPrice, canSellOnCredit, canViewReports } = req.body;
   const updates: Record<string, unknown> = {};
@@ -77,7 +78,7 @@ router.put("/users/:id", async (req, res) => {
   res.json(safeUser);
 });
 
-router.delete("/users/:id", async (req, res) => {
+router.delete("/users/:id", requireAdmin, async (req, res) => {
   const id = parseInt(req.params.id);
   await db.delete(usersTable).where(eq(usersTable.id, id));
   res.status(204).send();

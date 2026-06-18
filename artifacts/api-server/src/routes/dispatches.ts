@@ -4,13 +4,9 @@ import {
   truckDispatchesTable, truckStockTable, trucksTable, productsTable,
 } from "@workspace/db";
 import { eq, and, desc, sql } from "drizzle-orm";
+import { requireAdmin } from "../lib/authMiddleware";
 
 const router = Router();
-
-function requireAdmin(req: any, res: any, next: any) {
-  if (!req.session?.userId) return res.status(401).json({ error: "Non authentifié" });
-  next();
-}
 
 function requireTruck(req: any, res: any, next: any) {
   if (!req.session?.truckId) return res.status(401).json({ error: "Non authentifié comme camion" });

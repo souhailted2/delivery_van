@@ -115,10 +115,24 @@ export default function Dashboard() {
         className="flex flex-col gap-1 sm:flex-row sm:items-end sm:justify-between"
       >
         <div>
-          <h1 className="text-3xl font-bold tracking-tight text-foreground">
+          {/* The hero title sits over the Operations Center photo, whose wall
+              display carries its OWN baked-in teal "ALLAL DELIVERY" in the same
+              colour and position — so the live title used to visually merge
+              into the background. A dark text-shadow gives every glyph a halo
+              that lifts the foreground off the busy/bright wall and breaks the
+              teal-on-teal coincidence, WITHOUT changing the brand colours. */}
+          <h1
+            className="text-3xl font-bold tracking-tight text-foreground"
+            style={{ textShadow: "0 2px 10px rgba(5,8,15,0.9), 0 1px 2px rgba(5,8,15,0.95)" }}
+          >
             مركز قيادة <span className="text-primary">ALLAL DELIVERY</span>
           </h1>
-          <p className="text-muted-foreground">نظرة شاملة على المخزون، الأسطول، والمبيعات لحظياً.</p>
+          <p
+            className="text-muted-foreground"
+            style={{ textShadow: "0 1px 6px rgba(5,8,15,0.85)" }}
+          >
+            نظرة شاملة على المخزون، الأسطول، والمبيعات لحظياً.
+          </p>
         </div>
         <Badge variant="outline" className="self-start sm:self-auto text-xs font-medium text-muted-foreground border-border">
           {today}

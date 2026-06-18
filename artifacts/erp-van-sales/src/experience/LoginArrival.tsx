@@ -1,128 +1,129 @@
-// ALLAL Experience — Login → Dashboard Arrival Cinematic (Reactive)
+// ALLAL Experience — Login → Dashboard Arrival (Video-First, decoupled).
 //
-// Director's Plan Phases 3-6, choreographed as a single ~4.5s overlay:
+// The video IS the experience and it starts the INSTANT the user clicks —
+// authentication runs in parallel and the clip hides its latency.
 //
-//   T=0      Arrival starts.
-//            (The Phase 2 click cascade already played BEFORE this mounts —
-//             the building's lights and doorway are already on.)
-//
-//   T=0.00   APPROACH — exterior pushes forward (expoOut camera).
-//            HQ Reactive Layer in "approach" phase: lights stay full,
-//            doorway core intensifies as we close in.
-//
-//   T=1.50   ENTRY — Phase 4. The DoorwayDilation portal expands from the
-//            building entrance, swallowing the exterior and revealing the
-//            Operations Center interior. 600ms spatial threshold crossing.
-//
-//   T=2.10   ACTIVATION — Phase 5. The room wakes:
-//              wall scan → KPIs L→R → desk monitors (3 waves) →
-//              cyan lighting lifts → floor pulse → hold
-//            1.3s cascade.
-//
-//   T=3.40   HANDOVER — Phase 6. The curtain begins to lift; the OCReactiveLayer
-//            holds at "active"; the Dashboard's reveal gate (dashboardReady) is
-//            flipped so cards stagger in from the wall display.
-//
-//   T=4.00   DONE — overlay unmounts. Dashboard has taken control.
+//   • startArrival() is called ON CLICK, so this overlay mounts immediately and
+//     adopts the pre-decoded warmer video (arrival-asset) → playback begins on
+//     the next frame. No frame-0 freeze, no "click → wait → motion".
+//   • The login backdrop is this video's FRAME 0, so the overlay (also frame 0)
+//     mounting over it is seamless; only the receding login card disappears.
+//   • Reveal is gated on AUTH SUCCESS, not on the video alone:
+//       - auth success + video ended → reveal: the dashboard cards rise AS the
+//         overlay cross-fades out (the room assembles, not appears pre-built).
+//       - auth still pending at video end → HOLD on the final frame until it
+//         resolves.
+//       - auth error (any time) → abort: fade back to the login screen (which
+//         is still underneath — we never navigated).
+//   • The dashboard backdrop is this video's LAST frame, so the success fade is
+//     between identical frames — seamless.
 
-import { motion } from "framer-motion";
-import { useEffect, useState } from "react";
-import { routeToScene } from "./scenes";
-import { ease } from "./cinematic";
-import { HQReactiveLayer } from "./HQReactiveLayer";
-import { OCReactiveLayer, type OCPhase } from "./OCReactiveLayer";
-import { DoorwayDilation } from "./DoorwayDilation";
+import { motion, useReducedMotion } from "framer-motion";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { adoptArrivalVideo, parkArrivalVideo, ARRIVAL_POSTER_START } from "./arrival-asset";
+import type { AuthOutcome } from "./ArrivalProvider";
 
-// Timeline (seconds within the overlay's lifetime)
-const T = {
-  approachEnd:  1.50,   // push-in done
-  dilateEnd:    2.10,   // doorway dilation done — interior visible
-  activateEnd:  3.40,   // OC awake cascade done
-  handover:     3.40,   // dashboardReady flipped
-  done:         4.00,   // overlay unmounts
-} as const;
+const FADE_IN = 0.18;  // s — overlay rises as the login card recedes (frame-0 == backdrop, so seamless)
+const FADE_OUT = 0.55; // s — overlay cross-fades to the dashboard / back to login
 
 interface Props {
-  /** Fires when the curtain begins to lift — Dashboard cards should reveal now. */
+  authOutcome: AuthOutcome;
+  /** Fires when the Operations Center is revealed — dashboard rises now. */
   onReveal: () => void;
   /** Fires when the overlay can be unmounted. */
   onComplete: () => void;
 }
 
-export function LoginArrival({ onReveal, onComplete }: Props) {
-  const hqSrc = routeToScene("/connexion").image!;
-  const ocSrc = routeToScene("/").image!;
+type Stage = "playing" | "revealing" | "aborting" | "done";
 
-  // Internal storyboard phases
-  const [stage, setStage] = useState<"approach" | "dilating" | "activating" | "handover" | "done">("approach");
+export function LoginArrival({ authOutcome, onReveal, onComplete }: Props) {
+  const reduce = !!useReducedMotion();
+  const containerRef = useRef<HTMLDivElement>(null);
+  const videoRef = useRef<HTMLVideoElement | null>(null);
+  const [stage, setStage] = useState<Stage>("playing");
 
+  const authRef = useRef<AuthOutcome>(authOutcome);
+  const endedRef = useRef(false);
+  const finalizedRef = useRef(false);
+
+  const finishAfter = useCallback((ms: number) => {
+    window.setTimeout(() => { setStage("done"); onComplete(); }, ms);
+  }, [onComplete]);
+
+  const tryFinalize = useCallback(() => {
+    if (finalizedRef.current) return;
+    const auth = authRef.current;
+    if (auth === "error") {
+      finalizedRef.current = true;
+      try { videoRef.current?.pause(); } catch { /* noop */ }
+      setStage("aborting");          // fade out → reveal the login screen beneath
+      finishAfter(FADE_OUT * 1000);
+      return;
+    }
+    if (auth === "success" && endedRef.current) {
+      finalizedRef.current = true;
+      onReveal();                    // cards rise as the overlay fades
+      setStage("revealing");
+      finishAfter(FADE_OUT * 1000);
+      return;
+    }
+    // pending, or success-but-not-yet-ended → hold on the current/final frame
+  }, [onReveal, finishAfter]);
+
+  // Keep the auth ref fresh and re-attempt finalize whenever the outcome changes.
+  useEffect(() => { authRef.current = authOutcome; tryFinalize(); }, [authOutcome, tryFinalize]);
+
+  // ── REDUCED MOTION: no video, gate purely on auth ─────────────────────────
   useEffect(() => {
-    const tDilate    = window.setTimeout(() => setStage("dilating"),    T.approachEnd * 1000);
-    const tActivate  = window.setTimeout(() => setStage("activating"),  T.dilateEnd   * 1000);
-    const tHandover  = window.setTimeout(() => {
-      setStage("handover");
-      onReveal();
-    }, T.handover * 1000);
-    const tDone      = window.setTimeout(() => {
-      setStage("done");
-      onComplete();
-    }, T.done * 1000);
-    return () => {
-      window.clearTimeout(tDilate);
-      window.clearTimeout(tActivate);
-      window.clearTimeout(tHandover);
-      window.clearTimeout(tDone);
-    };
-  }, [onReveal, onComplete]);
+    if (!reduce) return;
+    endedRef.current = true;
+    tryFinalize();
+  }, [reduce, tryFinalize]);
 
-  // OC phase mapping
-  const ocPhase: OCPhase =
-    stage === "approach" || stage === "dilating" ? "dim"
-    : stage === "activating" ? "waking"
-    : "active";
+  // ── VIDEO PATH: adopt the pre-decoded warmer and play instantly ───────────
+  useEffect(() => {
+    if (reduce) return;
+    const container = containerRef.current;
+    if (!container) return;
+    const v = adoptArrivalVideo(container, "cover");
+    videoRef.current = v;
+    if (!v) { endedRef.current = true; tryFinalize(); return; }
+
+    const onEnded = () => { endedRef.current = true; tryFinalize(); };
+    const onError = () => { endedRef.current = true; tryFinalize(); };
+    v.addEventListener("ended", onEnded);
+    v.addEventListener("error", onError);
+
+    try { v.currentTime = 0; } catch { /* noop */ }
+    v.playbackRate = 1;
+    const p = v.play();
+    if (p && p.catch) p.catch(() => { /* poster holds; ended/auth still drive finalize */ });
+
+    return () => {
+      v.removeEventListener("ended", onEnded);
+      v.removeEventListener("error", onError);
+      parkArrivalVideo();
+    };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [reduce]);
 
   return (
     <motion.div
       aria-hidden
-      initial={{ opacity: 1 }}
-      animate={{ opacity: stage === "done" ? 0 : 1 }}
-      transition={{ duration: 0.6, ease: ease.land as any }}
+      ref={containerRef}
+      initial={{ opacity: 0 }}
+      animate={{ opacity: stage === "playing" ? 1 : 0 }}
+      transition={{ duration: stage === "playing" ? FADE_IN : FADE_OUT, ease: [0.4, 0, 0.2, 1] }}
       style={{
         position: "fixed",
         inset: 0,
         zIndex: 100,
         overflow: "hidden",
-        background: "#05080f",
+        // Start poster as the base → never a black frame before/around the video.
+        background: `#05080f url(${ARRIVAL_POSTER_START}) center / cover no-repeat`,
         willChange: "opacity",
+        pointerEvents: stage === "done" ? "none" : "auto",
       }}
-    >
-      {/* ── HQ exterior plate — pushes forward over 1.5s, then holds at
-            zoom while DoorwayDilation reveals the interior over it. */}
-      <motion.div
-        initial={{ scale: 1, transformOrigin: "50% 52%" }}
-        animate={{ scale: stage === "approach" ? 1.26 : 1.26 }}
-        transition={{ duration: T.approachEnd, ease: ease.expoOut as any }}
-        style={{ position: "absolute", inset: 0, willChange: "transform" }}
-      >
-        <img
-          src={hqSrc}
-          alt=""
-          style={{ position: "absolute", inset: 0, width: "100%", height: "100%", objectFit: "cover" }}
-        />
-        <HQReactiveLayer phase="approach" />
-      </motion.div>
-
-      {/* ── Doorway dilation — Phase 4. Begins at T_approachEnd, lasts 600ms.
-            Inside it, the OC photograph + reactive layer at "dim" or "waking". */}
-      <DoorwayDilation
-        src={ocSrc}
-        active={stage === "dilating" || stage === "activating" || stage === "handover"}
-      >
-        <OCReactiveLayer phase={ocPhase} />
-        {/* warm tint matching the cinematic interior beat */}
-        <div style={{ position: "absolute", inset: 0, background: "radial-gradient(58% 48% at 50% 36%, rgba(14,154,167,0.10), transparent 72%)", pointerEvents: "none" }} />
-        <div style={{ position: "absolute", inset: 0, background: "linear-gradient(180deg, transparent 68%, rgba(5,8,15,0.32))", pointerEvents: "none" }} />
-      </DoorwayDilation>
-    </motion.div>
+    />
   );
 }

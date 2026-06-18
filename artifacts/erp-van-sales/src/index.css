@@ -192,6 +192,20 @@
   * {
     @apply border-border;
   }
+  /* Reserve the scrollbar track permanently on the document scroll root.
+     The persistent shell is min-h-screen, so the WINDOW is the real scroll
+     container; without a reserved track the vertical scrollbar appears on tall
+     pages and vanishes on short ones, swinging the page width ~15px and
+     shifting all content horizontally on every navigation. The root element's
+     default overflow is `visible`, so `scrollbar-gutter` alone is a no-op
+     here — `overflow-y: scroll` forces the track to always render, which keeps
+     the page width constant across every route. (`scrollbar-gutter: stable`
+     stays for overlay-scrollbar engines.) Purely a layout-stability fix; it
+     does not touch navigation. */
+  html {
+    overflow-y: scroll;
+    scrollbar-gutter: stable;
+  }
   body {
     @apply bg-background text-foreground;
     direction: rtl;

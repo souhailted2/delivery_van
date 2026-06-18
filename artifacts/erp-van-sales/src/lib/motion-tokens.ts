@@ -1,5 +1,9 @@
+// SECOND CUT — KPI cards rise from BELOW with weight (translateY 28).
+// At handover, the cards are guests entering the Operations Center at the
+// operator's eye-level. Each card carries enough vertical travel for the
+// rise to read as physical, not as a UI fade.
 export const fadeUp = {
-  hidden: { opacity: 0, y: 16 },
+  hidden: { opacity: 0, y: 28 },
   show: { opacity: 1, y: 0 },
 };
 

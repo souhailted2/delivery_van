@@ -8,7 +8,7 @@ import { useToast } from "@/hooks/use-toast";
 import { useQueryClient } from "@tanstack/react-query";
 import { motion, useReducedMotion } from "framer-motion";
 import { useArrival } from "@/experience/ArrivalProvider";
-import { routeToScene } from "@/experience/scenes";
+import { preloadArrivalVideo } from "@/experience/arrival-asset";
 
 type Tab = "user" | "truck";
 
@@ -19,7 +19,7 @@ export default function Connexion() {
   const truckLogin = useTruckLogin();
   const queryClient = useQueryClient();
   const reduce = useReducedMotion();
-  const { startArrival, isArriving, startClickCascade, clickPhase } = useArrival();
+  const { startArrival, resolveArrival } = useArrival();
 
   const [tab, setTab] = useState<Tab>("user");
   const [username, setUsername] = useState("");
@@ -27,59 +27,71 @@ export default function Connexion() {
   const [truckName, setTruckName] = useState("");
   const [truckPassword, setTruckPassword] = useState("");
   const [showPw, setShowPw] = useState(false);
+  /* The login card recedes (scale 0.94 + opacity 0 + soft blur) the instant the
+     user clicks — in parallel with the arrival video, not after the network. */
+  const [receding, setReceding] = useState(false);
 
   const pending = login.isPending || truckLogin.isPending;
 
-  // Preload the Operations Center interior so the cross-dissolve is seamless.
+  // VIDEO-FIRST: warm the arrival video (and its posters) the moment the login
+  // screen mounts. The user spends seconds reading/typing — that buffers the
+  // ~30MB clip so the click triggers "motion begins", not "wait → video".
   useEffect(() => {
-    const interior = routeToScene("/").image;
-    if (interior) { const i = new Image(); i.src = interior; }
+    preloadArrivalVideo();
   }, []);
 
-  // On success: play the 800ms HQ REACTION CASCADE (Director's Plan Phase 2)
-  // BEFORE navigating. The user must feel the BUILDING reacted to their
-  // command — truck headlights flare, entrance lamp brightens, wall display
-  // pulses — before they are taken inside. Only AFTER the world has answered
-  // do we navigate and raise the arrival cinematic.
-  const succeed = async () => {
-    queryClient.invalidateQueries();
-    await startClickCascade();             // 800ms: building responds in place
-    startArrival();                         // raise the overlay
-    setLocation("/");                       // navigate behind the overlay
+  // DECOUPLED ARRIVAL: start the cinematic ON CLICK (motion begins immediately)
+  // and run authentication IN PARALLEL. The video hides the API latency.
+  //   - onSuccess  → resolveArrival(true): the arrival reveals the dashboard,
+  //                  and we navigate so it's mounted underneath the overlay.
+  //   - onError    → resolveArrival(false): the arrival aborts back to the login
+  //                  screen; the card returns and we surface the error.
+  const begin = () => { setReceding(true); startArrival(); };
+  const onAuthError = (titleKey: "user" | "truck") => {
+    resolveArrival(false);
+    setReceding(false);
+    toast(
+      titleKey === "user"
+        ? { title: "خطأ في تسجيل الدخول", description: "اسم المستخدم أو كلمة المرور غير صحيحة.", variant: "destructive" }
+        : { title: "خطأ في تسجيل دخول الشاحنة", description: "اسم الشاحنة أو كلمة المرور غير صحيحة.", variant: "destructive" },
+    );
   };
 
   const handleUserSubmit = (e: React.FormEvent) => {
     e.preventDefault();
+    if (pending) return;
+    begin();
     login.mutate(
       { data: { username, password } },
       {
-        onSuccess: succeed,
-        onError: () =>
-          toast({ title: "خطأ في تسجيل الدخول", description: "اسم المستخدم أو كلمة المرور غير صحيحة.", variant: "destructive" }),
+        onSuccess: () => { queryClient.invalidateQueries(); resolveArrival(true); setLocation("/"); },
+        onError: () => onAuthError("user"),
       },
     );
   };
 
   const handleTruckSubmit = (e: React.FormEvent) => {
     e.preventDefault();
+    if (pending) return;
+    begin();
     truckLogin.mutate(
       { data: { truckName, password: truckPassword } },
       {
-        onSuccess: succeed,
-        onError: () =>
-          toast({ title: "خطأ في تسجيل دخول الشاحنة", description: "اسم الشاحنة أو كلمة المرور غير صحيحة.", variant: "destructive" }),
+        onSuccess: () => { queryClient.invalidateQueries(); resolveArrival(true); setLocation("/"); },
+        onError: () => onAuthError("truck"),
       },
     );
   };
 
   // ── motion ────────────────────────────────────────────────────────────────
   // Entrance: left-drift + blur-clear + inner stagger.
-  // Arrival fade: when the LoginArrival overlay starts rising, the card
-  // recedes underneath so the layered effect feels intentional.
+  // SECOND CUT acknowledge: the card recedes into z-depth (scale 0.94 + opacity
+  // 0 + soft blur) — the user's attention drops the form and lifts toward the
+  // destination. The building does NOT move during this beat.
   const cardV = {
-    hidden: { opacity: 0, x: reduce ? 0 : -56, filter: reduce ? "blur(0px)" : "blur(8px)" },
-    in: { opacity: 1, x: 0, scale: 1, filter: "blur(0px)", transition: { duration: reduce ? 0.25 : 0.85, ease: [0.22, 1, 0.36, 1] } },
-    leaving: { opacity: 0, scale: 0.97, filter: "blur(6px)", transition: { duration: 0.42, ease: [0.4, 0, 0.2, 1] } },
+    hidden:  { opacity: 0, x: reduce ? 0 : -56, filter: reduce ? "blur(0px)" : "blur(8px)" },
+    in:      { opacity: 1, x: 0, scale: 1, filter: "blur(0px)", transition: { duration: reduce ? 0.25 : 0.85, ease: [0.22, 1, 0.36, 1] } },
+    receding:{ opacity: 0, scale: 0.94, filter: "blur(4px)", transition: { duration: 0.35, ease: [0.4, 0, 0.2, 1] } },
   } as const;
   const listV = { hidden: {}, in: { transition: { staggerChildren: reduce ? 0 : 0.06, delayChildren: reduce ? 0 : 0.18 } } } as const;
   const itemV = { hidden: { opacity: 0, y: reduce ? 0 : 12 }, in: { opacity: 1, y: 0, transition: { duration: 0.5, ease: [0.22, 1, 0.36, 1] } } } as const;
@@ -95,7 +107,7 @@ export default function Connexion() {
         dir="rtl"
         variants={cardV}
         initial="hidden"
-        animate={(isArriving || clickPhase === "cascading") ? "leaving" : "in"}
+        animate={receding ? "receding" : "in"}
         className="relative w-full max-w-[22.5rem] rounded-2xl border border-white/15 bg-[#08111e]/92 backdrop-blur-[28px] supports-[backdrop-filter]:bg-[#08111e]/82 p-7 shadow-[0_50px_140px_-30px_rgba(0,0,0,0.9),0_0_0_1px_rgba(255,255,255,0.04)_inset] overflow-hidden"
       >
         {/* premium glass highlights */}
@@ -156,22 +168,11 @@ export default function Connexion() {
                   {showPw ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
                 </button>
               </motion.div>
-              <motion.div variants={itemV} className="pt-2 relative">
-                <Button type="submit" disabled={pending} className="group h-10 w-full gap-2 text-[0.9rem] font-semibold shadow-[0_8px_24px_-8px_rgba(14,154,167,0.6)] relative overflow-visible">
+              <motion.div variants={itemV} className="pt-2">
+                <Button type="submit" disabled={pending} className="group h-10 w-full gap-2 text-[0.9rem] font-semibold shadow-[0_8px_24px_-8px_rgba(14,154,167,0.6)]">
                   {pending ? <Loader2 className="h-4 w-4 animate-spin" /> : <ArrowLeft className="h-4 w-4 transition-transform group-hover:-translate-x-0.5" />}
                   {pending ? "جارٍ تسجيل الدخول..." : "تسجيل الدخول"}
                 </Button>
-                {/* Charge ring — Phase 2 Director's Plan. Pulses outward from the
-                    button during the 200ms charge before the building reacts. */}
-                {clickPhase !== "idle" && (
-                  <motion.span
-                    aria-hidden
-                    className="pointer-events-none absolute inset-0 rounded-md"
-                    initial={{ opacity: 0.8, scale: 1, boxShadow: "0 0 0 0 rgba(14,154,167,0.7)" }}
-                    animate={{ opacity: 0, scale: 1.15, boxShadow: "0 0 0 14px rgba(14,154,167,0)" }}
-                    transition={{ duration: 0.6, ease: "easeOut" }}
-                  />
-                )}
               </motion.div>
             </form>
           ) : (

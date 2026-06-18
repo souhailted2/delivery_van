@@ -1,5 +1,7 @@
 import { Switch, Route, Router as WouterRouter, useLocation } from "wouter";
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { QueryClient, QueryClientProvider, QueryCache, MutationCache } from "@tanstack/react-query";
+import { getGetMeQueryKey } from "@workspace/api-client-react";
+import { ErrorBoundary } from "./components/ErrorBoundary";
 import { Toaster } from "@/components/ui/toaster";
 import { Toaster as SonnerToaster } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -27,23 +29,46 @@ import Rapports from "./pages/Rapports";
 import Utilisateurs from "./pages/Utilisateurs";
 import TruckPortal from "./pages/TruckPortal";
 
-const queryClient = new QueryClient();
+// Global session-expiry handling. If any query/mutation comes back 401, the
+// session is gone — send the user to the login screen instead of leaving them
+// on a silently-broken page. The /me query is excluded because AuthContext
+// already owns that redirect (a smooth in-app navigation on first load); this
+// handler covers the gap where a NON-/me request 401s mid-session.
+const ME_QUERY_KEY = JSON.stringify(getGetMeQueryKey());
 
-// Authenticated pages render inside Layout (sidebar + header).
-function ShellRoute({ component: Component }: { component: any }) {
-  return (
-    <Layout>
-      <Component />
-    </Layout>
-  );
+function redirectToLoginOn401(error: unknown) {
+  const status = (error as { status?: number } | null)?.status;
+  if (status !== 401) return;
+  // Don't loop / don't clobber the login screen's own error toasts.
+  if (window.location.pathname.replace(/\/+$/, "").endsWith("/connexion")) return;
+  const base = import.meta.env.BASE_URL.replace(/\/$/, "");
+  window.location.assign(`${base}/connexion`);
 }
+
+const queryClient = new QueryClient({
+  defaultOptions: {
+    queries: {
+      // Don't retry client errors (401/403/404/422) — only transient failures.
+      retry: (failureCount, error) => {
+        const status = (error as { status?: number } | null)?.status;
+        if (typeof status === "number" && status >= 400 && status < 500) return false;
+        return failureCount < 2;
+      },
+    },
+  },
+  queryCache: new QueryCache({
+    onError: (error, query) => {
+      if (JSON.stringify(query.queryKey) === ME_QUERY_KEY) return; // AuthContext owns /me
+      redirectToLoginOn401(error);
+    },
+  }),
+  mutationCache: new MutationCache({
+    onError: redirectToLoginOn401,
+  }),
+});
 
 function Router() {
   const { user, isLoading } = useAuth();
-  // Freeze location into Switch so the EXITING tree (held in place by
-  // AnimatePresence) keeps rendering its OLD route until its exit completes.
-  // Without this, both old & new motion.divs would show the new route during
-  // the exit window, causing a flash.
   const [location] = useLocation();
 
   if (isLoading) {
@@ -54,52 +79,51 @@ function Router() {
     );
   }
 
-  if (user?.role === "truck") {
-    return (
+  // Login is a standalone scene — the Arrival overlay owns its cinematic.
+  if (location === "/connexion") return <Connexion />;
+
+  // Truck drivers get the restricted portal (no command-center shell).
+  if (user?.role === "truck") return <TruckPortal />;
+
+  // Admin / vendeur — ONE persistent command-center shell. The command bar and
+  // sub-nav stay mounted; only the page CONTENT fades on navigation
+  // (AppTransition). No exit, no scene swap, no blink.
+  return (
+    <Layout>
       <AppTransition>
         <Switch location={location}>
-          <Route path="/connexion" component={Connexion} />
-          <Route>{() => <TruckPortal />}</Route>
+          <Route path="/">{() => <Dashboard />}</Route>
+          <Route path="/produits">{() => <Produits />}</Route>
+          <Route path="/categories">{() => <Categories />}</Route>
+          <Route path="/fournisseurs">{() => <Fournisseurs />}</Route>
+          <Route path="/achats">{() => <Achats />}</Route>
+          <Route path="/clients">{() => <Clients />}</Route>
+          <Route path="/camions">{() => <Camions />}</Route>
+          <Route path="/stock">{() => <Stock />}</Route>
+          <Route path="/factures">{() => <Factures />}</Route>
+          <Route path="/retours">{() => <Retours />}</Route>
+          <Route path="/caisse">{() => <Caisse />}</Route>
+          <Route path="/rapports">{() => <Rapports />}</Route>
+          <Route path="/utilisateurs">{() => <Utilisateurs />}</Route>
+          <Route>{() => <NotFound />}</Route>
         </Switch>
       </AppTransition>
-    );
-  }
-
-  return (
-    <AppTransition>
-      <Switch location={location}>
-        <Route path="/connexion" component={Connexion} />
-        <Route path="/">{() => <ShellRoute component={Dashboard} />}</Route>
-        <Route path="/produits">{() => <ShellRoute component={Produits} />}</Route>
-        <Route path="/categories">{() => <ShellRoute component={Categories} />}</Route>
-        <Route path="/fournisseurs">{() => <ShellRoute component={Fournisseurs} />}</Route>
-        <Route path="/achats">{() => <ShellRoute component={Achats} />}</Route>
-        <Route path="/clients">{() => <ShellRoute component={Clients} />}</Route>
-        <Route path="/camions">{() => <ShellRoute component={Camions} />}</Route>
-        <Route path="/stock">{() => <ShellRoute component={Stock} />}</Route>
-        <Route path="/factures">{() => <ShellRoute component={Factures} />}</Route>
-        <Route path="/retours">{() => <ShellRoute component={Retours} />}</Route>
-        <Route path="/caisse">{() => <ShellRoute component={Caisse} />}</Route>
-        <Route path="/rapports">{() => <ShellRoute component={Rapports} />}</Route>
-        <Route path="/utilisateurs">{() => <ShellRoute component={Utilisateurs} />}</Route>
-        <Route>{() => <ShellRoute component={NotFound} />}</Route>
-      </Switch>
-    </AppTransition>
+    </Layout>
   );
 }
 
 function App() {
   return (
+    <ErrorBoundary>
     <QueryClientProvider client={queryClient}>
       <ThemeProvider>
         <TooltipProvider>
           <WouterRouter base={import.meta.env.BASE_URL.replace(/\/$/, "")}>
             <AuthProvider>
               <ArrivalProvider>
-                {/* ALLAL cinematic experience — one persistent session behind the UI.
-                    Each route is a scene; navigation is a cinematic camera move.
-                    Mounted INSIDE ArrivalProvider so its reactive overlays can
-                    read the global click cascade phase from useArrival(). */}
+                {/* ALLAL — ONE Operations Center behind the whole app. The
+                    environment is a single static layer; the only cinematic is
+                    the login/logout Arrival overlay (owned by ArrivalProvider). */}
                 <ExperienceBackground />
                 {/* App content composited ABOVE the cinematic layer (UI is the hero). */}
                 <div style={{ position: "relative", zIndex: 1 }}>
@@ -113,6 +137,7 @@ function App() {
         </TooltipProvider>
       </ThemeProvider>
     </QueryClientProvider>
+    </ErrorBoundary>
   );
 }
 

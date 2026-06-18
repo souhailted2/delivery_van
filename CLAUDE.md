@@ -81,6 +81,35 @@ separate codebase — assume nothing is shared unless verified.
   (`ON CONFLICT DO NOTHING` + RETURNING-gated reconciliation) — never
   double-apply on retry.
 
+## API Security — Cloud (Phase 1, deployed 2026-06-18)
+
+The cloud API (`artifacts/api-server`) enforces authentication and hardened
+session/CORS handling. Do not regress these:
+- **Global auth gate**: `src/routes/index.ts` mounts `requireAuth`
+  (`src/lib/authMiddleware.ts`) after the public `health` + `auth` routers and
+  before every data/mutation router. Only `/api/healthz` and `/api/auth/*` are
+  public; everything else requires a user OR truck session (401 otherwise).
+- **Admin gating**: `requireAdmin` (DB role check) guards user
+  create/update/delete (`users.ts`) and dispatch management (`dispatches.ts`).
+  Truck/non-admin → 403.
+- **`SESSION_SECRET` is REQUIRED in production** — `app.ts` throws on boot if
+  `NODE_ENV=production` and it is unset/empty (no more public-constant
+  fallback). It is supplied by `/etc/erp.env` on the Hetzner box (persists
+  across deploys; CI does not manage it). A fresh host MUST set it.
+- **Cookies**: `secure` in production + `sameSite:lax` + `httpOnly`, with
+  `app.set("trust proxy", 1)` so the cookie is issued behind nginx (which
+  forwards `X-Forwarded-Proto`). **CORS**: allowlist via `CORS_ORIGINS`
+  (defaults to `https://deleveri.alllal.com`); no-Origin (server-to-server
+  sync) allowed; unknown browser origins → 403. A global Express error handler
+  keeps stack traces out of prod responses.
+- **Scope**: these are CLOUD-only. The desktop local server
+  (`desktop/server`) is intentionally unchanged (loopback `127.0.0.1`,
+  single-user). The shared frontend also ships an `ErrorBoundary` + global 401
+  redirect (`App.tsx`).
+- **CI revert hazard**: `deploy-hetzner.yml` deploys `main`. Keep these changes
+  on `main`, or a deploy from an older `main` will re-expose the API. (Closed
+  once the redesign branch is merged to `main`.)
+
 ## Synchronization Rules (do not violate)
 
 1. Every syncable table needs exactly: `sync_id text unique

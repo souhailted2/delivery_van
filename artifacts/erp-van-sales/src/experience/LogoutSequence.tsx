@@ -1,153 +1,123 @@
-// ALLAL Experience — Logout (Phase 8 of Director's Plan)
+// ALLAL Experience — Logout (Video-First, reverse, decoupled).
 //
-// The reverse cinematic. Symmetry with the arrival is the single strongest
-// signal that this is a *place* and not a web application. The arrival took
-// the user IN; the logout takes the user OUT.
+// Departure is the arrival played backwards, and it starts the INSTANT the user
+// clicks — the logout request runs in parallel.
 //
-// Timeline (~3.3s total):
-//   T=0.00  ACKNOWLEDGE — 300ms hold. The system is registering the command.
-//   T=0.30  OC POWER-DOWN — 1.6s reverse cascade:
-//             - Command Bar / dashboard cards retreat (handled by Dashboard
-//               via isLeaving gate)
-//             - Wall display fades out R→L (OCReactiveLayer "sleeping")
-//             - Desk monitors sleep in reverse waves
-//             - Cyan accent lighting cools to 40%
-//   T=1.90  DOORWAY CONTRACTS — 600ms reverse dilation. We are looking
-//             through the doorway from inside; the portal contracts around
-//             our view as we step back out.
-//   T=2.50  EXTERIOR — we arrive outside. Truck headlights dim. Entrance
-//             lamp returns to 30% standby over 500ms.
-//   T=3.00  COMMIT — actual logout API call + navigation fires here.
-//   T=3.30  DONE — overlay fades, login card materialises naturally.
+//   • CommandBar calls startLogout() ON CLICK (this mounts immediately and
+//     adopts the pre-decoded warmer) AND navigates to /connexion immediately,
+//     so the login exterior (= this video's FRAME 0) is prepared UNDERNEATH the
+//     overlay while the reverse plays. The overlay therefore fades to the login
+//     screen — NEVER back to the Operations Center.
+//   • The overlay opens on the video's LAST frame (= the dashboard backdrop it
+//     covers) → seamless fade-in. It reverses end → 0 (OC → threshold →
+//     exterior), then fades to the prepared login screen.
+//
+// Reverse playback: HTML5 has no reliable negative playbackRate, so we drive
+// currentTime backwards via rAF on the (warm, buffered) clip, targeting a
+// wall-clock progress so it always finishes in REVERSE_DUR.
 
-import { motion } from "framer-motion";
-import { useEffect, useState } from "react";
-import { routeToScene } from "./scenes";
-import { ease } from "./cinematic";
-import { HQReactiveLayer, type HQPhase } from "./HQReactiveLayer";
-import { OCReactiveLayer, type OCPhase } from "./OCReactiveLayer";
+import { motion, useReducedMotion } from "framer-motion";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { adoptArrivalVideo, parkArrivalVideo, ARRIVAL_POSTER_END } from "./arrival-asset";
 
-const T = {
-  ackEnd:      0.30,
-  pdEnd:       1.90,
-  contractEnd: 2.50,
-  exteriorEnd: 3.00,
-  commit:      3.00,
-  done:        3.30,
-} as const;
+const REVERSE_DUR = 3.2;   // s — wall-clock duration of the reverse move
+const FADE_OUT = 0.5;      // s — overlay fades to the prepared login screen
+const STALL_GUARD = 6000;  // ms — last-resort finish if reverse never starts
 
 interface Props {
-  /** Invoked when the system should actually perform the logout (API + nav). */
-  onCommit: () => void;
   /** Invoked when the overlay can be unmounted. */
   onComplete: () => void;
 }
 
-/* Reverse aperture — at progress=1 it's a tight doorway-shaped hole;
-   at progress=0 it covers the full viewport. */
-function reverseAperture(progress: number): string {
-  const t = progress;
-  const top    = 40 * t;
-  const right  = 35 * t;
-  const bottom = 33 * t;
-  const left   = 35 * t;
-  const radius = 22 * t;
-  return `inset(${top}% ${right}% ${bottom}% ${left}% round ${radius}% ${radius * 0.82}%)`;
-}
+type Stage = "reversing" | "leaving" | "done";
 
-export function LogoutSequence({ onCommit, onComplete }: Props) {
-  const hqSrc = routeToScene("/connexion").image!;
-  const ocSrc = routeToScene("/").image!;
+export function LogoutSequence({ onComplete }: Props) {
+  const reduce = !!useReducedMotion();
+  const containerRef = useRef<HTMLDivElement>(null);
+  const videoRef = useRef<HTMLVideoElement | null>(null);
+  const [stage, setStage] = useState<Stage>("reversing");
+  const doneRef = useRef(false);
+  const rafRef = useRef(0);
 
-  const [stage, setStage] = useState<"ack" | "powerdown" | "contracting" | "exterior" | "done">("ack");
+  const finish = useCallback(() => {
+    if (doneRef.current) return;
+    doneRef.current = true;
+    setStage("leaving");
+    window.setTimeout(() => { setStage("done"); onComplete(); }, FADE_OUT * 1000);
+  }, [onComplete]);
 
+  // ── REDUCED MOTION: brief hold then finish ────────────────────────────────
   useEffect(() => {
-    const tPd     = window.setTimeout(() => setStage("powerdown"),    T.ackEnd       * 1000);
-    const tContr  = window.setTimeout(() => setStage("contracting"),  T.pdEnd        * 1000);
-    const tExt    = window.setTimeout(() => setStage("exterior"),     T.contractEnd  * 1000);
-    const tCommit = window.setTimeout(onCommit,                       T.commit       * 1000);
-    const tDone   = window.setTimeout(() => {
-      setStage("done");
-      onComplete();
-    },                                                                T.done         * 1000);
-    return () => {
-      window.clearTimeout(tPd);
-      window.clearTimeout(tContr);
-      window.clearTimeout(tExt);
-      window.clearTimeout(tCommit);
-      window.clearTimeout(tDone);
+    if (!reduce) return;
+    const t = window.setTimeout(finish, 300);
+    return () => window.clearTimeout(t);
+  }, [reduce, finish]);
+
+  // ── REVERSE PATH: adopt the pre-decoded warmer, drive currentTime backwards ─
+  useEffect(() => {
+    if (reduce) return;
+    const container = containerRef.current;
+    if (!container) return;
+    const v = adoptArrivalVideo(container, "cover");
+    videoRef.current = v;
+    if (!v) { finish(); return; }
+    let cancelled = false;
+
+    const start = () => {
+      if (cancelled) return;
+      const dur = v.duration || 4.9;
+      try { v.pause(); } catch { /* noop */ }
+      try { v.currentTime = Math.max(0, dur - 0.05); } catch { /* noop */ }
+      let t0 = 0;
+      const step = (ts: number) => {
+        if (cancelled) return;
+        if (!t0) t0 = ts;
+        const p = Math.min(1, (ts - t0) / (REVERSE_DUR * 1000));
+        if (!v.seeking) { try { v.currentTime = Math.max(0, dur * (1 - p)); } catch { /* noop */ } }
+        if (p >= 1) { finish(); return; }
+        rafRef.current = requestAnimationFrame(step);
+      };
+      rafRef.current = requestAnimationFrame(step);
     };
-  }, [onCommit, onComplete]);
 
-  const ocPhase: OCPhase =
-    stage === "ack" ? "active"
-    : stage === "powerdown" ? "sleeping"
-    : "dim";
+    if (v.readyState >= 1) start();
+    else v.addEventListener("loadedmetadata", start, { once: true });
 
-  // HQ phase: standby once we're back outside. During the contracting beat
-  // the interior is still occupying the viewport so HQ doesn't matter yet.
-  const hqPhase: HQPhase =
-    stage === "exterior" || stage === "done" ? "standby" : "standby";
+    const guard = window.setTimeout(finish, STALL_GUARD);
 
-  // Overlay opacity by stage:
-  //  ack         → translucent (0.05 → 0.45) so Dashboard's reverse-stagger
-  //                is visible underneath (cards retreating into the room)
-  //  powerdown+  → fully opaque (1.0) so the reverse cinematic owns the frame
-  //  done        → fades to 0 so the login resting state is revealed
-  const overlayOpacity =
-    stage === "ack"  ? 0.45
-    : stage === "done" ? 0
-    : 1;
-
-  // Doorway contraction progress
-  const contractActive = stage === "contracting";
+    return () => {
+      cancelled = true;
+      cancelAnimationFrame(rafRef.current);
+      window.clearTimeout(guard);
+      v.removeEventListener("loadedmetadata", start);
+      parkArrivalVideo();
+    };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [reduce]);
 
   return (
     <motion.div
       aria-hidden
-      initial={{ opacity: 0.05 }}
-      animate={{ opacity: overlayOpacity }}
-      transition={{ duration: 0.4, ease: ease.land as any }}
+      ref={containerRef}
+      // OPAQUE FROM THE FIRST PAINT — no fade-in. The overlay opens on the
+      // video's LAST frame (= the dashboard backdrop the user is already
+      // looking at), so rendering it fully opaque on mount is visually
+      // seamless AND instantly hides the synchronous /connexion swap happening
+      // underneath (CommandBar navigates on click). This kills the exterior +
+      // login-card flash that a fade-in used to reveal during its 0→1 ramp.
+      // It only ever animates OUT — fading to the prepared login screen.
+      initial={{ opacity: 1 }}
+      animate={{ opacity: stage === "reversing" ? 1 : 0 }}
+      transition={{ duration: FADE_OUT, ease: [0.4, 0, 0.2, 1] }}
       style={{
         position: "fixed",
         inset: 0,
         zIndex: 100,
         overflow: "hidden",
-        background: "#05080f",
+        // End poster (= video last frame = dashboard backdrop) → seamless, no black.
+        background: `#05080f url(${ARRIVAL_POSTER_END}) center / cover no-repeat`,
         willChange: "opacity",
       }}
-    >
-      {/* ── Interior plate — visible throughout ack + powerdown + contracting.
-            During contracting, the clip-path shrinks around the view. */}
-      {(stage === "ack" || stage === "powerdown" || stage === "contracting") && (
-        <motion.div
-          initial={{ clipPath: reverseAperture(0) }}
-          animate={{ clipPath: contractActive ? reverseAperture(1) : reverseAperture(0) }}
-          transition={{ duration: 0.6, ease: ease.expoOut as any }}
-          style={{ position: "absolute", inset: 0, willChange: "clip-path" }}
-        >
-          <img src={ocSrc} alt="" style={{ position: "absolute", inset: 0, width: "100%", height: "100%", objectFit: "cover" }} />
-          <OCReactiveLayer phase={ocPhase} />
-          <div style={{ position: "absolute", inset: 0, background: "radial-gradient(58% 48% at 50% 36%, rgba(14,154,167,0.10), transparent 72%)", pointerEvents: "none" }} />
-          <div style={{ position: "absolute", inset: 0, background: "linear-gradient(180deg, transparent 68%, rgba(5,8,15,0.32))", pointerEvents: "none" }} />
-        </motion.div>
-      )}
-
-      {/* ── Exterior plate — revealed once the doorway has contracted past
-            the screen edges. The camera has stepped back outside. */}
-      {(stage === "exterior" || stage === "done") && (
-        <motion.div
-          initial={{ scale: 1.26, opacity: 0, transformOrigin: "50% 52%" }}
-          animate={{ scale: 1.08, opacity: 1 }}
-          transition={{ duration: 0.6, ease: ease.expoOut as any }}
-          style={{ position: "absolute", inset: 0, willChange: "transform, opacity" }}
-        >
-          <img src={hqSrc} alt="" style={{ position: "absolute", inset: 0, width: "100%", height: "100%", objectFit: "cover" }} />
-          <HQReactiveLayer phase={hqPhase} />
-          <div style={{ position: "absolute", inset: 0, background: "radial-gradient(58% 48% at 50% 36%, rgba(14,154,167,0.10), transparent 72%)", pointerEvents: "none" }} />
-          <div style={{ position: "absolute", inset: 0, background: "linear-gradient(180deg, transparent 68%, rgba(5,8,15,0.32))", pointerEvents: "none" }} />
-        </motion.div>
-      )}
-    </motion.div>
+    />
   );
 }
