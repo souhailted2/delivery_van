@@ -83,8 +83,21 @@ function Router() {
   // Login is a standalone scene — the Arrival overlay owns its cinematic.
   if (location === "/connexion") return <Connexion />;
 
+  // No authenticated user (session ended, or /me is still resolving after the
+  // first paint) — do NOT mount the protected shell. Rendering Dashboard with a
+  // null user would fire its data queries, which 401 and trigger the global
+  // hard-redirect in redirectToLoginOn401. AuthContext owns the navigation to
+  // /connexion; we just hold the loader until it does.
+  if (!user) {
+    return (
+      <div className="min-h-screen flex items-center justify-center">
+        <p className="text-muted-foreground">جارٍ التحميل...</p>
+      </div>
+    );
+  }
+
   // Truck drivers get the restricted portal (no command-center shell).
-  if (user?.role === "truck") return <TruckPortal />;
+  if (user.role === "truck") return <TruckPortal />;
 
   // Admin / vendeur — ONE persistent command-center shell. The command bar and
   // sub-nav stay mounted; only the page CONTENT fades on navigation

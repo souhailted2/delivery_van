@@ -152,7 +152,7 @@ function onStatus(fn) {
 
 // ─── HTTP ────────────────────────────────────────────────────────────────────
 
-function request(method, url, data, cookie) {
+function request(method, url, data, cookie, timeoutMs) {
   return new Promise((resolve, reject) => {
     const parsed  = new URL(url);
     const isHttps = parsed.protocol === "https:";
@@ -169,7 +169,7 @@ function request(method, url, data, cookie) {
         ...(body   ? { "Content-Length": Buffer.byteLength(body) } : {}),
         ...(cookie ? { "Cookie": cookie } : {}),
       },
-      timeout: REQUEST_TIMEOUT,
+      timeout: timeoutMs || REQUEST_TIMEOUT,
     };
     const req = lib.request(opts, (res) => {
       let raw = "";
@@ -238,6 +238,41 @@ async function checkOnline() {
   } catch {
     return false;
   }
+}
+
+// ─── Interactive login passthrough (online identity unification) ───────────────
+//
+// When the desktop is ONLINE, the interactive /auth/login should authenticate
+// against the SAME cloud identity source as web/mobile — not the local SQLite
+// seed — so credentials never diverge (the old behaviour let a stale local
+// `admin/admin123` accept a password the cloud had already changed). The desktop
+// route calls this first; only when the cloud is UNREACHABLE does it fall back
+// to local SQLite (true offline-first). A cloud 401 is authoritative and is NOT
+// retried locally.
+//
+// Returns:
+//   { reachable: false }                      → offline / network error → caller falls back to local
+//   { reachable: true, ok: false, status }    → cloud rejected the credentials (authoritative)
+//   { reachable: true, ok: true, user }        → cloud authenticated; `user` is the cloud identity
+//
+// On success the cloud session cookie is adopted so a sync can proceed without a
+// second round-trip. A short timeout keeps the login responsive when offline.
+const LOGIN_TIMEOUT = 8_000;
+async function cloudLogin(username, password) {
+  let r;
+  try {
+    r = await request("POST", `${REMOTE_BASE}/auth/login`, { username, password }, null, LOGIN_TIMEOUT);
+  } catch {
+    return { reachable: false };
+  }
+  if (r.status === 200 && r.data && r.data.user) {
+    sessionCookie = extractCookie(r.headers);
+    return { reachable: true, ok: true, user: r.data.user };
+  }
+  if (r.status === 401) return { reachable: true, ok: false, status: 401 };
+  // Any other status (5xx, etc.) — treat as not authoritative so the caller can
+  // still serve the user offline rather than locking them out on a cloud hiccup.
+  return { reachable: false };
 }
 
 // ─── SQLite helpers ──────────────────────────────────────────────────────────
@@ -698,4 +733,4 @@ async function cloudRequest(method, apiPath, data) {
   return request(method, `${REMOTE_BASE}${apiPath}`, data, sessionCookie);
 }
 
-module.exports = { start, stop, syncOnce, saveCredentials, getCredentials, onStatus, getStatus: () => ({ ...status }), resetSync, getSessionCookie, cloudRequest };
+module.exports = { start, stop, syncOnce, saveCredentials, getCredentials, onStatus, getStatus: () => ({ ...status }), resetSync, getSessionCookie, cloudRequest, cloudLogin };

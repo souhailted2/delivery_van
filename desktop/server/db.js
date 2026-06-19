@@ -34,7 +34,13 @@ function initDb(userDataPath) {
   runMigrations();
   createIndexes();
   createTriggers();
-  seedDefaultAdmin();
+  // NOTE: no default admin is seeded anymore. The desktop now authenticates
+  // interactive logins against the cloud identity source when online (see
+  // routes/auth.js → sync-engine.cloudLogin), and that path mirrors the real
+  // cloud user (with the real password) into local SQLite. Seeding a hardcoded
+  // `admin/admin123` used to shadow the cloud admin and let a stale/default
+  // password log in offline forever — the credential-divergence bug. First-run
+  // login therefore REQUIRES connectivity once; offline logins work thereafter.
   return db;
 }
 
@@ -382,15 +388,10 @@ function createIndexes() {
   `);
 }
 
-function seedDefaultAdmin() {
-  const existing = db.prepare("SELECT id FROM users WHERE username = 'admin'").get();
-  if (!existing) {
-    db.prepare(`
-      INSERT INTO users (username, password_hash, full_name, role)
-      VALUES ('admin', ?, 'Administrateur', 'admin')
-    `).run(hashPassword("admin123"));
-  }
-}
+// Intentionally removed: the old seedDefaultAdmin() inserted a hardcoded
+// `admin/admin123` row, which shadowed the real cloud admin (different password,
+// different sync_id) and caused the web↔desktop credential divergence. Identity
+// now comes from the cloud via the online-passthrough login (routes/auth.js).
 
 // ─── sync_meta helpers ────────────────────────────────────────────────────────
 
