@@ -1,36 +1,34 @@
 import { Feather } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
 import { router } from "expo-router";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
-  KeyboardAvoidingView, Platform,
+  Animated, Image, KeyboardAvoidingView, Platform,
   StyleSheet, Text, TextInput, View,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { AppButton, PressableScale, ResultDialog } from "@/components/ui";
+import { AmbientBackground, AppButton, GlassCard, PressableScale, ResultDialog } from "@/components/ui";
 import type { DialogAction, ResultVariant } from "@/components/ui";
 import { useAuth } from "@/contexts/AuthContext";
-import { fonts } from "@/constants/tokens";
+import { fonts, motion } from "@/constants/tokens";
 import { useTheme } from "@/hooks/useTheme";
+
+const logo = require("../assets/images/logo.png");
 
 type Tab = "user" | "truck";
 
 export default function LoginScreen() {
   const { login, truckLogin } = useAuth();
-  const t = useTheme();
-  const c = t.color;
+  const c = useTheme().color;
   const insets = useSafeAreaInsets();
 
-  const [tab, setTab] = useState<Tab>("user");
-
+  const [tab, setTab] = useState<Tab>("truck"); // driver-first: this is a field tool
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [showPass, setShowPass] = useState(false);
-
   const [truckName, setTruckName] = useState("");
   const [truckPassword, setTruckPassword] = useState("");
   const [showTruckPass, setShowTruckPass] = useState(false);
-
   const [loading, setLoading] = useState(false);
 
   const [dialog, setDialog] = useState<{ visible: boolean; variant: ResultVariant; title: string; message?: string; actions?: DialogAction[] }>(
@@ -40,11 +38,18 @@ export default function LoginScreen() {
     setDialog({ visible: true, variant, title, message, actions });
   const hideDialog = () => setDialog((d) => ({ ...d, visible: false }));
 
+  // Glass entrance: card fades + rises in.
+  const fade = useRef(new Animated.Value(0)).current;
+  const rise = useRef(new Animated.Value(24)).current;
+  useEffect(() => {
+    Animated.parallel([
+      Animated.timing(fade, { toValue: 1, duration: motion.duration.slow, easing: motion.easing.out, useNativeDriver: true }),
+      Animated.timing(rise, { toValue: 0, duration: motion.duration.slow, easing: motion.easing.out, useNativeDriver: true }),
+    ]).start();
+  }, [fade, rise]);
+
   const handleUserLogin = async () => {
-    if (!username.trim() || !password.trim()) {
-      showDialog("warning", "تنبيه", "يرجى إدخال اسم المستخدم وكلمة المرور");
-      return;
-    }
+    if (!username.trim() || !password.trim()) { showDialog("warning", "تنبيه", "يرجى إدخال اسم المستخدم وكلمة المرور"); return; }
     try {
       setLoading(true);
       await login(username.trim(), password.trim());
@@ -53,16 +58,11 @@ export default function LoginScreen() {
     } catch (e: any) {
       await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
       showDialog("error", "خطأ", e?.message ?? "فشل تسجيل الدخول. تحقق من بيانات الاتصال والسيرفر.");
-    } finally {
-      setLoading(false);
-    }
+    } finally { setLoading(false); }
   };
 
   const handleTruckLogin = async () => {
-    if (!truckName.trim() || !truckPassword.trim()) {
-      showDialog("warning", "تنبيه", "يرجى إدخال اسم الشاحنة وكلمة المرور");
-      return;
-    }
+    if (!truckName.trim() || !truckPassword.trim()) { showDialog("warning", "تنبيه", "يرجى إدخال اسم الشاحنة وكلمة المرور"); return; }
     try {
       setLoading(true);
       await truckLogin(truckName.trim(), truckPassword.trim());
@@ -71,178 +71,87 @@ export default function LoginScreen() {
     } catch (e: any) {
       await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
       showDialog("error", "خطأ", e?.message ?? "فشل تسجيل الدخول. تحقق من اسم الشاحنة وكلمة المرور.");
-    } finally {
-      setLoading(false);
-    }
+    } finally { setLoading(false); }
   };
 
-  return (
-    <KeyboardAvoidingView
-      style={[styles.container, { backgroundColor: c.bg, paddingTop: insets.top }]}
-      behavior={Platform.OS === "ios" ? "padding" : undefined}
-    >
-      <View style={styles.card}>
-        <View style={[styles.logoBox, { backgroundColor: c.brand }]}>
-          <Feather name="truck" size={36} color={c.onBrand} />
-        </View>
-        <Text style={[styles.title, { color: c.text }]}>ERP Van Sales</Text>
-        <Text style={[styles.subtitle, { color: c.textMuted }]}>تسجيل الدخول</Text>
-
-        {/* Tab switcher */}
-        <View style={[styles.tabRow, { backgroundColor: c.surfaceElevated, borderColor: c.hairline }]}>
-          <PressableScale
-            style={[
-              styles.tabBtn,
-              tab === "user"
-                ? { backgroundColor: c.brand }
-                : { backgroundColor: "transparent" },
-            ]}
-            onPress={() => setTab("user")}
-          >
-            <Feather
-              name="user"
-              size={14}
-              color={tab === "user" ? c.onBrand : c.text}
-              style={{ marginBottom: 2 }}
-            />
-            <Text style={[styles.tabText, { color: tab === "user" ? c.onBrand : c.text }]}>
-              مستخدم
-            </Text>
-          </PressableScale>
-          <PressableScale
-            style={[
-              styles.tabBtn,
-              tab === "truck"
-                ? { backgroundColor: c.brand }
-                : { backgroundColor: "transparent" },
-            ]}
-            onPress={() => setTab("truck")}
-          >
-            <Feather
-              name="truck"
-              size={14}
-              color={tab === "truck" ? c.onBrand : c.text}
-              style={{ marginBottom: 2 }}
-            />
-            <Text style={[styles.tabText, { color: tab === "truck" ? c.onBrand : c.text }]}>
-              شاحنة
-            </Text>
-          </PressableScale>
-        </View>
-
-        {tab === "user" ? (
-          <>
-            <View style={[styles.inputWrap, { borderColor: c.hairline, backgroundColor: c.surface }]}>
-              <Feather name="user" size={16} color={c.textMuted} style={styles.inputIcon} />
-              <TextInput
-                style={[styles.input, { color: c.text }]}
-                placeholder="اسم المستخدم"
-                placeholderTextColor={c.textFaint}
-                value={username}
-                onChangeText={setUsername}
-                autoCapitalize="none"
-                autoCorrect={false}
-                textAlign="right"
-              />
-            </View>
-
-            <View style={[styles.inputWrap, { borderColor: c.hairline, backgroundColor: c.surface }]}>
-              <PressableScale onPress={() => setShowPass(v => !v)} style={styles.inputIcon}>
-                <Feather name={showPass ? "eye-off" : "eye"} size={16} color={c.textMuted} />
-              </PressableScale>
-              <TextInput
-                style={[styles.input, { color: c.text }]}
-                placeholder="كلمة المرور"
-                placeholderTextColor={c.textFaint}
-                value={password}
-                onChangeText={setPassword}
-                secureTextEntry={!showPass}
-                textAlign="right"
-              />
-            </View>
-
-            <AppButton
-              label="دخول"
-              size="lg"
-              fullWidth
-              loading={loading}
-              disabled={loading}
-              onPress={handleUserLogin}
-              style={styles.btn}
-            />
-          </>
-        ) : (
-          <>
-            <View style={[styles.inputWrap, { borderColor: c.hairline, backgroundColor: c.surface }]}>
-              <Feather name="truck" size={16} color={c.textMuted} style={styles.inputIcon} />
-              <TextInput
-                style={[styles.input, { color: c.text }]}
-                placeholder="اسم الشاحنة (مثال: شاحنة 1)"
-                placeholderTextColor={c.textFaint}
-                value={truckName}
-                onChangeText={setTruckName}
-                autoCapitalize="none"
-                autoCorrect={false}
-                textAlign="right"
-              />
-            </View>
-
-            <View style={[styles.inputWrap, { borderColor: c.hairline, backgroundColor: c.surface }]}>
-              <PressableScale onPress={() => setShowTruckPass(v => !v)} style={styles.inputIcon}>
-                <Feather name={showTruckPass ? "eye-off" : "eye"} size={16} color={c.textMuted} />
-              </PressableScale>
-              <TextInput
-                style={[styles.input, { color: c.text }]}
-                placeholder="كلمة المرور"
-                placeholderTextColor={c.textFaint}
-                value={truckPassword}
-                onChangeText={setTruckPassword}
-                secureTextEntry={!showTruckPass}
-                textAlign="right"
-              />
-            </View>
-
-            <AppButton
-              label="دخول كشاحنة"
-              size="lg"
-              fullWidth
-              loading={loading}
-              disabled={loading}
-              onPress={handleTruckLogin}
-              style={styles.btn}
-            />
-          </>
-        )}
-      </View>
-
-      <ResultDialog
-        visible={dialog.visible}
-        variant={dialog.variant}
-        title={dialog.title}
-        message={dialog.message}
-        actions={dialog.actions}
-        onRequestClose={hideDialog}
+  const Input = ({ icon, value, onChangeText, placeholder, secure, onToggle, showing, ...extra }: any) => (
+    <GlassCard radius={14} style={styles.inputWrap}>
+      <PressableScale onPress={onToggle ?? (() => {})} style={styles.inputIcon} disabled={!onToggle}>
+        <Feather name={onToggle ? (showing ? "eye-off" : "eye") : icon} size={16} color={c.textMuted} />
+      </PressableScale>
+      <TextInput
+        style={[styles.input, { color: c.text }]}
+        placeholder={placeholder}
+        placeholderTextColor={c.textFaint}
+        value={value}
+        onChangeText={onChangeText}
+        secureTextEntry={secure}
+        textAlign="right"
+        {...extra}
       />
-    </KeyboardAvoidingView>
+    </GlassCard>
+  );
+
+  return (
+    <View style={{ flex: 1, backgroundColor: c.glassBase }}>
+      <AmbientBackground />
+      <KeyboardAvoidingView
+        style={[styles.container, { paddingTop: insets.top }]}
+        behavior={Platform.OS === "ios" ? "padding" : undefined}
+      >
+        <Animated.View style={[styles.card, { opacity: fade, transform: [{ translateY: rise }] }]}>
+          {/* Logo lockup — glowing glass medallion */}
+          <GlassCard strong tealEdge radius={999} style={styles.medallion}>
+            <Image source={logo} style={styles.logoImg} resizeMode="contain" />
+          </GlassCard>
+          <Text style={[styles.brand, { color: c.text }]}>ALLAL <Text style={{ color: c.brandText }}>Delivery</Text></Text>
+          <Text style={[styles.subtitle, { color: c.textMuted }]}>نظام مبيعات الشاحنة</Text>
+
+          {/* Glass tab switcher */}
+          <GlassCard radius={14} style={styles.tabRow}>
+            {(["truck", "user"] as Tab[]).map(tb => {
+              const active = tab === tb;
+              return (
+                <PressableScale key={tb} style={[styles.tabBtn, active && { backgroundColor: c.brand, borderRadius: 11 }]} onPress={() => setTab(tb)}>
+                  <Feather name={tb === "truck" ? "truck" : "user"} size={14} color={active ? c.onBrand : c.textMuted} />
+                  <Text style={[styles.tabText, { color: active ? c.onBrand : c.textMuted }]}>{tb === "truck" ? "شاحنة" : "مستخدم"}</Text>
+                </PressableScale>
+              );
+            })}
+          </GlassCard>
+
+          {tab === "user" ? (
+            <>
+              <Input icon="user" value={username} onChangeText={setUsername} placeholder="اسم المستخدم" autoCapitalize="none" autoCorrect={false} />
+              <Input value={password} onChangeText={setPassword} placeholder="كلمة المرور" secure={!showPass} onToggle={() => setShowPass(v => !v)} showing={showPass} />
+              <AppButton label="دخول" size="lg" fullWidth loading={loading} disabled={loading} onPress={handleUserLogin} style={styles.btn} />
+            </>
+          ) : (
+            <>
+              <Input icon="truck" value={truckName} onChangeText={setTruckName} placeholder="اسم الشاحنة (مثال: شاحنة 1)" autoCapitalize="none" autoCorrect={false} />
+              <Input value={truckPassword} onChangeText={setTruckPassword} placeholder="كلمة المرور" secure={!showTruckPass} onToggle={() => setShowTruckPass(v => !v)} showing={showTruckPass} />
+              <AppButton label="دخول كشاحنة" size="lg" fullWidth loading={loading} disabled={loading} onPress={handleTruckLogin} style={styles.btn} />
+            </>
+          )}
+        </Animated.View>
+      </KeyboardAvoidingView>
+
+      <ResultDialog visible={dialog.visible} variant={dialog.variant} title={dialog.title} message={dialog.message} actions={dialog.actions} onRequestClose={hideDialog} />
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
   container: { flex: 1, justifyContent: "center", alignItems: "center", padding: 24 },
   card: { width: "100%", maxWidth: 380, alignItems: "center", gap: 14 },
-  logoBox: { width: 80, height: 80, borderRadius: 20, alignItems: "center", justifyContent: "center", marginBottom: 4 },
-  title: { fontSize: 24, fontFamily: fonts.bold },
-  subtitle: { fontSize: 15, fontFamily: fonts.regular, marginBottom: 4 },
-  tabRow: {
-    width: "100%", flexDirection: "row", borderWidth: 1,
-    borderRadius: 12, overflow: "hidden", marginBottom: 4,
-  },
-  tabBtn: { flex: 1, paddingVertical: 10, alignItems: "center", gap: 2 },
+  medallion: { width: 96, height: 96, alignItems: "center", justifyContent: "center", marginBottom: 6 },
+  logoImg: { width: 64, height: 64 },
+  brand: { fontSize: 24, fontFamily: fonts.bold, letterSpacing: 1 },
+  subtitle: { fontSize: 14, fontFamily: fonts.regular, marginBottom: 6 },
+  tabRow: { width: "100%", flexDirection: "row", padding: 4, gap: 4, marginBottom: 4 },
+  tabBtn: { flex: 1, flexDirection: "row-reverse", justifyContent: "center", alignItems: "center", gap: 6, paddingVertical: 10 },
   tabText: { fontSize: 13, fontFamily: fonts.bold },
-  inputWrap: {
-    width: "100%", flexDirection: "row-reverse", alignItems: "center",
-    borderWidth: 1, borderRadius: 12, paddingHorizontal: 14, height: 52,
-  },
+  inputWrap: { width: "100%", flexDirection: "row-reverse", alignItems: "center", paddingHorizontal: 14, height: 52 },
   inputIcon: { marginLeft: 8 },
   input: { flex: 1, fontSize: 15, fontFamily: fonts.regular, textAlign: "right" },
   btn: { width: "100%", marginTop: 6 },

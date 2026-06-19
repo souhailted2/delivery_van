@@ -110,6 +110,14 @@ export const theme = {
     onColor: palette.white,
     scrim: "rgba(0,0,0,0.6)",
     glow: "rgba(14,154,167,0.45)",
+    // ── Glass & Glow language ──
+    glassBase: "#0A0D13",                       // ambient backdrop base (behind the glow)
+    glass: "rgba(22,27,38,0.55)",               // translucent card fill
+    glassStrong: "rgba(26,32,44,0.74)",         // heavier glass (heroes / sheets)
+    glassBorder: "rgba(255,255,255,0.09)",      // hairline light edge
+    glassBorderTeal: "rgba(22,194,210,0.26)",   // teal-tinted edge for accented glass
+    glassHighlight: "rgba(255,255,255,0.06)",
+    glowTeal: "#0E9AA7",
   },
 } as const;
 

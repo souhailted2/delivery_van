@@ -8,6 +8,8 @@
  */
 export { PressableScale } from "./PressableScale";
 export { Surface } from "./Surface";
+export { GlassCard } from "./GlassCard";
+export { AmbientBackground } from "./AmbientBackground";
 export { AppButton } from "./AppButton";
 export { StatusPill, type Status } from "./StatusPill";
 export { MoneyText } from "./MoneyText";

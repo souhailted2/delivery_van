@@ -2,17 +2,17 @@ import { Feather } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
 import { router } from "expo-router";
 import { useRefreshOnFocus } from "@/hooks/useRefreshOnFocus";
-import { useCallback, useState } from "react";
-import { FlatList, Image, RefreshControl, StyleSheet, Text, View } from "react-native";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { Animated, FlatList, Image, RefreshControl, StyleSheet, Text, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { SyncBar } from "@/components/SyncBar";
-import { MoneyText, PressableScale, StatusPill } from "@/components/ui";
+import { AmbientBackground, GlassCard, MoneyText, PressableScale, StatusPill } from "@/components/ui";
 import { useAuth } from "@/contexts/AuthContext";
 import { useSync } from "@/contexts/SyncContext";
 import { apiFetch } from "@/lib/api";
 import { Client, getDb, Invoice } from "@/lib/db";
 import { getTruckForUser, TruckInfo } from "@/lib/truck";
-import { fonts } from "@/constants/tokens";
+import { fonts, motion } from "@/constants/tokens";
 import { useTheme, type Theme } from "@/hooks/useTheme";
 
 const logo = require("../../assets/images/logo.png");
@@ -36,7 +36,7 @@ function InvoiceCard({ item, t }: { item: InvoiceRow; t: Theme }) {
   const isPending = (item._pending ?? 0) > 0;
   const isCredit = item.payment_type === "credit";
   return (
-    <View style={[styles.card, { backgroundColor: c.surface, borderColor: c.hairline }]}>
+    <GlassCard radius={16} style={styles.card}>
       <View style={styles.cardRow}>
         <View style={[styles.avatar, { backgroundColor: isPending ? c.warningTint : c.successTint }]}>
           <Feather name={isPending ? "clock" : "check-circle"} size={18} color={isPending ? c.warning : c.success} />
@@ -50,7 +50,7 @@ function InvoiceCard({ item, t }: { item: InvoiceRow; t: Theme }) {
           <StatusPill status={isCredit ? "credit" : "paid"} />
         </View>
       </View>
-    </View>
+    </GlassCard>
   );
 }
 
@@ -61,7 +61,7 @@ function ClientCard({ item, t }: { item: Client; t: Theme }) {
   const balance = Number(item.credit_balance ?? 0);
   const tone = balance < 0 ? "negative" : balance > 0 ? "positive" : "muted";
   return (
-    <View style={[styles.card, { backgroundColor: c.surface, borderColor: c.hairline }]}>
+    <GlassCard radius={16} style={styles.card}>
       <View style={styles.cardRow}>
         <View style={[styles.avatar, { backgroundColor: c.brandTint }]}><Feather name="user" size={18} color={c.brandText} /></View>
         <View style={{ flex: 1, alignItems: "flex-end" }}>
@@ -73,17 +73,17 @@ function ClientCard({ item, t }: { item: Client; t: Theme }) {
           <StatusPill status="neutral" label={CLIENT_TYPE_LABELS[item.client_type ?? "retail"] ?? item.client_type} />
         </View>
       </View>
-    </View>
+    </GlassCard>
   );
 }
 
 // One "today" figure tile.
 function TodayTile({ label, amount, tone, t }: { label: string; amount: number; tone: "neutral" | "positive" | "brand"; t: Theme }) {
   return (
-    <View style={[styles.todayTile, { backgroundColor: t.color.surface, borderColor: t.color.hairline }]}>
+    <GlassCard radius={14} style={styles.todayTile}>
       <MoneyText amount={amount} tone={tone} size="callout" />
       <Text style={[styles.todayLabel, { color: t.color.textMuted }]}>{label}</Text>
-    </View>
+    </GlassCard>
   );
 }
 
@@ -96,7 +96,7 @@ function ActionRow({ icon, iconTone, title, sub, right, onPress, t, last }: {
   const tint = iconTone === "danger" ? c.dangerTint : iconTone === "warning" ? c.warningTint : c.brandTint;
   const fg = iconTone === "danger" ? c.danger : iconTone === "warning" ? c.warning : c.brandText;
   return (
-    <PressableScale style={[styles.actionRow, !last && { borderBottomWidth: 1, borderBottomColor: c.hairline }]} onPress={onPress}>
+    <PressableScale style={[styles.actionRow, !last && { borderBottomWidth: 1, borderBottomColor: c.glassBorder }]} onPress={onPress}>
       <Feather name="chevron-left" size={16} color={c.textFaint} />
       <View style={{ flex: 1, alignItems: "flex-end" }}>
         <Text style={[styles.actionTitle, { color: c.text }]} numberOfLines={1}>{title}</Text>
@@ -129,6 +129,16 @@ export default function TruckDashboardScreen() {
   const [tab, setTab] = useState<TabKey>("invoices");
   const [refreshing, setRefreshing] = useState(false);
   const [pendingDispatch, setPendingDispatch] = useState(false);
+
+  // Glass entrance — header fades + rises in once.
+  const fade = useRef(new Animated.Value(0)).current;
+  const rise = useRef(new Animated.Value(18)).current;
+  useEffect(() => {
+    Animated.parallel([
+      Animated.timing(fade, { toValue: 1, duration: motion.duration.slow, easing: motion.easing.out, useNativeDriver: true }),
+      Animated.timing(rise, { toValue: 0, duration: motion.duration.slow, easing: motion.easing.out, useNativeDriver: true }),
+    ]).start();
+  }, [fade, rise]);
 
   const checkDispatch = useCallback(async () => {
     try {
@@ -235,16 +245,16 @@ export default function TruckDashboardScreen() {
   );
 
   const header = (
-    <View>
-      {/* Hero */}
-      <View style={[styles.hero, { backgroundColor: c.surface, borderColor: c.brandBorder, ...t.elevation.glow }]}>
+    <Animated.View style={{ opacity: fade, transform: [{ translateY: rise }] }}>
+      {/* Hero — glowing glass command panel */}
+      <GlassCard strong tealEdge radius={22} style={styles.hero}>
         <View style={styles.headerTop}>
           <View style={styles.logoChip}><Image source={logo} style={styles.logoImg} resizeMode="contain" /></View>
-          <View style={[styles.truckBadge, { backgroundColor: c.brandTint }]}><Feather name="truck" size={22} color={c.brandBright} /></View>
+          <View style={[styles.truckBadge, { backgroundColor: c.brandTint, borderColor: c.glassBorderTeal }]}><Feather name="truck" size={22} color={c.brandBright} /></View>
         </View>
         <Text style={[styles.truckName, { color: c.text }]}>{truck?.name ?? "—"}</Text>
         {truck?.plate_number ? <Text style={[styles.plate, { color: c.textMuted }]}>{truck.plate_number}</Text> : null}
-        <PressableScale style={[styles.cashBox, { borderTopColor: c.hairline }]} onPress={() => router.push("/(tabs)/caisse")}>
+        <PressableScale style={[styles.cashBox, { borderTopColor: c.glassBorder }]} onPress={() => router.push("/(tabs)/caisse")}>
           <View style={{ alignItems: "flex-end" }}>
             <Text style={[styles.cashLabel, { color: c.textMuted }]}>رصيد الصندوق</Text>
             <View style={styles.cashHint}>
@@ -254,7 +264,7 @@ export default function TruckDashboardScreen() {
           </View>
           <MoneyText amount={truck?.cash_balance ?? 0} size="display" />
         </PressableScale>
-      </View>
+      </GlassCard>
 
       {/* Pending task: dispatch awaiting receipt */}
       {pendingDispatch && (
@@ -270,10 +280,10 @@ export default function TruckDashboardScreen() {
 
       {/* Pending task: unsynced operations */}
       {pending > 0 && (
-        <View style={[styles.taskChip, { backgroundColor: c.surface, borderColor: c.hairline }]}>
+        <GlassCard radius={12} style={styles.taskChip}>
           <Feather name="refresh-cw" size={14} color={c.warning} />
           <Text style={[styles.taskChipText, { color: c.textMuted }]}>{pending} عملية بانتظار الرفع — ستُزامَن تلقائياً</Text>
-        </View>
+        </GlassCard>
       )}
 
       {/* TODAY */}
@@ -291,13 +301,13 @@ export default function TruckDashboardScreen() {
             <MoneyText amount={outstanding} tone="negative" size="callout" />
             <Text style={[styles.secLabel, { color: c.textFaint, marginBottom: 0 }]}>للتحصيل</Text>
           </View>
-          <View style={[styles.listCard, { backgroundColor: c.surface, borderColor: c.hairline }]}>
+          <GlassCard radius={14} style={styles.listCard}>
             {debtors.map((d, i) => (
               <ActionRow key={d.sync_id} icon="user" iconTone="danger" title={d.name}
                 right={<MoneyText amount={d.credit_balance} tone="negative" absolute size="footnote" />}
                 onPress={() => router.push(`/client/${d.sync_id}`)} t={t} last={i === debtors.length - 1} />
             ))}
-          </View>
+          </GlassCard>
         </View>
       )}
 
@@ -305,13 +315,13 @@ export default function TruckDashboardScreen() {
       {attention.length > 0 && (
         <View style={styles.section}>
           <Text style={[styles.secLabel, { color: c.textFaint }]}>تحتاج متابعة · {attention.length}</Text>
-          <View style={[styles.listCard, { backgroundColor: c.surface, borderColor: c.hairline }]}>
+          <GlassCard radius={14} style={styles.listCard}>
             {attention.slice(0, 4).map((a, i, arr) => (
               <ActionRow key={a.sync_id} icon="user-x" iconTone="warning" title={a.name}
                 sub={`لم يشترِ منذ ${a.days} يوماً`}
                 onPress={() => router.push(`/client/${a.sync_id}`)} t={t} last={i === arr.length - 1} />
             ))}
-          </View>
+          </GlassCard>
         </View>
       )}
 
@@ -319,18 +329,18 @@ export default function TruckDashboardScreen() {
       {lowStock.length > 0 && (
         <View style={styles.section}>
           <Text style={[styles.secLabel, { color: c.textFaint }]}>مخزون منخفض · {lowStock.length}</Text>
-          <View style={[styles.listCard, { backgroundColor: c.surface, borderColor: c.hairline }]}>
+          <GlassCard radius={14} style={styles.listCard}>
             {lowStock.slice(0, 4).map((s, i, arr) => (
               <ActionRow key={s.sync_id} icon="package" iconTone="warning" title={s.product_name}
                 right={<Text style={[styles.stockQty, { color: c.warningText }]}>{Math.round(Number(s.quantity))} {s.unit ?? ""}</Text>}
                 onPress={() => router.push("/(tabs)/truck")} t={t} last={i === Math.min(arr.length, 4) - 1} />
             ))}
-          </View>
+          </GlassCard>
         </View>
       )}
 
       {/* ACTIVITY */}
-      <View style={[styles.segment, { backgroundColor: c.surface, borderColor: c.hairline }]}>
+      <GlassCard radius={12} style={styles.segment}>
         {TABS.map((tb) => {
           const active = tab === tb.key;
           return (
@@ -340,12 +350,13 @@ export default function TruckDashboardScreen() {
             </PressableScale>
           );
         })}
-      </View>
-    </View>
+      </GlassCard>
+    </Animated.View>
   );
 
   return (
-    <View style={[styles.container, { backgroundColor: c.bg }]}>
+    <View style={[styles.container, { backgroundColor: c.glassBase }]}>
+      <AmbientBackground />
       <SyncBar />
       <FlatList
         data={data}
@@ -374,11 +385,11 @@ const styles = StyleSheet.create({
   container: { flex: 1 },
   list: { paddingHorizontal: 12, paddingBottom: 100, gap: 8 },
 
-  hero: { borderRadius: 20, borderWidth: 1, padding: 16, marginTop: 8, marginBottom: 12, gap: 6 },
+  hero: { padding: 16, marginTop: 8, marginBottom: 12, gap: 6 },
   headerTop: { flexDirection: "row-reverse", justifyContent: "space-between", alignItems: "center" },
   logoChip: { backgroundColor: "#fff", borderRadius: 10, paddingHorizontal: 10, paddingVertical: 6, justifyContent: "center", alignItems: "center" },
   logoImg: { width: 104, height: 34 },
-  truckBadge: { width: 40, height: 40, borderRadius: 20, alignItems: "center", justifyContent: "center" },
+  truckBadge: { width: 40, height: 40, borderRadius: 20, alignItems: "center", justifyContent: "center", borderWidth: 1 },
   truckName: { fontSize: 19, fontFamily: fonts.bold, textAlign: "right", marginTop: 8 },
   plate: { fontSize: 13, fontFamily: fonts.regular, textAlign: "right" },
   cashBox: { flexDirection: "row-reverse", justifyContent: "space-between", alignItems: "center", marginTop: 10, paddingTop: 12, borderTopWidth: 1 },
@@ -391,28 +402,28 @@ const styles = StyleSheet.create({
   dispatchAlertTitle: { fontSize: 14, fontFamily: fonts.bold },
   dispatchAlertSub: { fontSize: 11, fontFamily: fonts.regular },
 
-  taskChip: { flexDirection: "row-reverse", alignItems: "center", gap: 8, borderRadius: 12, borderWidth: 1, paddingHorizontal: 12, paddingVertical: 9, marginBottom: 10 },
+  taskChip: { flexDirection: "row-reverse", alignItems: "center", gap: 8, paddingHorizontal: 12, paddingVertical: 9, marginBottom: 10 },
   taskChipText: { fontSize: 12, fontFamily: fonts.regular },
 
   secLabel: { fontSize: 11, letterSpacing: 0.5, fontFamily: fonts.semibold, textAlign: "right", marginBottom: 8 },
   todayRow: { flexDirection: "row-reverse", gap: 8, marginBottom: 12 },
-  todayTile: { flex: 1, borderRadius: 14, borderWidth: 1, padding: 12, alignItems: "flex-end", gap: 4 },
+  todayTile: { flex: 1, padding: 12, alignItems: "flex-end", gap: 4 },
   todayLabel: { fontSize: 10, fontFamily: fonts.regular },
 
   section: { marginBottom: 12 },
   secHead: { flexDirection: "row-reverse", alignItems: "baseline", justifyContent: "space-between", marginBottom: 8 },
-  listCard: { borderRadius: 14, borderWidth: 1, overflow: "hidden" },
+  listCard: { overflow: "hidden" },
   actionRow: { flexDirection: "row-reverse", alignItems: "center", gap: 10, paddingHorizontal: 12, paddingVertical: 11 },
   actionIcon: { width: 32, height: 32, borderRadius: 9, alignItems: "center", justifyContent: "center" },
   actionTitle: { fontSize: 13, fontFamily: fonts.semibold, textAlign: "right" },
   actionSub: { fontSize: 11, fontFamily: fonts.regular, marginTop: 1 },
   stockQty: { fontSize: 12, fontFamily: fonts.bold },
 
-  segment: { flexDirection: "row-reverse", borderRadius: 12, borderWidth: 1, padding: 4, gap: 4, marginBottom: 4 },
+  segment: { flexDirection: "row-reverse", padding: 4, gap: 4, marginBottom: 4 },
   segmentBtn: { flex: 1, flexDirection: "row-reverse", alignItems: "center", justifyContent: "center", gap: 6, paddingVertical: 9, borderRadius: 9 },
   segmentText: { fontSize: 13, fontFamily: fonts.semibold },
 
-  card: { borderRadius: 14, borderWidth: 1, padding: 14 },
+  card: { padding: 14 },
   cardRow: { flexDirection: "row-reverse", alignItems: "center", gap: 10 },
   avatar: { width: 40, height: 40, borderRadius: 10, alignItems: "center", justifyContent: "center" },
   cardTitle: { fontSize: 15, fontFamily: fonts.semibold },
