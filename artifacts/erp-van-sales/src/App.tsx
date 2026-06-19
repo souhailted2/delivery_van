@@ -4,6 +4,7 @@ import { getGetMeQueryKey } from "@workspace/api-client-react";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import { Toaster } from "@/components/ui/toaster";
 import { Toaster as SonnerToaster } from "@/components/ui/sonner";
+import { UpdateNotification } from "./components/UpdateNotification";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import NotFound from "@/pages/not-found";
 import { AuthProvider } from "./contexts/AuthContext";
@@ -134,6 +135,7 @@ function App() {
           </WouterRouter>
           <Toaster />
           <SonnerToaster />
+          <UpdateNotification />
         </TooltipProvider>
       </ThemeProvider>
     </QueryClientProvider>

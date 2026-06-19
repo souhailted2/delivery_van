@@ -96,7 +96,31 @@ jobs:
             Write-Host "Icon already exists"
           }
 
-      # ── 8. Build Electron installer ────────────────────────────────────────
+      # ── 8a. Set desktop/package.json version from tag or run number ──────────
+      # electron-updater compares the installed version (from package.json)
+      # with the version in latest.yml to decide whether an update is available.
+      # v*.*.* tags → use the semver; workflow_dispatch without a tag → 0.0.<N>.
+      # Uses node -e instead of ConvertFrom-Json/ConvertTo-Json: PowerShell 5.1
+      # unwraps single-element JSON arrays into scalars on roundtrip, which would
+      # corrupt the "win.target" and "publish" arrays in desktop/package.json.
+      - name: Set package version
+        shell: pwsh
+        run: |
+          $tag = "${{ github.ref_name }}"
+          if ($tag -match '^v(\d+\.\d+\.\d+)$') {
+            $version = $Matches[1]
+          } else {
+            $version = "0.0.${{ github.run_number }}"
+          }
+          node -e @"
+            const fs = require('fs');
+            const p = JSON.parse(fs.readFileSync('desktop/package.json', 'utf8'));
+            p.version = '$version';
+            fs.writeFileSync('desktop/package.json', JSON.stringify(p, null, 2) + '\n');
+          "@
+          Write-Host "Package version set to $version"
+
+      # ── 8b. Build Electron installer ───────────────────────────────────────
       - name: Build Electron installer (electron-builder)
         working-directory: desktop
         shell: pwsh
@@ -162,6 +186,8 @@ jobs:
             - اضغط ☁️ → **نسخة احتياطية** → اختر مكان الحفظ
             - الاستعادة: اضغط ☁️ → **استعادة البيانات** → اختر الملف
 
-          files: ${{ steps.find_installer.outputs.path }}
+          files: |
+            ${{ steps.find_installer.outputs.path }}
+            desktop/dist-electron/latest.yml
           draft: false
           prerelease: false

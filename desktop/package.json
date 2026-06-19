@@ -15,6 +15,7 @@
   },
   "dependencies": {
     "better-sqlite3": "^9.4.3",
+    "electron-updater": "^6.3.9",
     "express": "^4.22.1",
     "express-session": "^1.19.0",
     "multer": "^1.4.5-lts.1"
@@ -41,6 +42,13 @@
       "!**/*.map"
     ],
     "extraResources": [],
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "souhailted2",
+        "repo": "delivery_van"
+      }
+    ],
     "win": {
       "target": [{ "target": "nsis", "arch": ["x64"] }],
       "icon": "build/icon.ico"

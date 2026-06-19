@@ -145,6 +145,7 @@ jobs:
           make_latest: true
           files: erp-van-sales.apk
           body: |
+            <!-- buildNumber:${{ github.run_number }} -->
             ## تطبيق ERP Van Sales — Android
 
             > **build-${{ github.run_number }}** — رقم الإصدار الداخلي: `${{ github.run_number }}`
@@ -176,6 +177,7 @@ jobs:
           name: "ERP Van Sales ${{ github.ref_name }}"
           make_latest: true
           body: |
+            <!-- buildNumber:${{ github.run_number }} -->
             ## ERP Van Sales Android — ${{ github.ref_name }}
 
             ### 📥 التثبيت

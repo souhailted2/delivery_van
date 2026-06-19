@@ -8,6 +8,15 @@ let resolvedPort = null;
 let serverStarted = false;
 let syncEngine = null;
 
+// electron-updater — loaded lazily so dev runs without it don't error
+let autoUpdater = null;
+try {
+  autoUpdater = require("electron-updater").autoUpdater;
+  autoUpdater.autoDownload = true;
+  autoUpdater.autoInstallOnAppQuit = true;
+  autoUpdater.logger = null; // keep logs out of prod; enable for debugging
+} catch (_) { /* not installed — dev environment */ }
+
 /** Find an available TCP port, trying preferred first then OS-assigned. */
 function findAvailablePort(preferred) {
   return new Promise((resolve) => {
@@ -107,6 +116,27 @@ app.whenReady().then(async () => {
   } catch (err) {
     dialog.showErrorBox("خطأ في بدء التطبيق", err.message);
     app.quit();
+    return;
+  }
+
+  // Auto-update — only runs in packaged app (not in `electron .` dev mode)
+  if (autoUpdater && app.isPackaged) {
+    autoUpdater.on("update-available", () => {
+      if (mainWindow && !mainWindow.isDestroyed())
+        mainWindow.webContents.send("update-available");
+    });
+    autoUpdater.on("update-downloaded", () => {
+      if (mainWindow && !mainWindow.isDestroyed())
+        mainWindow.webContents.send("update-downloaded");
+    });
+    autoUpdater.on("error", (e) => {
+      // Silently log — update failures must never crash the app
+      console.error("[updater]", e.message);
+    });
+    // Delay the first check so the UI is fully loaded
+    setTimeout(() => {
+      autoUpdater.checkForUpdatesAndNotify().catch(() => {});
+    }, 15000);
   }
 });
 
@@ -179,4 +209,8 @@ ipcMain.handle("reset-sync", async () => {
   syncEngine.resetSync();
   syncEngine.syncOnce().catch(() => {});
   return { ok: true };
+});
+
+ipcMain.handle("install-update", () => {
+  if (autoUpdater) autoUpdater.quitAndInstall();
 });

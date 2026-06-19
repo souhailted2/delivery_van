@@ -33,6 +33,10 @@ declare global {
       resetSync:                () => Promise<{ ok: boolean }>;
       onSyncStatus:             (cb: (s: SyncStatus) => void) => void;
       removeSyncStatusListener: () => void;
+      // Auto-update events (fired by electron-updater in packaged builds)
+      onUpdateAvailable?:       (cb: () => void) => void;
+      onUpdateDownloaded?:      (cb: () => void) => void;
+      installUpdate?:           () => void;
     };
   }
 }

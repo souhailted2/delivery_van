@@ -20,4 +20,13 @@ contextBridge.exposeInMainWorld("electronAPI", {
   removeSyncStatusListener: () => {
     ipcRenderer.removeAllListeners("sync-status");
   },
+
+  // Auto-update events (only fired in packaged builds with electron-updater)
+  onUpdateAvailable: (callback) => {
+    ipcRenderer.on("update-available", () => callback());
+  },
+  onUpdateDownloaded: (callback) => {
+    ipcRenderer.on("update-downloaded", () => callback());
+  },
+  installUpdate: () => ipcRenderer.invoke("install-update"),
 });

@@ -18,6 +18,7 @@ import storageRouter from "./storage";
 import settingsRouter from "./settings";
 import syncV2Router from "./sync-v2";
 import dispatchesRouter from "./dispatches";
+import appVersionRouter from "./app-version";
 import { requireAuth } from "../lib/authMiddleware";
 
 const router: IRouter = Router();
@@ -52,5 +53,6 @@ router.use(reportsRouter);
 router.use(settingsRouter);
 router.use(syncV2Router);
 router.use(dispatchesRouter);
+router.use(appVersionRouter);
 
 export default router;
