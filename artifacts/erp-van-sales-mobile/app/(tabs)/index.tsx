@@ -9,14 +9,16 @@ import {
   ScrollView,
   StyleSheet,
   Text,
-  TouchableOpacity,
   View,
 } from "react-native";
 import { SyncBar } from "@/components/SyncBar";
+import { MoneyText, PressableScale } from "@/components/ui";
 import { useAuth } from "@/contexts/AuthContext";
 import { useSync } from "@/contexts/SyncContext";
 import { getDb } from "@/lib/db";
-import { useColors } from "@/hooks/useColors";
+import { formatMoney } from "@/lib/money";
+import { fonts } from "@/constants/tokens";
+import { useTheme, type Theme } from "@/hooks/useTheme";
 import { apiGet } from "@/lib/api";
 
 interface Stats {
@@ -43,28 +45,32 @@ function StatCard({
   icon,
   label,
   value,
-  color,
+  accent,
+  accentTint,
+  t,
 }: {
   icon: any;
   label: string;
   value: string;
-  color: string;
+  accent: string;
+  accentTint: string;
+  t: Theme;
 }) {
-  const colors = useColors();
+  const c = t.color;
   return (
     <View
       style={[
         styles.statCard,
-        { backgroundColor: colors.card, borderColor: colors.border },
+        { backgroundColor: c.surface, borderColor: c.hairline },
       ]}
     >
-      <View style={[styles.statIcon, { backgroundColor: color + "22" }]}>
-        <Feather name={icon} size={22} color={color} />
+      <View style={[styles.statIcon, { backgroundColor: accentTint }]}>
+        <Feather name={icon} size={22} color={accent} />
       </View>
-      <Text style={[styles.statValue, { color: colors.foreground }]}>
+      <Text style={[styles.statValue, { color: c.text }]}>
         {value}
       </Text>
-      <Text style={[styles.statLabel, { color: colors.mutedForeground }]}>
+      <Text style={[styles.statLabel, { color: c.textMuted }]}>
         {label}
       </Text>
     </View>
@@ -72,7 +78,8 @@ function StatCard({
 }
 
 function UpdateCard() {
-  const colors = useColors();
+  const t = useTheme();
+  const c = t.color;
   const [status, setStatus] = useState<UpdateStatus>("idle");
   const [info, setInfo] = useState<AppVersionInfo | null>(null);
 
@@ -107,14 +114,14 @@ function UpdateCard() {
     <View
       style={[
         styles.updateCard,
-        { backgroundColor: colors.card, borderColor: colors.border },
+        { backgroundColor: c.surface, borderColor: c.hairline },
       ]}
     >
       <View style={styles.updateRow}>
-        <Feather name="smartphone" size={16} color={colors.mutedForeground} />
-        <Text style={[styles.updateLabel, { color: colors.mutedForeground }]}>
+        <Feather name="smartphone" size={16} color={c.textMuted} />
+        <Text style={[styles.updateLabel, { color: c.textMuted }]}>
           الإصدار الحالي:{" "}
-          <Text style={{ color: colors.foreground, fontFamily: "Cairo_700Bold" }}>
+          <Text style={{ color: c.text, fontFamily: fonts.bold }}>
             {currentVersion} (build {currentBuildNumber})
           </Text>
         </Text>
@@ -122,8 +129,8 @@ function UpdateCard() {
 
       {status === "up-to-date" && (
         <View style={styles.updateRow}>
-          <Feather name="check-circle" size={16} color="#22c55e" />
-          <Text style={[styles.updateLabel, { color: "#22c55e" }]}>
+          <Feather name="check-circle" size={16} color={c.success} />
+          <Text style={[styles.updateLabel, { color: c.success }]}>
             أنت على أحدث إصدار
           </Text>
         </View>
@@ -131,57 +138,57 @@ function UpdateCard() {
 
       {status === "update-available" && info && (
         <View style={styles.updateRow}>
-          <Feather name="alert-circle" size={16} color="#f59e0b" />
-          <Text style={[styles.updateLabel, { color: "#f59e0b" }]}>
+          <Feather name="alert-circle" size={16} color={c.warning} />
+          <Text style={[styles.updateLabel, { color: c.warning }]}>
             يوجد تحديث جديد: {info.tag}
           </Text>
         </View>
       )}
 
       {status === "error" && (
-        <Text style={styles.errorText}>تعذّر الاتصال بالخادم للتحقق من التحديثات</Text>
+        <Text style={[styles.errorText, { color: c.danger }]}>تعذّر الاتصال بالخادم للتحقق من التحديثات</Text>
       )}
 
       <View style={styles.updateButtons}>
         {status !== "update-available" && (
-          <TouchableOpacity
+          <PressableScale
             style={[
               styles.checkBtn,
-              { borderColor: colors.primary },
+              { borderColor: c.brand },
               status === "checking" && { opacity: 0.6 },
             ]}
             onPress={checkUpdate}
             disabled={status === "checking"}
           >
             {status === "checking" ? (
-              <ActivityIndicator size="small" color={colors.primary} />
+              <ActivityIndicator size="small" color={c.brand} />
             ) : (
-              <Feather name="refresh-cw" size={14} color={colors.primary} />
+              <Feather name="refresh-cw" size={14} color={c.brand} />
             )}
-            <Text style={[styles.checkBtnText, { color: colors.primary }]}>
+            <Text style={[styles.checkBtnText, { color: c.brand }]}>
               {status === "checking" ? "جارٍ الفحص..." : "تحقق من التحديثات"}
             </Text>
-          </TouchableOpacity>
+          </PressableScale>
         )}
 
         {status === "update-available" && (
           <>
-            <TouchableOpacity
-              style={styles.downloadBtn}
+            <PressableScale
+              style={[styles.downloadBtn, { backgroundColor: c.success }]}
               onPress={openDownload}
             >
-              <Feather name="download" size={14} color="#fff" />
-              <Text style={styles.downloadBtnText}>تنزيل التحديث</Text>
-            </TouchableOpacity>
-            <TouchableOpacity
-              style={[styles.checkBtn, { borderColor: colors.border }]}
+              <Feather name="download" size={14} color={c.onColor} />
+              <Text style={[styles.downloadBtnText, { color: c.onColor }]}>تنزيل التحديث</Text>
+            </PressableScale>
+            <PressableScale
+              style={[styles.checkBtn, { borderColor: c.hairline }]}
               onPress={checkUpdate}
             >
-              <Feather name="refresh-cw" size={14} color={colors.mutedForeground} />
-              <Text style={[styles.checkBtnText, { color: colors.mutedForeground }]}>
+              <Feather name="refresh-cw" size={14} color={c.textMuted} />
+              <Text style={[styles.checkBtnText, { color: c.textMuted }]}>
                 إعادة الفحص
               </Text>
-            </TouchableOpacity>
+            </PressableScale>
           </>
         )}
       </View>
@@ -190,7 +197,8 @@ function UpdateCard() {
 }
 
 export default function DashboardScreen() {
-  const colors = useColors();
+  const t = useTheme();
+  const c = t.color;
   const { user } = useAuth();
   const { triggerSync, pending } = useSync();
   const [stats, setStats] = useState<Stats | null>(null);
@@ -244,22 +252,20 @@ export default function DashboardScreen() {
     loadStats();
   }, [pending]);
 
-  const fmt = (n: number) => n.toLocaleString("fr-DZ") + " د.ج";
-
   if (user?.role === "truck") {
     return <Redirect href="/(tabs)/truck-dashboard" />;
   }
 
   if (loading) {
     return (
-      <View style={[styles.center, { backgroundColor: colors.background }]}>
-        <ActivityIndicator color={colors.primary} />
+      <View style={[styles.center, { backgroundColor: c.bg }]}>
+        <ActivityIndicator color={c.brand} />
       </View>
     );
   }
 
   return (
-    <View style={[styles.container, { backgroundColor: colors.background }]}>
+    <View style={[styles.container, { backgroundColor: c.bg }]}>
       <SyncBar />
       <ScrollView
         contentContainerStyle={styles.scroll}
@@ -270,25 +276,27 @@ export default function DashboardScreen() {
               triggerSync();
               loadStats();
             }}
-            tintColor={colors.primary}
+            tintColor={c.brand}
           />
         }
         showsVerticalScrollIndicator={false}
       >
-        <Text style={[styles.greeting, { color: colors.foreground }]}>
+        <Text style={[styles.greeting, { color: c.text }]}>
           مرحباً{user?.fullName ? ` ${user.fullName}` : ""}
         </Text>
         {stats && (
           <>
             <View
-              style={[styles.truckCard, { backgroundColor: colors.primary }]}
+              style={[styles.truckCard, { backgroundColor: c.surface, borderColor: c.brandBorder, ...t.elevation.glow }]}
             >
-              <Feather name="truck" size={20} color="#fff" />
-              <View style={{ flex: 1, marginRight: 10 }}>
-                <Text style={styles.truckName}>{stats.truckName}</Text>
-                <Text style={styles.truckSub}>رصيد الصندوق</Text>
+              <View style={[styles.truckIcon, { backgroundColor: c.brandTint }]}>
+                <Feather name="truck" size={20} color={c.brandBright} />
               </View>
-              <Text style={styles.truckCash}>{fmt(stats.truckCash)}</Text>
+              <View style={{ flex: 1, marginRight: 10 }}>
+                <Text style={[styles.truckName, { color: c.text }]}>{stats.truckName}</Text>
+                <Text style={[styles.truckSub, { color: c.textMuted }]}>رصيد الصندوق</Text>
+              </View>
+              <MoneyText amount={stats.truckCash} size="title" />
             </View>
 
             <View style={styles.grid}>
@@ -296,25 +304,33 @@ export default function DashboardScreen() {
                 icon="file-text"
                 label="فواتير اليوم"
                 value={String(stats.todayInvoices)}
-                color="#f97316"
+                accent={c.brandBright}
+                accentTint={c.brandTint}
+                t={t}
               />
               <StatCard
                 icon="dollar-sign"
                 label="مبيعات اليوم"
-                value={fmt(stats.todayTotal)}
-                color="#22c55e"
+                value={formatMoney(stats.todayTotal)}
+                accent={c.success}
+                accentTint={c.successTint}
+                t={t}
               />
               <StatCard
                 icon="users"
                 label="العملاء"
                 value={String(stats.totalClients)}
-                color="#3b82f6"
+                accent={c.brandBright}
+                accentTint={c.brandTint}
+                t={t}
               />
               <StatCard
                 icon="clock"
                 label="في الانتظار"
                 value={String(stats.pendingSync)}
-                color={stats.pendingSync > 0 ? "#f59e0b" : "#22c55e"}
+                accent={stats.pendingSync > 0 ? c.warning : c.success}
+                accentTint={stats.pendingSync > 0 ? c.warningTint : c.successTint}
+                t={t}
               />
             </View>
           </>
@@ -332,7 +348,7 @@ const styles = StyleSheet.create({
   scroll: { padding: 16, gap: 16, paddingBottom: 100 },
   greeting: {
     fontSize: 20,
-    fontFamily: "Cairo_700Bold",
+    fontFamily: fonts.bold,
     textAlign: "right",
   },
   truckCard: {
@@ -340,21 +356,26 @@ const styles = StyleSheet.create({
     alignItems: "center",
     padding: 16,
     borderRadius: 16,
+    borderWidth: 1,
     gap: 10,
   },
+  truckIcon: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    alignItems: "center",
+    justifyContent: "center",
+  },
   truckName: {
-    color: "#fff",
     fontSize: 16,
-    fontFamily: "Cairo_700Bold",
+    fontFamily: fonts.bold,
     textAlign: "right",
   },
   truckSub: {
-    color: "#ffffff99",
     fontSize: 12,
-    fontFamily: "Cairo_400Regular",
+    fontFamily: fonts.regular,
     textAlign: "right",
   },
-  truckCash: { color: "#fff", fontSize: 18, fontFamily: "Cairo_700Bold" },
   grid: { flexDirection: "row", flexWrap: "wrap", gap: 12 },
   statCard: {
     width: "47%",
@@ -371,8 +392,8 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
   },
-  statValue: { fontSize: 16, fontFamily: "Cairo_700Bold" },
-  statLabel: { fontSize: 12, fontFamily: "Cairo_400Regular" },
+  statValue: { fontSize: 16, fontFamily: fonts.bold },
+  statLabel: { fontSize: 12, fontFamily: fonts.regular },
 
   updateCard: {
     borderRadius: 14,
@@ -387,14 +408,13 @@ const styles = StyleSheet.create({
   },
   updateLabel: {
     fontSize: 13,
-    fontFamily: "Cairo_400Regular",
+    fontFamily: fonts.regular,
     textAlign: "right",
     flex: 1,
   },
   errorText: {
     fontSize: 12,
-    fontFamily: "Cairo_400Regular",
-    color: "#ef4444",
+    fontFamily: fonts.regular,
     textAlign: "right",
   },
   updateButtons: {
@@ -415,7 +435,7 @@ const styles = StyleSheet.create({
   },
   checkBtnText: {
     fontSize: 13,
-    fontFamily: "Cairo_600SemiBold",
+    fontFamily: fonts.semibold,
   },
   downloadBtn: {
     flexDirection: "row-reverse",
@@ -424,13 +444,11 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16,
     paddingVertical: 8,
     borderRadius: 10,
-    backgroundColor: "#22c55e",
     justifyContent: "center",
     flex: 1,
   },
   downloadBtnText: {
     fontSize: 13,
-    fontFamily: "Cairo_600SemiBold",
-    color: "#fff",
+    fontFamily: fonts.semibold,
   },
 });

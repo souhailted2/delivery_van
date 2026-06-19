@@ -1,49 +1,51 @@
 import { Feather } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
-import { router } from "expo-router";
 import { useRefreshOnFocus } from "@/hooks/useRefreshOnFocus";
 import { useCallback, useEffect, useState } from "react";
 import {
-  Alert, FlatList, Modal, RefreshControl, ScrollView, StyleSheet,
-  Text, TextInput, TouchableOpacity, View,
+  FlatList, Modal, RefreshControl, ScrollView, StyleSheet,
+  Text, TextInput, View,
 } from "react-native";
 import { SyncBar } from "@/components/SyncBar";
+import { AppButton, MoneyText, PressableScale, ResultDialog, StatusPill } from "@/components/ui";
+import type { DialogAction, ResultVariant } from "@/components/ui";
 import { useSync } from "@/contexts/SyncContext";
 import { Invoice, Product, Return, getDb } from "@/lib/db";
+import { formatMoney } from "@/lib/money";
 import { newSyncId } from "@/lib/uuid";
 import { canonicalizeTruckStock } from "@/lib/truckStock";
-import { useColors } from "@/hooks/useColors";
+import { fonts } from "@/constants/tokens";
+import { useTheme } from "@/hooks/useTheme";
+
+type Theme = ReturnType<typeof useTheme>;
 
 interface ReturnWithClient extends Return {
   client_name?: string | null;
 }
 
-function ReturnCard({ item, colors }: { item: ReturnWithClient; colors: any }) {
+function ReturnCard({ item, theme }: { item: ReturnWithClient; theme: Theme }) {
+  const c = theme.color;
   const amount = Number(item.total_amount ?? 0);
-  const typeLabel = item.type === "client" ? "مرتجع عميل" : "مرتجع مخزن";
-  const typeColor = item.type === "client" ? colors.warning : colors.primary;
+  const isClient = item.type === "client";
+  const typeLabel = isClient ? "مرتجع عميل" : "مرتجع مخزن";
   return (
-    <View style={[styles.card, { backgroundColor: colors.card, borderColor: colors.border }]}>
+    <View style={[styles.card, { backgroundColor: c.surface, borderColor: c.hairline }]}>
       <View style={styles.cardRow}>
-        <Text style={[styles.amount, { color: colors.destructive }]}>
-          {amount.toLocaleString("fr-DZ")} د.ج
-        </Text>
+        <MoneyText amount={amount} tone="negative" size="callout" />
         <View style={{ flex: 1, alignItems: "flex-end" }}>
-          <Text style={[styles.cardClient, { color: colors.foreground }]}>
+          <Text style={[styles.cardClient, { color: c.text }]}>
             {item.client_name ?? "—"}
           </Text>
-          <Text style={[styles.cardDate, { color: colors.mutedForeground }]}>
+          <Text style={[styles.cardDate, { color: c.textMuted }]}>
             {item.created_at ? new Date(item.created_at).toLocaleDateString("ar-DZ") : ""}
           </Text>
         </View>
-        <View style={[styles.typeBadge, { backgroundColor: typeColor + "22" }]}>
-          <Text style={[styles.typeText, { color: typeColor }]}>{typeLabel}</Text>
-        </View>
+        <StatusPill status="neutral" label={typeLabel} />
       </View>
       {item._pending === 1 && (
-        <View style={[styles.pendingBadge, { backgroundColor: colors.warning + "33" }]}>
-          <Feather name="clock" size={11} color={colors.warning} />
-          <Text style={[styles.pendingText, { color: colors.warning }]}>في انتظار المزامنة</Text>
+        <View style={[styles.pendingBadge, { backgroundColor: c.warningTint }]}>
+          <Feather name="clock" size={11} color={c.warningText} />
+          <Text style={[styles.pendingText, { color: c.warningText }]}>في انتظار المزامنة</Text>
         </View>
       )}
     </View>
@@ -57,10 +59,11 @@ interface ReturnItem {
 }
 
 function NewReturnModal({
-  visible, onClose, onSaved, colors,
+  visible, onClose, onSaved, theme,
 }: {
-  visible: boolean; onClose: () => void; onSaved: () => void; colors: any;
+  visible: boolean; onClose: () => void; onSaved: () => void; theme: Theme;
 }) {
+  const c = theme.color;
   const { triggerSync, bumpLocalVersion } = useSync();
   const [invoices, setInvoices] = useState<(Invoice & { client_name?: string })[]>([]);
   const [products, setProducts] = useState<Product[]>([]);
@@ -71,6 +74,13 @@ function NewReturnModal({
   const [productSearch, setProductSearch] = useState("");
   const [showProductPicker, setShowProductPicker] = useState(false);
   const [saving, setSaving] = useState(false);
+
+  const [dialog, setDialog] = useState<{ visible: boolean; variant: ResultVariant; title: string; message?: string; actions?: DialogAction[] }>(
+    { visible: false, variant: "info", title: "" }
+  );
+  const showDialog = (variant: ResultVariant, title: string, message?: string, actions?: DialogAction[]) =>
+    setDialog({ visible: true, variant, title, message, actions });
+  const hideDialog = () => setDialog((d) => ({ ...d, visible: false }));
 
   useEffect(() => {
     if (!visible) return;
@@ -125,7 +135,7 @@ function NewReturnModal({
 
   const saveReturn = async () => {
     if (items.length === 0) {
-      Alert.alert("تنبيه", "أضف منتجاً واحداً على الأقل");
+      showDialog("warning", "تنبيه", "أضف منتجاً واحداً على الأقل");
       return;
     }
     try {
@@ -180,7 +190,7 @@ function NewReturnModal({
       onSaved();
       onClose();
     } catch (e: any) {
-      Alert.alert("خطأ", e?.message ?? "فشل حفظ المرتجع");
+      showDialog("error", "خطأ", e?.message ?? "فشل حفظ المرتجع");
     } finally {
       setSaving(false);
     }
@@ -188,45 +198,45 @@ function NewReturnModal({
 
   return (
     <Modal visible={visible} animationType="slide" presentationStyle="pageSheet">
-      <View style={[styles.modal, { backgroundColor: colors.background }]}>
-        <View style={[styles.modalHeader, { borderBottomColor: colors.border }]}>
-          <TouchableOpacity onPress={onClose}>
-            <Feather name="x" size={22} color={colors.foreground} />
-          </TouchableOpacity>
-          <Text style={[styles.modalTitle, { color: colors.foreground }]}>مرتجع جديد</Text>
+      <View style={[styles.modal, { backgroundColor: c.bg }]}>
+        <View style={[styles.modalHeader, { backgroundColor: c.rail, borderBottomColor: c.hairline }]}>
+          <PressableScale onPress={onClose} hitSlop={10} accessibilityLabel="إغلاق">
+            <Feather name="x" size={22} color={c.text} />
+          </PressableScale>
+          <Text style={[styles.modalTitle, { color: c.text }]}>مرتجع جديد</Text>
           <View style={{ width: 22 }} />
         </View>
 
-        <View style={[styles.steps, { borderBottomColor: colors.border }]}>
+        <View style={[styles.steps, { backgroundColor: c.rail, borderBottomColor: c.hairline }]}>
           {[
             { key: "invoice", label: "الفاتورة" },
             { key: "products", label: "المنتجات" },
             { key: "confirm", label: "تأكيد" },
           ].map(s => (
-            <TouchableOpacity key={s.key} onPress={() => {
+            <PressableScale key={s.key} onPress={() => {
               if (s.key === "products" && !selectedInvoice) return;
               if (s.key === "confirm" && items.length === 0) return;
               setStep(s.key as any);
             }}>
               <Text style={[
                 styles.stepLabel,
-                { color: step === s.key ? colors.primary : colors.mutedForeground },
-                step === s.key ? { borderBottomWidth: 2, borderBottomColor: colors.primary } : {},
+                { color: step === s.key ? c.brandText : c.textMuted },
+                step === s.key ? { borderBottomWidth: 2, borderBottomColor: c.brand } : {},
               ]}>
                 {s.label}
               </Text>
-            </TouchableOpacity>
+            </PressableScale>
           ))}
         </View>
 
         {step === "invoice" && (
           <View style={{ flex: 1 }}>
-            <View style={[styles.searchBar, { backgroundColor: colors.card, borderColor: colors.border }]}>
-              <Feather name="search" size={16} color={colors.mutedForeground} />
+            <View style={[styles.searchBar, { backgroundColor: c.surface, borderColor: c.hairline }]}>
+              <Feather name="search" size={16} color={c.textMuted} />
               <TextInput
-                style={[styles.searchInput, { color: colors.foreground }]}
+                style={[styles.searchInput, { color: c.text }]}
                 placeholder="ابحث عن عميل..."
-                placeholderTextColor={colors.mutedForeground}
+                placeholderTextColor={c.textFaint}
                 value={invoiceSearch}
                 onChangeText={setInvoiceSearch}
                 textAlign="right"
@@ -236,48 +246,46 @@ function NewReturnModal({
               data={filteredInvoices}
               keyExtractor={i => i.sync_id}
               renderItem={({ item }) => (
-                <TouchableOpacity
+                <PressableScale
                   style={[
                     styles.invoiceRow,
                     {
                       backgroundColor: selectedInvoice?.sync_id === item.sync_id
-                        ? colors.primary + "22" : colors.card,
-                      borderColor: colors.border,
+                        ? c.brandTint : c.surface,
+                      borderColor: selectedInvoice?.sync_id === item.sync_id ? c.brandBorder : c.hairline,
                     }
                   ]}
                   onPress={() => { setSelectedInvoice(item); setStep("products"); }}
                 >
                   <Feather name="check" size={16}
-                    color={selectedInvoice?.sync_id === item.sync_id ? colors.primary : "transparent"}
+                    color={selectedInvoice?.sync_id === item.sync_id ? c.brandText : "transparent"}
                   />
                   <View style={{ flex: 1, alignItems: "flex-end" }}>
-                    <Text style={[styles.clientName, { color: colors.foreground }]}>
+                    <Text style={[styles.clientName, { color: c.text }]}>
                       {item.client_name ?? "بدون عميل"}
                     </Text>
-                    <Text style={[styles.invoiceAmount, { color: colors.mutedForeground }]}>
-                      {Number(item.total_amount ?? 0).toLocaleString("fr-DZ")} د.ج
-                    </Text>
+                    <MoneyText amount={Number(item.total_amount ?? 0)} tone="muted" size="footnote" />
                   </View>
-                </TouchableOpacity>
+                </PressableScale>
               )}
               contentContainerStyle={{ padding: 12, gap: 6 }}
               ListHeaderComponent={
-                <TouchableOpacity
+                <PressableScale
                   style={[
                     styles.invoiceRow,
                     {
                       backgroundColor: selectedInvoice === null && step !== "invoice"
-                        ? colors.primary + "22" : colors.secondary,
-                      borderColor: colors.border, borderStyle: "dashed",
+                        ? c.brandTint : c.surfaceElevated,
+                      borderColor: c.hairline, borderStyle: "dashed",
                     }
                   ]}
                   onPress={() => { setSelectedInvoice(null); setStep("products"); }}
                 >
-                  <Feather name="skip-forward" size={16} color={colors.mutedForeground} />
-                  <Text style={[styles.clientName, { color: colors.mutedForeground, flex: 1, textAlign: "right" }]}>
+                  <Feather name="skip-forward" size={16} color={c.textMuted} />
+                  <Text style={[styles.clientName, { color: c.textMuted, flex: 1, textAlign: "right" }]}>
                     بدون فاتورة (مرتجع مخزن)
                   </Text>
-                </TouchableOpacity>
+                </PressableScale>
               }
             />
           </View>
@@ -285,40 +293,40 @@ function NewReturnModal({
 
         {step === "products" && (
           <View style={{ flex: 1 }}>
-            <TouchableOpacity
-              style={[styles.addProductBtn, { borderColor: colors.primary }]}
+            <PressableScale
+              style={[styles.addProductBtn, { borderColor: c.brandBorder, backgroundColor: c.brandTint }]}
               onPress={() => setShowProductPicker(true)}
             >
-              <Feather name="plus-circle" size={18} color={colors.primary} />
-              <Text style={[styles.addProductText, { color: colors.primary }]}>إضافة منتج مُرتجع</Text>
-            </TouchableOpacity>
+              <Feather name="plus-circle" size={18} color={c.brandText} />
+              <Text style={[styles.addProductText, { color: c.brandText }]}>إضافة منتج مُرتجع</Text>
+            </PressableScale>
             <FlatList
               data={items}
               keyExtractor={i => i.product.sync_id}
               renderItem={({ item, index }) => (
-                <View style={[styles.itemRow, { backgroundColor: colors.card, borderColor: colors.border }]}>
-                  <TouchableOpacity onPress={() => setItems(items.filter((_, idx) => idx !== index))}>
-                    <Feather name="trash-2" size={16} color={colors.destructive} />
-                  </TouchableOpacity>
+                <View style={[styles.itemRow, { backgroundColor: c.surface, borderColor: c.hairline }]}>
+                  <PressableScale onPress={() => setItems(items.filter((_, idx) => idx !== index))} hitSlop={8}>
+                    <Feather name="trash-2" size={16} color={c.danger} />
+                  </PressableScale>
                   <View style={styles.itemQtyRow}>
-                    <TouchableOpacity onPress={() => {
+                    <PressableScale onPress={() => {
                       if (item.quantity > 1)
                         setItems(items.map((i, idx) => idx === index ? { ...i, quantity: i.quantity - 1 } : i));
                       else setItems(items.filter((_, idx) => idx !== index));
-                    }}>
-                      <Feather name="minus-circle" size={20} color={colors.mutedForeground} />
-                    </TouchableOpacity>
-                    <Text style={[styles.qty, { color: colors.foreground }]}>{item.quantity}</Text>
-                    <TouchableOpacity onPress={() =>
+                    }} hitSlop={8}>
+                      <Feather name="minus-circle" size={20} color={c.textMuted} />
+                    </PressableScale>
+                    <Text style={[styles.qty, { color: c.text }]}>{item.quantity}</Text>
+                    <PressableScale onPress={() =>
                       setItems(items.map((i, idx) => idx === index ? { ...i, quantity: i.quantity + 1 } : i))
-                    }>
-                      <Feather name="plus-circle" size={20} color={colors.primary} />
-                    </TouchableOpacity>
+                    } hitSlop={8}>
+                      <Feather name="plus-circle" size={20} color={c.brand} />
+                    </PressableScale>
                   </View>
                   <View style={{ flex: 1, alignItems: "flex-end" }}>
-                    <Text style={[styles.itemName, { color: colors.foreground }]}>{item.product.name}</Text>
-                    <Text style={[styles.itemPrice, { color: colors.mutedForeground }]}>
-                      {item.unitPrice.toLocaleString("fr-DZ")} × {item.quantity}
+                    <Text style={[styles.itemName, { color: c.text }]}>{item.product.name}</Text>
+                    <Text style={[styles.itemPrice, { color: c.textMuted }]}>
+                      {formatMoney(item.unitPrice)} × {item.quantity}
                     </Text>
                   </View>
                 </View>
@@ -326,35 +334,37 @@ function NewReturnModal({
               contentContainerStyle={{ padding: 12, gap: 6 }}
             />
             {items.length > 0 && (
-              <View style={[styles.totalBar, { backgroundColor: colors.card, borderTopColor: colors.border }]}>
-                <TouchableOpacity
-                  style={[styles.nextBtn, { backgroundColor: colors.primary }]}
+              <View style={[styles.totalBar, { backgroundColor: c.rail, borderTopColor: c.hairline }]}>
+                <PressableScale
+                  style={[styles.nextBtn, { backgroundColor: c.brand }]}
                   onPress={() => setStep("confirm")}
+                  haptic
                 >
-                  <Text style={styles.nextBtnText}>التالي</Text>
-                  <Feather name="arrow-left" size={18} color="#fff" />
-                </TouchableOpacity>
-                <Text style={[styles.totalText, { color: colors.destructive }]}>
-                  المرتجع: {total.toLocaleString("fr-DZ")} د.ج
-                </Text>
+                  <Text style={[styles.nextBtnText, { color: c.onBrand }]}>التالي</Text>
+                  <Feather name="arrow-left" size={18} color={c.onBrand} />
+                </PressableScale>
+                <View style={styles.totalRow}>
+                  <Text style={[styles.totalLabel, { color: c.textMuted }]}>المرتجع: </Text>
+                  <MoneyText amount={total} tone="negative" size="callout" />
+                </View>
               </View>
             )}
 
             <Modal visible={showProductPicker} animationType="slide" presentationStyle="pageSheet">
-              <View style={[styles.modal, { backgroundColor: colors.background }]}>
-                <View style={[styles.modalHeader, { borderBottomColor: colors.border }]}>
-                  <TouchableOpacity onPress={() => { setShowProductPicker(false); setProductSearch(""); }}>
-                    <Feather name="x" size={22} color={colors.foreground} />
-                  </TouchableOpacity>
-                  <Text style={[styles.modalTitle, { color: colors.foreground }]}>اختر منتجاً</Text>
+              <View style={[styles.modal, { backgroundColor: c.bg }]}>
+                <View style={[styles.modalHeader, { backgroundColor: c.rail, borderBottomColor: c.hairline }]}>
+                  <PressableScale onPress={() => { setShowProductPicker(false); setProductSearch(""); }} hitSlop={10} accessibilityLabel="إغلاق">
+                    <Feather name="x" size={22} color={c.text} />
+                  </PressableScale>
+                  <Text style={[styles.modalTitle, { color: c.text }]}>اختر منتجاً</Text>
                   <View style={{ width: 22 }} />
                 </View>
-                <View style={[styles.searchBar, { backgroundColor: colors.card, borderColor: colors.border, margin: 12 }]}>
-                  <Feather name="search" size={16} color={colors.mutedForeground} />
+                <View style={[styles.searchBar, { backgroundColor: c.surface, borderColor: c.hairline, margin: 12 }]}>
+                  <Feather name="search" size={16} color={c.textMuted} />
                   <TextInput
-                    style={[styles.searchInput, { color: colors.foreground }]}
+                    style={[styles.searchInput, { color: c.text }]}
                     placeholder="ابحث..."
-                    placeholderTextColor={colors.mutedForeground}
+                    placeholderTextColor={c.textFaint}
                     value={productSearch}
                     onChangeText={setProductSearch}
                     textAlign="right"
@@ -365,15 +375,13 @@ function NewReturnModal({
                   data={filteredProducts}
                   keyExtractor={i => i.sync_id}
                   renderItem={({ item }) => (
-                    <TouchableOpacity
-                      style={[styles.productRow, { backgroundColor: colors.card, borderColor: colors.border }]}
+                    <PressableScale
+                      style={[styles.productRow, { backgroundColor: c.surface, borderColor: c.hairline }]}
                       onPress={() => addProduct(item)}
                     >
-                      <Text style={[styles.productPrice, { color: colors.primary }]}>
-                        {Number(item.selling_price_retail ?? 0).toLocaleString("fr-DZ")} د.ج
-                      </Text>
-                      <Text style={[styles.itemName, { color: colors.foreground }]}>{item.name}</Text>
-                    </TouchableOpacity>
+                      <MoneyText amount={Number(item.selling_price_retail ?? 0)} tone="brand" size="bodyStrong" />
+                      <Text style={[styles.itemName, { color: c.text }]}>{item.name}</Text>
+                    </PressableScale>
                   )}
                   contentContainerStyle={{ padding: 12, gap: 6 }}
                 />
@@ -384,41 +392,49 @@ function NewReturnModal({
 
         {step === "confirm" && (
           <ScrollView contentContainerStyle={{ padding: 16, gap: 16 }}>
-            <View style={[styles.summaryCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
-              <Text style={[styles.summaryLabel, { color: colors.mutedForeground }]}>الفاتورة المرجعية</Text>
-              <Text style={[styles.summaryVal, { color: colors.foreground }]}>
+            <View style={[styles.summaryCard, { backgroundColor: c.surface, borderColor: c.hairline }]}>
+              <Text style={[styles.summaryLabel, { color: c.textMuted }]}>الفاتورة المرجعية</Text>
+              <Text style={[styles.summaryVal, { color: c.text }]}>
                 {selectedInvoice
-                  ? `${(selectedInvoice as any).client_name ?? "عميل"} — ${Number(selectedInvoice.total_amount ?? 0).toLocaleString("fr-DZ")} د.ج`
+                  ? `${(selectedInvoice as any).client_name ?? "عميل"} — ${formatMoney(Number(selectedInvoice.total_amount ?? 0))}`
                   : "بدون فاتورة"}
               </Text>
-              <View style={[styles.divider, { backgroundColor: colors.border }]} />
-              <Text style={[styles.summaryLabel, { color: colors.mutedForeground }]}>المنتجات المُرتجعة</Text>
-              <Text style={[styles.summaryVal, { color: colors.foreground }]}>{items.length} صنف</Text>
-              <View style={[styles.divider, { backgroundColor: colors.border }]} />
-              <Text style={[styles.summaryLabel, { color: colors.mutedForeground }]}>إجمالي المرتجع</Text>
-              <Text style={[styles.summaryTotal, { color: colors.destructive }]}>
-                {total.toLocaleString("fr-DZ")} د.ج
-              </Text>
+              <View style={[styles.divider, { backgroundColor: c.hairline }]} />
+              <Text style={[styles.summaryLabel, { color: c.textMuted }]}>المنتجات المُرتجعة</Text>
+              <Text style={[styles.summaryVal, { color: c.text }]}>{items.length} صنف</Text>
+              <View style={[styles.divider, { backgroundColor: c.hairline }]} />
+              <Text style={[styles.summaryLabel, { color: c.textMuted }]}>إجمالي المرتجع</Text>
+              <MoneyText amount={total} tone="negative" size="display" />
             </View>
 
-            <TouchableOpacity
-              style={[styles.saveBtn, { backgroundColor: saving ? colors.muted : colors.destructive }]}
+            <AppButton
+              label={saving ? "جاري الحفظ..." : "تأكيد المرتجع"}
+              icon="rotate-ccw"
+              variant="danger"
+              size="lg"
+              fullWidth
+              loading={saving}
               onPress={saveReturn}
-              disabled={saving}
-              activeOpacity={0.8}
-            >
-              <Feather name="rotate-ccw" size={20} color="#fff" />
-              <Text style={styles.saveBtnText}>{saving ? "جاري الحفظ..." : "تأكيد المرتجع"}</Text>
-            </TouchableOpacity>
+            />
           </ScrollView>
         )}
+
+        <ResultDialog
+          visible={dialog.visible}
+          variant={dialog.variant}
+          title={dialog.title}
+          message={dialog.message}
+          actions={dialog.actions}
+          onRequestClose={hideDialog}
+        />
       </View>
     </Modal>
   );
 }
 
 export default function ReturnsScreen() {
-  const colors = useColors();
+  const theme = useTheme();
+  const c = theme.color;
   const { triggerSync } = useSync();
   const [returns, setReturns] = useState<ReturnWithClient[]>([]);
   const [refreshing, setRefreshing] = useState(false);
@@ -447,32 +463,31 @@ export default function ReturnsScreen() {
   };
 
   return (
-    <View style={[styles.container, { backgroundColor: colors.background }]}>
+    <View style={[styles.container, { backgroundColor: c.bg }]}>
       <SyncBar />
-      <View style={[styles.header, { borderBottomColor: colors.border }]}>
-        <TouchableOpacity
-          style={[styles.addBtn, { backgroundColor: colors.destructive }]}
+      <View style={[styles.header, { borderBottomColor: c.hairline }]}>
+        <AppButton
+          label="مرتجع جديد"
+          icon="plus"
+          variant="danger"
+          size="sm"
           onPress={() => setShowNewReturn(true)}
-          activeOpacity={0.8}
-        >
-          <Feather name="plus" size={18} color="#fff" />
-          <Text style={styles.addBtnText}>مرتجع جديد</Text>
-        </TouchableOpacity>
-        <Text style={[styles.headerTitle, { color: colors.foreground }]}>المرتجعات</Text>
+        />
+        <Text style={[styles.headerTitle, { color: c.text }]}>المرتجعات</Text>
       </View>
 
       <FlatList
         data={returns}
         keyExtractor={i => i.sync_id}
-        renderItem={({ item }) => <ReturnCard item={item} colors={colors} />}
+        renderItem={({ item }) => <ReturnCard item={item} theme={theme} />}
         contentContainerStyle={styles.list}
         refreshControl={
-          <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary} />
+          <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={c.brand} />
         }
         ListEmptyComponent={
           <View style={styles.empty}>
-            <Feather name="rotate-ccw" size={40} color={colors.muted} />
-            <Text style={[styles.emptyText, { color: colors.mutedForeground }]}>
+            <Feather name="rotate-ccw" size={40} color={c.textFaint} />
+            <Text style={[styles.emptyText, { color: c.textMuted }]}>
               لا توجد مرتجعات — قم بالمزامنة أو أنشئ مرتجعاً جديداً
             </Text>
           </View>
@@ -484,7 +499,7 @@ export default function ReturnsScreen() {
         visible={showNewReturn}
         onClose={() => setShowNewReturn(false)}
         onSaved={load}
-        colors={colors}
+        theme={theme}
       />
     </View>
   );
@@ -496,84 +511,69 @@ const styles = StyleSheet.create({
     flexDirection: "row-reverse", alignItems: "center", justifyContent: "space-between",
     paddingHorizontal: 16, paddingVertical: 12, borderBottomWidth: 1,
   },
-  headerTitle: { fontSize: 17, fontFamily: "Cairo_700Bold" },
-  addBtn: {
-    flexDirection: "row-reverse", alignItems: "center", gap: 6,
-    paddingHorizontal: 14, paddingVertical: 10, borderRadius: 12,
-  },
-  addBtnText: { color: "#fff", fontSize: 14, fontFamily: "Cairo_700Bold" },
+  headerTitle: { fontSize: 17, fontFamily: fonts.bold },
   list: { paddingHorizontal: 12, paddingTop: 12, paddingBottom: 16, gap: 8 },
   card: { borderRadius: 14, borderWidth: 1, padding: 14, gap: 8 },
   cardRow: { flexDirection: "row-reverse", alignItems: "center", gap: 10 },
-  amount: { fontSize: 15, fontFamily: "Cairo_700Bold" },
-  cardClient: { fontSize: 14, fontFamily: "Cairo_600SemiBold" },
-  cardDate: { fontSize: 12, fontFamily: "Cairo_400Regular" },
-  typeBadge: { paddingHorizontal: 8, paddingVertical: 3, borderRadius: 8 },
-  typeText: { fontSize: 11, fontFamily: "Cairo_600SemiBold" },
+  cardClient: { fontSize: 14, fontFamily: fonts.semibold },
+  cardDate: { fontSize: 12, fontFamily: fonts.regular },
   pendingBadge: {
     flexDirection: "row-reverse", alignItems: "center", gap: 4,
     alignSelf: "flex-end", paddingHorizontal: 8, paddingVertical: 3, borderRadius: 8,
   },
-  pendingText: { fontSize: 11, fontFamily: "Cairo_400Regular" },
+  pendingText: { fontSize: 11, fontFamily: fonts.regular },
   empty: { alignItems: "center", paddingVertical: 60, gap: 12 },
-  emptyText: { fontSize: 14, fontFamily: "Cairo_400Regular", textAlign: "center", paddingHorizontal: 32 },
+  emptyText: { fontSize: 14, fontFamily: fonts.regular, textAlign: "center", paddingHorizontal: 32 },
   modal: { flex: 1 },
   modalHeader: {
     flexDirection: "row-reverse", alignItems: "center", justifyContent: "space-between",
     padding: 16, borderBottomWidth: 1,
   },
-  modalTitle: { fontSize: 16, fontFamily: "Cairo_700Bold" },
+  modalTitle: { fontSize: 16, fontFamily: fonts.bold },
   steps: {
     flexDirection: "row-reverse", justifyContent: "space-around",
     paddingVertical: 10, borderBottomWidth: 1,
   },
-  stepLabel: { fontSize: 13, fontFamily: "Cairo_600SemiBold", paddingVertical: 4, paddingHorizontal: 12 },
+  stepLabel: { fontSize: 13, fontFamily: fonts.semibold, paddingVertical: 4, paddingHorizontal: 12 },
   searchBar: {
     flexDirection: "row-reverse", alignItems: "center", gap: 8,
     marginHorizontal: 12, marginTop: 10, paddingHorizontal: 14, height: 44,
     borderRadius: 12, borderWidth: 1,
   },
-  searchInput: { flex: 1, fontSize: 14, fontFamily: "Cairo_400Regular" },
+  searchInput: { flex: 1, fontSize: 14, fontFamily: fonts.regular },
   invoiceRow: {
     flexDirection: "row-reverse", alignItems: "center", gap: 10,
     padding: 12, borderRadius: 12, borderWidth: 1,
   },
-  clientName: { fontSize: 15, fontFamily: "Cairo_600SemiBold" },
-  invoiceAmount: { fontSize: 12, fontFamily: "Cairo_400Regular" },
+  clientName: { fontSize: 15, fontFamily: fonts.semibold },
   addProductBtn: {
     flexDirection: "row-reverse", alignItems: "center", gap: 8,
     margin: 12, padding: 12, borderRadius: 12, borderWidth: 1.5, borderStyle: "dashed",
     justifyContent: "center",
   },
-  addProductText: { fontSize: 15, fontFamily: "Cairo_600SemiBold" },
+  addProductText: { fontSize: 15, fontFamily: fonts.semibold },
   itemRow: {
     flexDirection: "row-reverse", alignItems: "center", gap: 10,
     padding: 12, borderRadius: 12, borderWidth: 1,
   },
   itemQtyRow: { flexDirection: "row", alignItems: "center", gap: 8 },
-  qty: { fontSize: 16, fontFamily: "Cairo_700Bold", minWidth: 28, textAlign: "center" },
-  itemName: { fontSize: 14, fontFamily: "Cairo_600SemiBold" },
-  itemPrice: { fontSize: 12, fontFamily: "Cairo_400Regular" },
+  qty: { fontSize: 16, fontFamily: fonts.bold, minWidth: 28, textAlign: "center" },
+  itemName: { fontSize: 14, fontFamily: fonts.semibold },
+  itemPrice: { fontSize: 12, fontFamily: fonts.regular },
   totalBar: {
     flexDirection: "row-reverse", alignItems: "center", justifyContent: "space-between",
     padding: 16, borderTopWidth: 1,
   },
-  totalText: { fontSize: 15, fontFamily: "Cairo_700Bold" },
+  totalRow: { flexDirection: "row-reverse", alignItems: "center" },
+  totalLabel: { fontSize: 15, fontFamily: fonts.bold },
   nextBtn: { flexDirection: "row-reverse", alignItems: "center", gap: 6, paddingHorizontal: 16, paddingVertical: 10, borderRadius: 12 },
-  nextBtnText: { color: "#fff", fontSize: 14, fontFamily: "Cairo_700Bold" },
+  nextBtnText: { fontSize: 14, fontFamily: fonts.bold },
   productRow: {
     flexDirection: "row-reverse", alignItems: "center", justifyContent: "space-between",
     padding: 14, borderRadius: 12, borderWidth: 1,
   },
-  productPrice: { fontSize: 14, fontFamily: "Cairo_700Bold" },
   summaryCard: { borderRadius: 14, borderWidth: 1, padding: 16, gap: 8 },
-  summaryLabel: { fontSize: 12, fontFamily: "Cairo_400Regular" },
-  summaryVal: { fontSize: 15, fontFamily: "Cairo_600SemiBold", textAlign: "right" },
-  summaryTotal: { fontSize: 20, fontFamily: "Cairo_700Bold", textAlign: "right" },
+  summaryLabel: { fontSize: 12, fontFamily: fonts.regular },
+  summaryVal: { fontSize: 15, fontFamily: fonts.semibold, textAlign: "right" },
   divider: { height: 1 },
-  saveBtn: {
-    flexDirection: "row-reverse", alignItems: "center", justifyContent: "center",
-    gap: 10, paddingVertical: 16, borderRadius: 14, marginTop: 8,
-  },
-  saveBtnText: { color: "#fff", fontSize: 17, fontFamily: "Cairo_700Bold" },
 });

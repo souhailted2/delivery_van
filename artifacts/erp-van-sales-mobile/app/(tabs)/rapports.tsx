@@ -2,12 +2,14 @@ import { Feather } from "@expo/vector-icons";
 import { useRefreshOnFocus } from "@/hooks/useRefreshOnFocus";
 import { useCallback, useState } from "react";
 import {
-  RefreshControl, ScrollView, StyleSheet, Text, TouchableOpacity, View,
+  RefreshControl, ScrollView, StyleSheet, Text, View,
 } from "react-native";
 import { SyncBar } from "@/components/SyncBar";
+import { MoneyText, PressableScale } from "@/components/ui";
 import { useSync } from "@/contexts/SyncContext";
 import { getDb } from "@/lib/db";
-import { useColors } from "@/hooks/useColors";
+import { fonts } from "@/constants/tokens";
+import { useTheme, type Theme } from "@/hooks/useTheme";
 
 interface Stats {
   totalInvoices: number;
@@ -48,22 +50,26 @@ function getStartDate(period: Period): string | null {
   return null;
 }
 
-function StatCard({ label, value, icon, color, colors }: {
-  label: string; value: string; icon: any; color: string; colors: any;
+function StatCard({ label, value, money, icon, color, t }: {
+  label: string; value?: string; money?: number; icon: any; color: string; t: Theme;
 }) {
+  const c = t.color;
   return (
-    <View style={[styles.statCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
-      <View style={[styles.statIcon, { backgroundColor: color + "22" }]}>
+    <View style={[styles.statCard, { backgroundColor: c.surface, borderColor: c.hairline }]}>
+      <View style={[styles.statIcon, { backgroundColor: c.brandTint }]}>
         <Feather name={icon} size={18} color={color} />
       </View>
-      <Text style={[styles.statVal, { color: colors.foreground }]}>{value}</Text>
-      <Text style={[styles.statLabel, { color: colors.mutedForeground }]}>{label}</Text>
+      {money !== undefined
+        ? <MoneyText amount={money} size="callout" />
+        : <Text style={[styles.statVal, { color: c.text }]}>{value}</Text>}
+      <Text style={[styles.statLabel, { color: c.textMuted }]}>{label}</Text>
     </View>
   );
 }
 
 export default function RapportsScreen() {
-  const colors = useColors();
+  const t = useTheme();
+  const c = t.color;
   const { triggerSync } = useSync();
   const [period, setPeriod] = useState<Period>("هذا الشهر");
   const [stats, setStats] = useState<Stats | null>(null);
@@ -142,27 +148,25 @@ export default function RapportsScreen() {
     setRefreshing(false);
   };
 
-  const fmt = (n: number) => n.toLocaleString("fr-DZ") + " د.ج";
-
   return (
-    <View style={[styles.container, { backgroundColor: colors.background }]}>
+    <View style={[styles.container, { backgroundColor: c.bg }]}>
       <SyncBar />
 
       <ScrollView
         contentContainerStyle={styles.scroll}
-        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary} />}
+        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={c.brand} />}
         showsVerticalScrollIndicator={false}
       >
         {/* Period selector */}
         <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.periods}>
           {PERIODS.map(p => (
-            <TouchableOpacity
+            <PressableScale
               key={p}
-              style={[styles.periodBtn, { backgroundColor: period === p ? colors.primary : colors.card, borderColor: period === p ? colors.primary : colors.border }]}
+              style={[styles.periodBtn, { backgroundColor: period === p ? c.brand : c.surface, borderColor: period === p ? c.brand : c.hairline }]}
               onPress={() => setPeriod(p)}
             >
-              <Text style={[styles.periodText, { color: period === p ? "#fff" : colors.foreground }]}>{p}</Text>
-            </TouchableOpacity>
+              <Text style={[styles.periodText, { color: period === p ? c.onBrand : c.text }]}>{p}</Text>
+            </PressableScale>
           ))}
         </ScrollView>
 
@@ -170,29 +174,29 @@ export default function RapportsScreen() {
           <>
             {/* Main stats grid */}
             <View style={styles.statsGrid}>
-              <StatCard label="المبيعات" value={fmt(stats.totalRevenue)} icon="trending-up" color={colors.primary} colors={colors} />
-              <StatCard label="الفواتير" value={String(stats.totalInvoices)} icon="file-text" color="#3b82f6" colors={colors} />
-              <StatCard label="نقداً" value={fmt(stats.totalCash)} icon="check-circle" color="#22c55e" colors={colors} />
-              <StatCard label="آجل" value={fmt(stats.totalCredit)} icon="clock" color="#f59e0b" colors={colors} />
+              <StatCard label="المبيعات" money={stats.totalRevenue} icon="trending-up" color={c.brandBright} t={t} />
+              <StatCard label="الفواتير" value={String(stats.totalInvoices)} icon="file-text" color={c.brandBright} t={t} />
+              <StatCard label="نقداً" money={stats.totalCash} icon="check-circle" color={c.success} t={t} />
+              <StatCard label="آجل" money={stats.totalCredit} icon="clock" color={c.warning} t={t} />
             </View>
 
             <View style={styles.statsGrid}>
-              <StatCard label="المرتجعات" value={fmt(stats.totalReturnsAmount)} icon="rotate-ccw" color={colors.destructive} colors={colors} />
-              <StatCard label="عدد المرتجعات" value={String(stats.totalReturns)} icon="refresh-cw" color="#ef4444" colors={colors} />
-              <StatCard label="تحصيل الصندوق" value={fmt(stats.totalCashIn)} icon="arrow-down-circle" color="#22c55e" colors={colors} />
-              <StatCard label="صرف الصندوق" value={fmt(stats.totalCashOut)} icon="arrow-up-circle" color={colors.destructive} colors={colors} />
+              <StatCard label="المرتجعات" money={stats.totalReturnsAmount} icon="rotate-ccw" color={c.danger} t={t} />
+              <StatCard label="عدد المرتجعات" value={String(stats.totalReturns)} icon="refresh-cw" color={c.danger} t={t} />
+              <StatCard label="تحصيل الصندوق" money={stats.totalCashIn} icon="arrow-down-circle" color={c.success} t={t} />
+              <StatCard label="صرف الصندوق" money={stats.totalCashOut} icon="arrow-up-circle" color={c.danger} t={t} />
             </View>
 
             {/* Top products */}
             {stats.topProducts.length > 0 && (
-              <View style={[styles.section, { backgroundColor: colors.card, borderColor: colors.border }]}>
-                <Text style={[styles.sectionTitle, { color: colors.foreground }]}>أكثر المنتجات مبيعاً</Text>
+              <View style={[styles.section, { backgroundColor: c.surface, borderColor: c.hairline }]}>
+                <Text style={[styles.sectionTitle, { color: c.text }]}>أكثر المنتجات مبيعاً</Text>
                 {stats.topProducts.map((p, i) => (
-                  <View key={p.name} style={[styles.rankRow, { borderTopColor: colors.border }]}>
-                    <Text style={[styles.rankQty, { color: colors.primary }]}>{Number(p.qty).toFixed(0)}</Text>
-                    <Text style={[styles.rankName, { color: colors.foreground, flex: 1, textAlign: "right" }]}>{p.name}</Text>
-                    <View style={[styles.rankBadge, { backgroundColor: colors.primary + "22" }]}>
-                      <Text style={[styles.rankNum, { color: colors.primary }]}>#{i + 1}</Text>
+                  <View key={p.name} style={[styles.rankRow, { borderTopColor: c.hairline }]}>
+                    <Text style={[styles.rankQty, { color: c.brandBright }]}>{Number(p.qty).toFixed(0)}</Text>
+                    <Text style={[styles.rankName, { color: c.text, flex: 1, textAlign: "right" }]}>{p.name}</Text>
+                    <View style={[styles.rankBadge, { backgroundColor: c.brandTint }]}>
+                      <Text style={[styles.rankNum, { color: c.brandBright }]}>#{i + 1}</Text>
                     </View>
                   </View>
                 ))}
@@ -201,14 +205,14 @@ export default function RapportsScreen() {
 
             {/* Top clients */}
             {stats.topClients.length > 0 && (
-              <View style={[styles.section, { backgroundColor: colors.card, borderColor: colors.border }]}>
-                <Text style={[styles.sectionTitle, { color: colors.foreground }]}>أفضل العملاء</Text>
-                {stats.topClients.map((c, i) => (
-                  <View key={c.name + i} style={[styles.rankRow, { borderTopColor: colors.border }]}>
-                    <Text style={[styles.rankQty, { color: colors.primary }]}>{fmt(c.total)}</Text>
-                    <Text style={[styles.rankName, { color: colors.foreground, flex: 1, textAlign: "right" }]}>{c.name}</Text>
-                    <View style={[styles.rankBadge, { backgroundColor: "#22c55e22" }]}>
-                      <Text style={[styles.rankNum, { color: "#22c55e" }]}>#{i + 1}</Text>
+              <View style={[styles.section, { backgroundColor: c.surface, borderColor: c.hairline }]}>
+                <Text style={[styles.sectionTitle, { color: c.text }]}>أفضل العملاء</Text>
+                {stats.topClients.map((client, i) => (
+                  <View key={client.name + i} style={[styles.rankRow, { borderTopColor: c.hairline }]}>
+                    <MoneyText amount={client.total} tone="positive" size="footnote" style={styles.rankQty} />
+                    <Text style={[styles.rankName, { color: c.text, flex: 1, textAlign: "right" }]}>{client.name}</Text>
+                    <View style={[styles.rankBadge, { backgroundColor: c.successTint }]}>
+                      <Text style={[styles.rankNum, { color: c.successText }]}>#{i + 1}</Text>
                     </View>
                   </View>
                 ))}
@@ -228,20 +232,20 @@ const styles = StyleSheet.create({
   scroll: { paddingBottom: 16 },
   periods: { flexDirection: "row-reverse", gap: 8, padding: 12 },
   periodBtn: { paddingHorizontal: 16, paddingVertical: 8, borderRadius: 20, borderWidth: 1 },
-  periodText: { fontSize: 13, fontFamily: "Cairo_600SemiBold" },
+  periodText: { fontSize: 13, fontFamily: fonts.semibold },
   statsGrid: { flexDirection: "row-reverse", flexWrap: "wrap", gap: 8, paddingHorizontal: 12, marginBottom: 4 },
   statCard: {
     flex: 1, minWidth: "45%", borderRadius: 14, borderWidth: 1,
     padding: 14, alignItems: "flex-end", gap: 6,
   },
   statIcon: { width: 36, height: 36, borderRadius: 10, alignItems: "center", justifyContent: "center" },
-  statVal: { fontSize: 16, fontFamily: "Cairo_700Bold" },
-  statLabel: { fontSize: 11, fontFamily: "Cairo_400Regular" },
+  statVal: { fontSize: 16, fontFamily: fonts.bold },
+  statLabel: { fontSize: 11, fontFamily: fonts.regular },
   section: { marginHorizontal: 12, marginTop: 12, borderRadius: 14, borderWidth: 1, overflow: "hidden" },
-  sectionTitle: { fontSize: 15, fontFamily: "Cairo_700Bold", padding: 14, textAlign: "right" },
+  sectionTitle: { fontSize: 15, fontFamily: fonts.bold, padding: 14, textAlign: "right" },
   rankRow: { flexDirection: "row-reverse", alignItems: "center", gap: 10, padding: 12, borderTopWidth: 1 },
   rankBadge: { width: 28, height: 28, borderRadius: 8, alignItems: "center", justifyContent: "center" },
-  rankNum: { fontSize: 11, fontFamily: "Cairo_700Bold" },
-  rankName: { fontSize: 14, fontFamily: "Cairo_600SemiBold" },
-  rankQty: { fontSize: 13, fontFamily: "Cairo_700Bold" },
+  rankNum: { fontSize: 11, fontFamily: fonts.bold },
+  rankName: { fontSize: 14, fontFamily: fonts.semibold },
+  rankQty: { fontSize: 13, fontFamily: fonts.bold },
 });

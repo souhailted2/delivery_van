@@ -2,14 +2,17 @@ import { Feather } from "@expo/vector-icons";
 import { useRefreshOnFocus } from "@/hooks/useRefreshOnFocus";
 import { useCallback, useState } from "react";
 import {
-  Alert, FlatList, Modal, RefreshControl, ScrollView, StyleSheet, Text,
-  TextInput, TouchableOpacity, View,
+  FlatList, Modal, RefreshControl, ScrollView, StyleSheet, Text,
+  TextInput, View,
 } from "react-native";
 import { SyncBar } from "@/components/SyncBar";
+import { AppButton, Avatar, EmptyState, PressableScale, ResultDialog } from "@/components/ui";
+import type { DialogAction, ResultVariant } from "@/components/ui";
 import { useSync } from "@/contexts/SyncContext";
 import { getDb } from "@/lib/db";
 import { newSyncId } from "@/lib/uuid";
-import { useColors } from "@/hooks/useColors";
+import { fonts } from "@/constants/tokens";
+import { useTheme } from "@/hooks/useTheme";
 
 interface Branch {
   _lid?: number; sync_id: string; id?: number | null;
@@ -18,7 +21,8 @@ interface Branch {
 }
 
 export default function BranchesScreen() {
-  const colors = useColors();
+  const t = useTheme();
+  const c = t.color;
   const { triggerSync } = useSync();
   const [branches, setBranches] = useState<Branch[]>([]);
   const [search, setSearch] = useState("");
@@ -29,6 +33,13 @@ export default function BranchesScreen() {
   const [formAddress, setFormAddress] = useState("");
   const [formPhone, setFormPhone] = useState("");
   const [saving, setSaving] = useState(false);
+
+  const [dialog, setDialog] = useState<{ visible: boolean; variant: ResultVariant; title: string; message?: string; actions?: DialogAction[] }>(
+    { visible: false, variant: "info", title: "" }
+  );
+  const showDialog = (variant: ResultVariant, title: string, message?: string, actions?: DialogAction[]) =>
+    setDialog({ visible: true, variant, title, message, actions });
+  const hideDialog = () => setDialog((d) => ({ ...d, visible: false }));
 
   const load = useCallback(async () => {
     const db = await getDb();
@@ -64,10 +75,10 @@ export default function BranchesScreen() {
   };
 
   const handleDelete = (item: Branch) => {
-    Alert.alert("حذف الفرع", `هل تريد حذف "${item.name}"؟`, [
-      { text: "إلغاء", style: "cancel" },
+    showDialog("warning", "حذف الفرع", `هل تريد حذف "${item.name}"؟`, [
+      { label: "إلغاء", variant: "tonal" },
       {
-        text: "حذف", style: "destructive",
+        label: "حذف", variant: "danger",
         onPress: async () => {
           const db = await getDb();
           if (!db) return;
@@ -83,7 +94,7 @@ export default function BranchesScreen() {
   };
 
   const handleSave = async () => {
-    if (!formName.trim()) { Alert.alert("خطأ", "اسم الفرع مطلوب"); return; }
+    if (!formName.trim()) { showDialog("error", "خطأ", "اسم الفرع مطلوب"); return; }
     setSaving(true);
     try {
       const db = await getDb();
@@ -104,107 +115,112 @@ export default function BranchesScreen() {
       triggerSync();
       load();
     } catch (e: any) {
-      Alert.alert("خطأ", e?.message ?? "فشل الحفظ");
+      showDialog("error", "خطأ", e?.message ?? "فشل الحفظ");
     } finally {
       setSaving(false);
     }
   };
 
   return (
-    <View style={[styles.container, { backgroundColor: colors.background }]}>
+    <View style={[styles.container, { backgroundColor: c.bg }]}>
       <SyncBar />
       <View style={styles.header}>
-        <View style={[styles.searchBar, { backgroundColor: colors.card, borderColor: colors.border }]}>
-          <Feather name="search" size={16} color={colors.mutedForeground} />
+        <View style={[styles.searchBar, { backgroundColor: c.surface, borderColor: c.hairline }]}>
+          <Feather name="search" size={16} color={c.textMuted} />
           <TextInput
-            style={[styles.searchInput, { color: colors.foreground }]}
-            placeholder="ابحث عن فرع..." placeholderTextColor={colors.mutedForeground}
+            style={[styles.searchInput, { color: c.text }]}
+            placeholder="ابحث عن فرع..." placeholderTextColor={c.textFaint}
             value={search} onChangeText={setSearch} textAlign="right"
           />
         </View>
-        <TouchableOpacity style={[styles.addBtn, { backgroundColor: colors.primary }]} onPress={openAdd}>
-          <Feather name="plus" size={20} color="#fff" />
-        </TouchableOpacity>
+        <PressableScale
+          style={[styles.addBtn, { backgroundColor: c.brand }]}
+          onPress={openAdd}
+          accessibilityRole="button"
+          accessibilityLabel="إضافة فرع"
+          haptic
+        >
+          <Feather name="plus" size={20} color={c.onBrand} />
+        </PressableScale>
       </View>
 
       <FlatList
         data={branches}
         keyExtractor={i => i.sync_id}
         renderItem={({ item }) => (
-          <View style={[styles.card, { backgroundColor: colors.card, borderColor: colors.border }]}>
+          <View style={[styles.card, { backgroundColor: c.surface, borderColor: c.hairline }]}>
             <View style={styles.cardRow}>
-              <View style={[styles.avatar, { backgroundColor: colors.primary + "22" }]}>
-                <Feather name="map-pin" size={16} color={colors.primary} />
-              </View>
+              <Avatar icon="map-pin" size={40} />
               <View style={{ flex: 1, alignItems: "flex-end" }}>
-                <Text style={[styles.name, { color: colors.foreground }]}>{item.name}</Text>
-                {item.address && <Text style={[styles.sub, { color: colors.mutedForeground }]}>{item.address}</Text>}
-                {item.phone && <Text style={[styles.sub, { color: colors.mutedForeground }]}>{item.phone}</Text>}
+                <Text style={[styles.name, { color: c.text }]}>{item.name}</Text>
+                {item.address && <Text style={[styles.sub, { color: c.textMuted }]}>{item.address}</Text>}
+                {item.phone && <Text style={[styles.sub, { color: c.textMuted }]}>{item.phone}</Text>}
               </View>
-              <TouchableOpacity onPress={() => openEdit(item)} style={styles.iconBtn}>
-                <Feather name="edit-2" size={16} color={colors.mutedForeground} />
-              </TouchableOpacity>
-              <TouchableOpacity onPress={() => handleDelete(item)} style={styles.iconBtn}>
-                <Feather name="trash-2" size={16} color={colors.destructive} />
-              </TouchableOpacity>
+              <PressableScale onPress={() => openEdit(item)} style={styles.iconBtn} hitSlop={6} accessibilityLabel="تعديل">
+                <Feather name="edit-2" size={16} color={c.textMuted} />
+              </PressableScale>
+              <PressableScale onPress={() => handleDelete(item)} style={styles.iconBtn} hitSlop={6} accessibilityLabel="حذف">
+                <Feather name="trash-2" size={16} color={c.danger} />
+              </PressableScale>
             </View>
           </View>
         )}
         contentContainerStyle={styles.list}
-        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary} />}
+        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={c.brand} />}
         ListEmptyComponent={
-          <View style={styles.empty}>
-            <Feather name="map-pin" size={40} color={colors.muted} />
-            <Text style={[styles.emptyText, { color: colors.mutedForeground }]}>
-              {search ? "لا توجد نتائج" : "لا توجد فروع — قم بالمزامنة"}
-            </Text>
-          </View>
+          search ? (
+            <EmptyState icon="search" title="لا توجد نتائج" subtitle={`لم نعثر على فرع باسم "${search}"`} />
+          ) : (
+            <EmptyState
+              icon="map-pin"
+              title="لا توجد فروع"
+              subtitle="أضف أول فرع أو قم بالمزامنة لجلب القائمة"
+              actionLabel="إضافة فرع"
+              actionIcon="plus"
+              onAction={openAdd}
+            />
+          )
         }
         showsVerticalScrollIndicator={false}
       />
 
       <Modal visible={showModal} animationType="slide" transparent onRequestClose={() => setShowModal(false)}>
-        <View style={styles.overlay}>
-          <View style={[styles.sheet, { backgroundColor: colors.background, borderColor: colors.border }]}>
-            <View style={[styles.sheetHeader, { borderBottomColor: colors.border }]}>
-              <TouchableOpacity onPress={() => setShowModal(false)}>
-                <Feather name="x" size={22} color={colors.foreground} />
-              </TouchableOpacity>
-              <Text style={[styles.sheetTitle, { color: colors.foreground }]}>
+        <View style={[styles.overlay, { backgroundColor: c.scrim }]}>
+          <View style={[styles.sheet, { backgroundColor: c.surface, borderColor: c.hairline }]}>
+            <View style={[styles.sheetHeader, { borderBottomColor: c.hairline }]}>
+              <PressableScale onPress={() => setShowModal(false)} hitSlop={10} accessibilityLabel="إغلاق">
+                <Feather name="x" size={22} color={c.text} />
+              </PressableScale>
+              <Text style={[styles.sheetTitle, { color: c.text }]}>
                 {editItem ? "تعديل الفرع" : "فرع جديد"}
               </Text>
-              <TouchableOpacity
-                style={[styles.saveBtn, { backgroundColor: saving ? colors.muted : colors.primary }]}
-                onPress={handleSave} disabled={saving}
-              >
-                <Text style={styles.saveBtnText}>{saving ? "جاري..." : "حفظ"}</Text>
-              </TouchableOpacity>
+              <AppButton label={saving ? "جاري..." : "حفظ"} size="sm" loading={saving} onPress={handleSave} />
             </View>
             <ScrollView style={styles.sheetScroll} keyboardShouldPersistTaps="handled">
               <View style={styles.fieldGroup}>
-                <Text style={[styles.label, { color: colors.mutedForeground }]}>اسم الفرع *</Text>
+                <Text style={[styles.label, { color: c.textMuted }]}>اسم الفرع *</Text>
                 <TextInput
-                  style={[styles.input, { backgroundColor: colors.card, borderColor: colors.border, color: colors.foreground }]}
+                  style={[styles.input, { backgroundColor: c.bg, borderColor: c.hairline, color: c.text }]}
                   value={formName} onChangeText={setFormName}
-                  placeholder="اسم الفرع" placeholderTextColor={colors.mutedForeground}
+                  placeholder="اسم الفرع" placeholderTextColor={c.textFaint}
                   textAlign="right" autoFocus
                 />
               </View>
               <View style={styles.fieldGroup}>
-                <Text style={[styles.label, { color: colors.mutedForeground }]}>العنوان</Text>
+                <Text style={[styles.label, { color: c.textMuted }]}>العنوان</Text>
                 <TextInput
-                  style={[styles.input, { backgroundColor: colors.card, borderColor: colors.border, color: colors.foreground }]}
+                  style={[styles.input, { backgroundColor: c.bg, borderColor: c.hairline, color: c.text }]}
                   value={formAddress} onChangeText={setFormAddress}
-                  placeholder="العنوان" placeholderTextColor={colors.mutedForeground}
+                  placeholder="العنوان" placeholderTextColor={c.textFaint}
                   textAlign="right"
                 />
               </View>
               <View style={styles.fieldGroup}>
-                <Text style={[styles.label, { color: colors.mutedForeground }]}>الهاتف</Text>
+                <Text style={[styles.label, { color: c.textMuted }]}>الهاتف</Text>
                 <TextInput
-                  style={[styles.input, { backgroundColor: colors.card, borderColor: colors.border, color: colors.foreground }]}
+                  style={[styles.input, { backgroundColor: c.bg, borderColor: c.hairline, color: c.text }]}
                   value={formPhone} onChangeText={setFormPhone}
-                  placeholder="رقم الهاتف" placeholderTextColor={colors.mutedForeground}
+                  placeholder="رقم الهاتف" placeholderTextColor={c.textFaint}
                   keyboardType="phone-pad" textAlign="right"
                 />
               </View>
@@ -213,6 +229,15 @@ export default function BranchesScreen() {
           </View>
         </View>
       </Modal>
+
+      <ResultDialog
+        visible={dialog.visible}
+        variant={dialog.variant}
+        title={dialog.title}
+        message={dialog.message}
+        actions={dialog.actions}
+        onRequestClose={hideDialog}
+      />
     </View>
   );
 }
@@ -221,25 +246,22 @@ const styles = StyleSheet.create({
   container: { flex: 1 },
   header: { flexDirection: "row-reverse", gap: 8, margin: 12, alignItems: "center" },
   searchBar: { flex: 1, flexDirection: "row-reverse", alignItems: "center", gap: 8, paddingHorizontal: 14, height: 44, borderRadius: 12, borderWidth: 1 },
-  searchInput: { flex: 1, fontSize: 14, fontFamily: "Cairo_400Regular" },
+  searchInput: { flex: 1, fontSize: 14, fontFamily: fonts.regular },
   addBtn: { width: 44, height: 44, borderRadius: 12, alignItems: "center", justifyContent: "center" },
   list: { paddingHorizontal: 12, paddingBottom: 16, gap: 8 },
   card: { borderRadius: 14, borderWidth: 1, padding: 14 },
   cardRow: { flexDirection: "row-reverse", alignItems: "center", gap: 10 },
-  avatar: { width: 36, height: 36, borderRadius: 8, alignItems: "center", justifyContent: "center" },
-  name: { fontSize: 15, fontFamily: "Cairo_600SemiBold" },
-  sub: { fontSize: 12, fontFamily: "Cairo_400Regular", marginTop: 2 },
+  name: { fontSize: 15, fontFamily: fonts.semibold },
+  sub: { fontSize: 12, fontFamily: fonts.regular, marginTop: 2 },
   iconBtn: { padding: 6 },
   empty: { alignItems: "center", paddingVertical: 60, gap: 12 },
-  emptyText: { fontSize: 14, fontFamily: "Cairo_400Regular" },
-  overlay: { flex: 1, backgroundColor: "rgba(0,0,0,0.45)", justifyContent: "flex-end" },
+  emptyText: { fontSize: 14, fontFamily: fonts.regular },
+  overlay: { flex: 1, justifyContent: "flex-end" },
   sheet: { borderTopLeftRadius: 22, borderTopRightRadius: 22, borderWidth: 1, borderBottomWidth: 0, maxHeight: "85%" },
   sheetHeader: { flexDirection: "row-reverse", alignItems: "center", justifyContent: "space-between", paddingHorizontal: 16, paddingVertical: 14, borderBottomWidth: 1 },
-  sheetTitle: { fontSize: 17, fontFamily: "Cairo_600SemiBold" },
-  saveBtn: { paddingHorizontal: 18, paddingVertical: 7, borderRadius: 10 },
-  saveBtnText: { color: "#fff", fontSize: 14, fontFamily: "Cairo_600SemiBold" },
+  sheetTitle: { fontSize: 17, fontFamily: fonts.semibold },
   sheetScroll: { paddingHorizontal: 16, paddingTop: 16 },
   fieldGroup: { marginBottom: 14 },
-  label: { fontSize: 12, fontFamily: "Cairo_400Regular", marginBottom: 6, textAlign: "right" },
-  input: { height: 44, borderRadius: 10, borderWidth: 1, paddingHorizontal: 12, fontSize: 14, fontFamily: "Cairo_400Regular" },
+  label: { fontSize: 12, fontFamily: fonts.regular, marginBottom: 6, textAlign: "right" },
+  input: { height: 44, borderRadius: 10, borderWidth: 1, paddingHorizontal: 12, fontSize: 14, fontFamily: fonts.regular },
 });

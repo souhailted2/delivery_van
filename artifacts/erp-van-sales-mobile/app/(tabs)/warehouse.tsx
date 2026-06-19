@@ -2,16 +2,19 @@ import { Feather } from "@expo/vector-icons";
 import { useRefreshOnFocus } from "@/hooks/useRefreshOnFocus";
 import { useCallback, useState } from "react";
 import {
-  Alert, FlatList, Modal, RefreshControl, ScrollView, StyleSheet, Text,
-  TextInput, TouchableOpacity, View,
+  FlatList, Modal, RefreshControl, ScrollView, StyleSheet, Text,
+  TextInput, View,
 } from "react-native";
 import { SyncBar } from "@/components/SyncBar";
+import { AppButton, EmptyState, PressableScale, ResultDialog } from "@/components/ui";
+import type { DialogAction, ResultVariant } from "@/components/ui";
 import { useAuth } from "@/contexts/AuthContext";
 import { useSync } from "@/contexts/SyncContext";
 import { getDb } from "@/lib/db";
 import { newSyncId } from "@/lib/uuid";
 import { canonicalizeTruckStock } from "@/lib/truckStock";
-import { useColors } from "@/hooks/useColors";
+import { fonts } from "@/constants/tokens";
+import { useTheme } from "@/hooks/useTheme";
 
 interface WarehouseRow {
   sync_id: string;
@@ -34,7 +37,8 @@ interface TransferItem {
 }
 
 export default function WarehouseScreen() {
-  const colors = useColors();
+  const t = useTheme();
+  const c = t.color;
   const { user } = useAuth();
   const { triggerSync } = useSync();
   const [stock, setStock] = useState<WarehouseRow[]>([]);
@@ -45,6 +49,13 @@ export default function WarehouseScreen() {
   const [selectedTruck, setSelectedTruck] = useState<string>("");
   const [transferItems, setTransferItems] = useState<TransferItem[]>([]);
   const [transferring, setTransferring] = useState(false);
+
+  const [dialog, setDialog] = useState<{ visible: boolean; variant: ResultVariant; title: string; message?: string; actions?: DialogAction[] }>(
+    { visible: false, variant: "info", title: "" }
+  );
+  const showDialog = (variant: ResultVariant, title: string, message?: string, actions?: DialogAction[]) =>
+    setDialog({ visible: true, variant, title, message, actions });
+  const hideDialog = () => setDialog((d) => ({ ...d, visible: false }));
 
   const load = useCallback(async () => {
     const db = await getDb();
@@ -95,12 +106,12 @@ export default function WarehouseScreen() {
   };
 
   const handleTransfer = async () => {
-    if (!selectedTruck) { Alert.alert("تنبيه", "اختر الشاحنة أولاً"); return; }
+    if (!selectedTruck) { showDialog("warning", "تنبيه", "اختر الشاحنة أولاً"); return; }
     const items = transferItems.filter(i => Number(i.quantity) > 0);
-    if (items.length === 0) { Alert.alert("تنبيه", "أدخل كمية واحدة على الأقل"); return; }
+    if (items.length === 0) { showDialog("warning", "تنبيه", "أدخل كمية واحدة على الأقل"); return; }
     for (const item of items) {
       if (Number(item.quantity) > item.available) {
-        Alert.alert("خطأ", `الكمية تتجاوز المخزون لـ ${item.productName}`);
+        showDialog("error", "خطأ", `الكمية تتجاوز المخزون لـ ${item.productName}`);
         return;
       }
     }
@@ -133,101 +144,99 @@ export default function WarehouseScreen() {
       setShowTransfer(false);
       triggerSync();
       load();
-      Alert.alert("تم", "تم تحويل المخزون للشاحنة بنجاح ✓");
+      showDialog("success", "تم", "تم تحويل المخزون للشاحنة بنجاح");
     } catch (e: any) {
-      Alert.alert("خطأ", e?.message ?? "فشل التحويل");
+      showDialog("error", "خطأ", e?.message ?? "فشل التحويل");
     } finally {
       setTransferring(false);
     }
   };
 
   return (
-    <View style={[styles.container, { backgroundColor: colors.background }]}>
+    <View style={[styles.container, { backgroundColor: c.bg }]}>
       <SyncBar />
       <View style={styles.topBar}>
-        <View style={[styles.searchBar, { backgroundColor: colors.card, borderColor: colors.border }]}>
-          <Feather name="search" size={16} color={colors.mutedForeground} />
+        <View style={[styles.searchBar, { backgroundColor: c.surface, borderColor: c.hairline }]}>
+          <Feather name="search" size={16} color={c.textMuted} />
           <TextInput
-            style={[styles.searchInput, { color: colors.foreground }]}
-            placeholder="ابحث..." placeholderTextColor={colors.mutedForeground}
+            style={[styles.searchInput, { color: c.text }]}
+            placeholder="ابحث..." placeholderTextColor={c.textMuted}
             value={search} onChangeText={setSearch} textAlign="right"
           />
         </View>
-        <TouchableOpacity
-          style={[styles.transferBtn, { backgroundColor: colors.primary }]}
+        <AppButton
+          label="تحويل"
+          icon="arrow-left"
+          size="md"
           onPress={openTransfer}
-        >
-          <Feather name="arrow-left" size={16} color="#fff" />
-          <Text style={styles.transferBtnText}>تحويل</Text>
-        </TouchableOpacity>
+        />
       </View>
 
       <FlatList
         data={stock}
         keyExtractor={i => i.sync_id}
         renderItem={({ item }) => (
-          <View style={[styles.card, { backgroundColor: colors.card, borderColor: colors.border }]}>
+          <View style={[styles.card, { backgroundColor: c.surface, borderColor: c.hairline }]}>
             <View style={styles.cardRow}>
-              <View style={[styles.avatar, { backgroundColor: item.quantity < 5 ? colors.destructive + "22" : colors.primary + "22" }]}>
-                <Feather name="archive" size={16} color={item.quantity < 5 ? colors.destructive : colors.primary} />
+              <View style={[styles.avatar, { backgroundColor: item.quantity < 5 ? c.dangerTint : c.brandTint }]}>
+                <Feather name="archive" size={16} color={item.quantity < 5 ? c.danger : c.brandText} />
               </View>
               <View style={{ flex: 1, alignItems: "flex-end" }}>
-                <Text style={[styles.productName, { color: colors.foreground }]}>{item.product_name}</Text>
-                {item.category_name && <Text style={[styles.sub, { color: colors.mutedForeground }]}>{item.category_name}</Text>}
+                <Text style={[styles.productName, { color: c.text }]}>{item.product_name}</Text>
+                {item.category_name && <Text style={[styles.sub, { color: c.textMuted }]}>{item.category_name}</Text>}
               </View>
               <View style={{ alignItems: "center", gap: 2 }}>
-                <Text style={[styles.qty, { color: item.quantity < 5 ? colors.destructive : colors.foreground }]}>
+                <Text style={[styles.qty, { color: item.quantity < 5 ? c.danger : c.text }]}>
                   {Number(item.quantity ?? 0).toFixed(0)}
                 </Text>
-                <Text style={[styles.unit, { color: colors.mutedForeground }]}>{item.unit ?? "حبة"}</Text>
+                <Text style={[styles.unit, { color: c.textMuted }]}>{item.unit ?? "حبة"}</Text>
               </View>
             </View>
           </View>
         )}
         contentContainerStyle={styles.list}
-        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary} />}
+        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={c.brand} />}
         ListEmptyComponent={
-          <View style={styles.empty}>
-            <Feather name="archive" size={40} color={colors.muted} />
-            <Text style={[styles.emptyText, { color: colors.mutedForeground }]}>
-              {search ? "لا توجد نتائج" : "المخزن فارغ — قم بالمزامنة"}
-            </Text>
-          </View>
+          search ? (
+            <EmptyState icon="search" title="لا توجد نتائج" />
+          ) : (
+            <EmptyState icon="archive" title="المخزن فارغ — قم بالمزامنة" />
+          )
         }
         showsVerticalScrollIndicator={false}
       />
 
       <Modal visible={showTransfer} animationType="slide" onRequestClose={() => setShowTransfer(false)}>
-        <View style={[styles.modal, { backgroundColor: colors.background }]}>
-          <View style={[styles.modalHeader, { borderBottomColor: colors.border }]}>
-            <TouchableOpacity onPress={() => setShowTransfer(false)}>
-              <Feather name="x" size={22} color={colors.foreground} />
-            </TouchableOpacity>
-            <Text style={[styles.modalTitle, { color: colors.foreground }]}>تحويل إلى شاحنة</Text>
-            <TouchableOpacity
-              style={[styles.saveBtn, { backgroundColor: transferring ? colors.muted : colors.primary }]}
-              onPress={handleTransfer} disabled={transferring}
-            >
-              <Text style={styles.saveBtnText}>{transferring ? "جاري..." : "تأكيد"}</Text>
-            </TouchableOpacity>
+        <View style={[styles.modal, { backgroundColor: c.bg }]}>
+          <View style={[styles.modalHeader, { borderBottomColor: c.hairline }]}>
+            <PressableScale onPress={() => setShowTransfer(false)} hitSlop={10} accessibilityLabel="إغلاق">
+              <Feather name="x" size={22} color={c.text} />
+            </PressableScale>
+            <Text style={[styles.modalTitle, { color: c.text }]}>تحويل إلى شاحنة</Text>
+            <AppButton
+              label={transferring ? "جاري..." : "تأكيد"}
+              size="sm"
+              loading={transferring}
+              onPress={handleTransfer}
+            />
           </View>
 
-          <View style={[styles.truckSection, { borderBottomColor: colors.border }]}>
-            <Text style={[styles.sectionLabel, { color: colors.mutedForeground }]}>الشاحنة المستلِمة</Text>
+          <View style={[styles.truckSection, { borderBottomColor: c.hairline }]}>
+            <Text style={[styles.sectionLabel, { color: c.textMuted }]}>الشاحنة المستلِمة</Text>
             <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.truckChips}>
-              {trucks.map(t => (
-                <TouchableOpacity
-                  key={t.id}
+              {trucks.map(tr => (
+                <PressableScale
+                  key={tr.id}
                   style={[styles.chip, {
-                    backgroundColor: selectedTruck === String(t.id) ? colors.primary : colors.card,
-                    borderColor: selectedTruck === String(t.id) ? colors.primary : colors.border,
+                    backgroundColor: selectedTruck === String(tr.id) ? c.brand : c.surface,
+                    borderColor: selectedTruck === String(tr.id) ? c.brand : c.hairline,
                   }]}
-                  onPress={() => setSelectedTruck(String(t.id))}
+                  onPress={() => setSelectedTruck(String(tr.id))}
                 >
-                  <Text style={[styles.chipText, { color: selectedTruck === String(t.id) ? "#fff" : colors.foreground }]}>
-                    {t.name}
+                  <Text style={[styles.chipText, { color: selectedTruck === String(tr.id) ? c.onBrand : c.text }]}>
+                    {tr.name}
                   </Text>
-                </TouchableOpacity>
+                </PressableScale>
               ))}
             </ScrollView>
           </View>
@@ -236,23 +245,23 @@ export default function WarehouseScreen() {
             data={transferItems.filter(i => i.available > 0)}
             keyExtractor={i => String(i.productId)}
             renderItem={({ item }) => (
-              <View style={[styles.transferRow, { borderBottomColor: colors.border }]}>
+              <View style={[styles.transferRow, { borderBottomColor: c.hairline }]}>
                 <View style={styles.transferQty}>
                   <TextInput
                     style={[styles.qtyInput, {
-                      backgroundColor: colors.card,
-                      borderColor: Number(item.quantity) > item.available ? colors.destructive : colors.border,
-                      color: colors.foreground,
+                      backgroundColor: c.surface,
+                      borderColor: Number(item.quantity) > item.available ? c.danger : c.hairline,
+                      color: c.text,
                     }]}
                     value={item.quantity}
                     onChangeText={val => setQty(item.productId, val)}
                     keyboardType="numeric" textAlign="center"
                   />
-                  <Text style={[styles.availText, { color: colors.mutedForeground }]}>/{item.available}</Text>
+                  <Text style={[styles.availText, { color: c.textMuted }]}>/{item.available}</Text>
                 </View>
                 <View style={{ flex: 1, alignItems: "flex-end" }}>
-                  <Text style={[styles.transferName, { color: colors.foreground }]}>{item.productName}</Text>
-                  <Text style={[styles.transferUnit, { color: colors.mutedForeground }]}>{item.unit}</Text>
+                  <Text style={[styles.transferName, { color: c.text }]}>{item.productName}</Text>
+                  <Text style={[styles.transferUnit, { color: c.textMuted }]}>{item.unit}</Text>
                 </View>
               </View>
             )}
@@ -260,6 +269,15 @@ export default function WarehouseScreen() {
           />
         </View>
       </Modal>
+
+      <ResultDialog
+        visible={dialog.visible}
+        variant={dialog.variant}
+        title={dialog.title}
+        message={dialog.message}
+        actions={dialog.actions}
+        onRequestClose={hideDialog}
+      />
     </View>
   );
 }
@@ -268,33 +286,27 @@ const styles = StyleSheet.create({
   container: { flex: 1 },
   topBar: { flexDirection: "row-reverse", gap: 8, margin: 12, alignItems: "center" },
   searchBar: { flex: 1, flexDirection: "row-reverse", alignItems: "center", gap: 8, paddingHorizontal: 14, height: 44, borderRadius: 12, borderWidth: 1 },
-  searchInput: { flex: 1, fontSize: 14, fontFamily: "Cairo_400Regular" },
-  transferBtn: { flexDirection: "row-reverse", alignItems: "center", gap: 6, paddingHorizontal: 14, height: 44, borderRadius: 12 },
-  transferBtnText: { color: "#fff", fontSize: 13, fontFamily: "Cairo_600SemiBold" },
+  searchInput: { flex: 1, fontSize: 14, fontFamily: fonts.regular },
   list: { paddingHorizontal: 12, paddingBottom: 16, gap: 8 },
   card: { borderRadius: 14, borderWidth: 1, padding: 14 },
   cardRow: { flexDirection: "row-reverse", alignItems: "center", gap: 10 },
   avatar: { width: 36, height: 36, borderRadius: 8, alignItems: "center", justifyContent: "center" },
-  productName: { fontSize: 14, fontFamily: "Cairo_600SemiBold" },
-  sub: { fontSize: 12, fontFamily: "Cairo_400Regular" },
-  qty: { fontSize: 18, fontFamily: "Cairo_700Bold" },
-  unit: { fontSize: 11, fontFamily: "Cairo_400Regular" },
-  empty: { alignItems: "center", paddingVertical: 60, gap: 12 },
-  emptyText: { fontSize: 14, fontFamily: "Cairo_400Regular", textAlign: "center" },
+  productName: { fontSize: 14, fontFamily: fonts.semibold },
+  sub: { fontSize: 12, fontFamily: fonts.regular },
+  qty: { fontSize: 18, fontFamily: fonts.bold },
+  unit: { fontSize: 11, fontFamily: fonts.regular },
   modal: { flex: 1 },
   modalHeader: { flexDirection: "row-reverse", alignItems: "center", justifyContent: "space-between", padding: 16, borderBottomWidth: 1 },
-  modalTitle: { fontSize: 16, fontFamily: "Cairo_700Bold" },
-  saveBtn: { paddingHorizontal: 18, paddingVertical: 8, borderRadius: 10 },
-  saveBtnText: { color: "#fff", fontSize: 14, fontFamily: "Cairo_600SemiBold" },
+  modalTitle: { fontSize: 16, fontFamily: fonts.bold },
   truckSection: { paddingVertical: 12, paddingHorizontal: 16, borderBottomWidth: 1, gap: 8 },
-  sectionLabel: { fontSize: 12, fontFamily: "Cairo_400Regular", textAlign: "right" },
+  sectionLabel: { fontSize: 12, fontFamily: fonts.regular, textAlign: "right" },
   truckChips: { flexDirection: "row-reverse", gap: 8, paddingVertical: 4 },
   chip: { paddingHorizontal: 16, paddingVertical: 8, borderRadius: 20, borderWidth: 1 },
-  chipText: { fontSize: 13, fontFamily: "Cairo_600SemiBold" },
+  chipText: { fontSize: 13, fontFamily: fonts.semibold },
   transferRow: { flexDirection: "row-reverse", alignItems: "center", gap: 12, paddingHorizontal: 16, paddingVertical: 12, borderBottomWidth: 1 },
   transferQty: { flexDirection: "row-reverse", alignItems: "center", gap: 4 },
-  qtyInput: { width: 60, height: 40, borderRadius: 8, borderWidth: 1, fontSize: 15, fontFamily: "Cairo_700Bold" },
-  availText: { fontSize: 12, fontFamily: "Cairo_400Regular" },
-  transferName: { fontSize: 14, fontFamily: "Cairo_600SemiBold" },
-  transferUnit: { fontSize: 12, fontFamily: "Cairo_400Regular" },
+  qtyInput: { width: 60, height: 40, borderRadius: 8, borderWidth: 1, fontSize: 15, fontFamily: fonts.bold },
+  availText: { fontSize: 12, fontFamily: fonts.regular },
+  transferName: { fontSize: 14, fontFamily: fonts.semibold },
+  transferUnit: { fontSize: 12, fontFamily: fonts.regular },
 });

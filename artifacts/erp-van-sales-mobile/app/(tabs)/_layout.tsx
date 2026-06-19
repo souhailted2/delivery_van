@@ -5,10 +5,27 @@ import React from "react";
 import { Platform, StyleSheet, View } from "react-native";
 
 import { useAuth } from "@/contexts/AuthContext";
-import { useColors } from "@/hooks/useColors";
+import { fonts } from "@/constants/tokens";
+import { useTheme } from "@/hooks/useTheme";
+
+// Active tab gets a teal "command-center" pill behind the icon (approved
+// direction) — a shape change, not just a color change, for sunlight legibility.
+function tabIcon(name: React.ComponentProps<typeof Feather>["name"], brandTint: string) {
+  return ({ color, focused }: { color: string; focused: boolean }) => (
+    <View
+      style={[
+        styles.iconPill,
+        focused && { backgroundColor: brandTint },
+      ]}
+    >
+      <Feather name={name} size={20} color={color} />
+    </View>
+  );
+}
 
 function ClassicTabLayout() {
-  const colors = useColors();
+  const t = useTheme();
+  const c = t.color;
   const { user } = useAuth();
   const isIOS = Platform.OS === "ios";
   const isWeb = Platform.OS === "web";
@@ -18,29 +35,30 @@ function ClassicTabLayout() {
   return (
     <Tabs
       screenOptions={{
-        tabBarActiveTintColor: colors.primary,
-        tabBarInactiveTintColor: colors.mutedForeground,
+        tabBarActiveTintColor: c.brandBright,
+        tabBarInactiveTintColor: c.textFaint,
         headerShown: true,
-        headerTitleStyle: { fontFamily: "Cairo_700Bold", fontSize: 17 },
-        headerStyle: { backgroundColor: colors.card },
-        headerTintColor: colors.foreground,
+        headerTitleStyle: { fontFamily: fonts.bold, fontSize: 17, color: c.text },
+        headerStyle: { backgroundColor: c.rail },
+        headerTintColor: c.text,
+        headerShadowVisible: false,
         tabBarStyle: {
           position: "absolute",
-          backgroundColor: isIOS ? "transparent" : colors.card,
+          backgroundColor: isIOS ? "transparent" : c.rail,
           borderTopWidth: 1,
-          borderTopColor: colors.border,
+          borderTopColor: c.hairline,
           elevation: 0,
           ...(isWeb ? { height: 84 } : {}),
         },
         tabBarLabelStyle: {
-          fontFamily: "Cairo_600SemiBold",
+          fontFamily: fonts.semibold,
           fontSize: 11,
         },
         tabBarBackground: () =>
           isIOS ? (
-            <BlurView intensity={100} tint="light" style={StyleSheet.absoluteFill} />
+            <BlurView intensity={40} tint="dark" style={StyleSheet.absoluteFill} />
           ) : isWeb ? (
-            <View style={[StyleSheet.absoluteFill, { backgroundColor: colors.card }]} />
+            <View style={[StyleSheet.absoluteFill, { backgroundColor: c.rail }]} />
           ) : null,
       }}
     >
@@ -50,7 +68,7 @@ function ClassicTabLayout() {
         options={{
           title: "ALLAL Delivery",
           tabBarLabel: "الرئيسية",
-          tabBarIcon: ({ color }) => <Feather name="home" size={22} color={color} />,
+          tabBarIcon: tabIcon("home", c.brandTint),
           href: isTruck ? undefined : null,
         }}
       />
@@ -61,7 +79,7 @@ function ClassicTabLayout() {
         options={{
           title: "لوحة التحكم",
           tabBarLabel: "الرئيسية",
-          tabBarIcon: ({ color }) => <Feather name="home" size={22} color={color} />,
+          tabBarIcon: tabIcon("home", c.brandTint),
           href: isTruck ? null : undefined,
         }}
       />
@@ -72,7 +90,7 @@ function ClassicTabLayout() {
         options={{
           title: "المنتجات",
           tabBarLabel: "المنتجات",
-          tabBarIcon: ({ color }) => <Feather name="package" size={22} color={color} />,
+          tabBarIcon: tabIcon("package", c.brandTint),
           href: isTruck ? null : undefined,
         }}
       />
@@ -83,7 +101,7 @@ function ClassicTabLayout() {
         options={{
           title: "الفئات",
           tabBarLabel: "الفئات",
-          tabBarIcon: ({ color }) => <Feather name="tag" size={22} color={color} />,
+          tabBarIcon: tabIcon("tag", c.brandTint),
           href: isTruck ? null : undefined,
         }}
       />
@@ -94,7 +112,7 @@ function ClassicTabLayout() {
         options={{
           title: "الموردون",
           tabBarLabel: "الموردون",
-          tabBarIcon: ({ color }) => <Feather name="briefcase" size={22} color={color} />,
+          tabBarIcon: tabIcon("briefcase", c.brandTint),
           href: isTruck ? null : undefined,
         }}
       />
@@ -105,7 +123,7 @@ function ClassicTabLayout() {
         options={{
           title: "أوامر الشراء",
           tabBarLabel: "الشراء",
-          tabBarIcon: ({ color }) => <Feather name="shopping-cart" size={22} color={color} />,
+          tabBarIcon: tabIcon("shopping-cart", c.brandTint),
           href: isTruck ? null : undefined,
         }}
       />
@@ -116,7 +134,7 @@ function ClassicTabLayout() {
         options={{
           title: "العملاء",
           tabBarLabel: "العملاء",
-          tabBarIcon: ({ color }) => <Feather name="users" size={22} color={color} />,
+          tabBarIcon: tabIcon("users", c.brandTint),
           href: undefined,
         }}
       />
@@ -127,7 +145,7 @@ function ClassicTabLayout() {
         options={{
           title: "الفواتير",
           tabBarLabel: "الفواتير",
-          tabBarIcon: ({ color }) => <Feather name="file-text" size={22} color={color} />,
+          tabBarIcon: tabIcon("file-text", c.brandTint),
           href: isTruck ? null : undefined,
         }}
       />
@@ -138,7 +156,7 @@ function ClassicTabLayout() {
         options={{
           title: "المرتجعات",
           tabBarLabel: "المرتجعات",
-          tabBarIcon: ({ color }) => <Feather name="rotate-ccw" size={22} color={color} />,
+          tabBarIcon: tabIcon("rotate-ccw", c.brandTint),
           href: isTruck ? null : undefined,
         }}
       />
@@ -149,7 +167,7 @@ function ClassicTabLayout() {
         options={{
           title: "المخزن",
           tabBarLabel: "المخزن",
-          tabBarIcon: ({ color }) => <Feather name="archive" size={22} color={color} />,
+          tabBarIcon: tabIcon("archive", c.brandTint),
           href: isTruck ? null : undefined,
         }}
       />
@@ -160,7 +178,7 @@ function ClassicTabLayout() {
         options={{
           title: "الشاحنات",
           tabBarLabel: "الشاحنات",
-          tabBarIcon: ({ color }) => <Feather name="truck" size={22} color={color} />,
+          tabBarIcon: tabIcon("truck", c.brandTint),
           href: isTruck ? null : undefined,
         }}
       />
@@ -171,7 +189,7 @@ function ClassicTabLayout() {
         options={{
           title: "شاحنتي",
           tabBarLabel: "شاحنتي",
-          tabBarIcon: ({ color }) => <Feather name="box" size={22} color={color} />,
+          tabBarIcon: tabIcon("box", c.brandTint),
           href: isTruck ? undefined : null,
         }}
       />
@@ -182,7 +200,7 @@ function ClassicTabLayout() {
         options={{
           title: "استلام البضاعة",
           tabBarLabel: "التحميل",
-          tabBarIcon: ({ color }) => <Feather name="download" size={22} color={color} />,
+          tabBarIcon: tabIcon("download", c.brandTint),
           href: isTruck ? undefined : null,
         }}
       />
@@ -193,7 +211,7 @@ function ClassicTabLayout() {
         options={{
           title: "الصندوق",
           tabBarLabel: "الصندوق",
-          tabBarIcon: ({ color }) => <Feather name="dollar-sign" size={22} color={color} />,
+          tabBarIcon: tabIcon("dollar-sign", c.brandTint),
           href: undefined,
         }}
       />
@@ -204,7 +222,7 @@ function ClassicTabLayout() {
         options={{
           title: "التقارير",
           tabBarLabel: "التقارير",
-          tabBarIcon: ({ color }) => <Feather name="bar-chart-2" size={22} color={color} />,
+          tabBarIcon: tabIcon("bar-chart-2", c.brandTint),
           href: isTruck ? null : undefined,
         }}
       />
@@ -215,7 +233,7 @@ function ClassicTabLayout() {
         options={{
           title: "المستخدمون",
           tabBarLabel: "المستخدمون",
-          tabBarIcon: ({ color }) => <Feather name="user-check" size={22} color={color} />,
+          tabBarIcon: tabIcon("user-check", c.brandTint),
           href: isAdmin ? undefined : null,
         }}
       />
@@ -226,7 +244,7 @@ function ClassicTabLayout() {
         options={{
           title: "الفروع",
           tabBarLabel: "الفروع",
-          tabBarIcon: ({ color }) => <Feather name="map-pin" size={22} color={color} />,
+          tabBarIcon: tabIcon("map-pin", c.brandTint),
           href: isAdmin ? undefined : null,
         }}
       />
@@ -237,7 +255,7 @@ function ClassicTabLayout() {
         options={{
           title: "الإعدادات",
           tabBarLabel: "الإعدادات",
-          tabBarIcon: ({ color }) => <Feather name="settings" size={22} color={color} />,
+          tabBarIcon: tabIcon("settings", c.brandTint),
         }}
       />
     </Tabs>
@@ -249,3 +267,7 @@ export default function TabLayout() {
   if (!user) return <Redirect href="/login" />;
   return <ClassicTabLayout />;
 }
+
+const styles = StyleSheet.create({
+  iconPill: { width: 46, height: 30, borderRadius: 999, alignItems: "center", justifyContent: "center" },
+});

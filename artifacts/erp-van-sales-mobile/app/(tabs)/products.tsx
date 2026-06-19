@@ -4,19 +4,22 @@ import { Image } from "expo-image";
 import { useRefreshOnFocus } from "@/hooks/useRefreshOnFocus";
 import { useCallback, useState } from "react";
 import {
-  Alert, FlatList, KeyboardAvoidingView, Modal, Platform,
+  FlatList, KeyboardAvoidingView, Modal, Platform,
   RefreshControl, ScrollView, StyleSheet, Text,
-  TextInput, TouchableOpacity, View,
+  TextInput, View,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { SyncBar } from "@/components/SyncBar";
+import { MoneyText, PressableScale, ResultDialog } from "@/components/ui";
+import type { DialogAction, ResultVariant } from "@/components/ui";
 import { useAuth } from "@/contexts/AuthContext";
 import { useSync } from "@/contexts/SyncContext";
 import { Category, getDb, Product } from "@/lib/db";
 import { API_URL } from "@/lib/api";
 import { getLocalImagePath } from "@/lib/sync";
 import { newSyncId } from "@/lib/uuid";
-import { useColors } from "@/hooks/useColors";
+import { fonts } from "@/constants/tokens";
+import { useTheme, type Theme } from "@/hooks/useTheme";
 
 function ProductImage({ item }: { item: Product }) {
   const localUri = item.local_image_uri ?? getLocalImagePath(item.image_url);
@@ -38,7 +41,8 @@ function ProductImage({ item }: { item: Product }) {
   );
 }
 
-function ProductCard({ item, colors }: { item: Product & { category_name?: string; truck_quantity?: number }; colors: any }) {
+function ProductCard({ item, t }: { item: Product & { category_name?: string; truck_quantity?: number }; t: Theme }) {
+  const c = t.color;
   const hasImage = !!(item.local_image_uri ?? item.image_url);
   const displayQty = item.truck_quantity !== undefined ? item.truck_quantity : (item.stock_quantity ?? 0);
   const prices = [
@@ -47,38 +51,38 @@ function ProductCard({ item, colors }: { item: Product & { category_name?: strin
     { label: "جملة", value: item.selling_price_wholesale },
   ];
   return (
-    <View style={[styles.card, { backgroundColor: colors.card, borderColor: colors.border }]}>
+    <View style={[styles.card, { backgroundColor: c.surface, borderColor: c.hairline }]}>
       <View style={styles.cardRow}>
         {hasImage ? (
           <View style={styles.imageWrapper}>
             <ProductImage item={item} />
           </View>
         ) : (
-          <View style={[styles.avatar, { backgroundColor: colors.primary + "22" }]}>
-            <Feather name="package" size={20} color={colors.primary} />
+          <View style={[styles.avatar, { backgroundColor: c.brandTint }]}>
+            <Feather name="package" size={20} color={c.brandBright} />
           </View>
         )}
         <View style={{ flex: 1, alignItems: "flex-end" }}>
-          <Text style={[styles.productName, { color: colors.foreground }]}>{item.name}</Text>
+          <Text style={[styles.productName, { color: c.text }]}>{item.name}</Text>
           {item.category_name && (
-            <Text style={[styles.categoryTag, { color: colors.mutedForeground }]}>{item.category_name}</Text>
+            <Text style={[styles.categoryTag, { color: c.textMuted }]}>{item.category_name}</Text>
           )}
         </View>
         {(item._pending ?? 0) > 0 && (
-          <View style={[styles.pendingDot, { backgroundColor: colors.warning }]} />
+          <View style={[styles.pendingDot, { backgroundColor: c.warning }]} />
         )}
       </View>
-      <View style={[styles.divider, { backgroundColor: colors.border }]} />
+      <View style={[styles.divider, { backgroundColor: c.hairline }]} />
       <View style={styles.pricesRow}>
         {prices.map(p => (
           <View key={p.label} style={styles.priceItem}>
-            <Text style={[styles.priceVal, { color: colors.foreground }]}>{Number(p.value ?? 0).toLocaleString("fr-DZ")}</Text>
-            <Text style={[styles.priceLabel, { color: colors.mutedForeground }]}>{p.label}</Text>
+            <MoneyText amount={Number(p.value ?? 0)} tone="neutral" size="footnote" />
+            <Text style={[styles.priceLabel, { color: c.textMuted }]}>{p.label}</Text>
           </View>
         ))}
         <View style={styles.priceItem}>
-          <Text style={[styles.priceVal, { color: colors.foreground }]}>{Number(displayQty).toFixed(0)}</Text>
-          <Text style={[styles.priceLabel, { color: colors.mutedForeground }]}>في الشاحنة</Text>
+          <Text style={[styles.priceVal, { color: c.text }]}>{Number(displayQty).toFixed(0)}</Text>
+          <Text style={[styles.priceLabel, { color: c.textMuted }]}>في الشاحنة</Text>
         </View>
       </View>
     </View>
@@ -88,7 +92,8 @@ function ProductCard({ item, colors }: { item: Product & { category_name?: strin
 const UNITS = ["حبة", "كيلو", "لتر", "علبة", "كرتون", "دزينة"];
 
 export default function ProductsScreen() {
-  const colors = useColors();
+  const t = useTheme();
+  const c = t.color;
   const insets = useSafeAreaInsets();
   const { user } = useAuth();
   const { triggerSync } = useSync();
@@ -109,6 +114,13 @@ export default function ProductsScreen() {
   const [formUnit, setFormUnit] = useState("حبة");
   const [formImageUri, setFormImageUri] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+
+  const [dialog, setDialog] = useState<{ visible: boolean; variant: ResultVariant; title: string; message?: string; actions?: DialogAction[] }>(
+    { visible: false, variant: "info", title: "" }
+  );
+  const showDialog = (variant: ResultVariant, title: string, message?: string, actions?: DialogAction[]) =>
+    setDialog({ visible: true, variant, title, message, actions });
+  const hideDialog = () => setDialog((d) => ({ ...d, visible: false }));
 
   const load = useCallback(async () => {
     const db = await getDb();
@@ -180,7 +192,7 @@ export default function ProductsScreen() {
 
   const saveProduct = async () => {
     if (!formName.trim()) {
-      Alert.alert("خطأ", "اسم المنتج مطلوب");
+      showDialog("warning", "خطأ", "اسم المنتج مطلوب");
       return;
     }
     setSaving(true);
@@ -214,21 +226,21 @@ export default function ProductsScreen() {
       await load();
       triggerSync();
     } catch (e: any) {
-      Alert.alert("خطأ", e?.message ?? "فشل الحفظ");
+      showDialog("error", "خطأ", e?.message ?? "فشل الحفظ");
     } finally {
       setSaving(false);
     }
   };
 
   return (
-    <View style={[styles.container, { backgroundColor: colors.background }]}>
+    <View style={[styles.container, { backgroundColor: c.bg }]}>
       <SyncBar />
-      <View style={[styles.searchBar, { backgroundColor: colors.card, borderColor: colors.border }]}>
-        <Feather name="search" size={16} color={colors.mutedForeground} />
+      <View style={[styles.searchBar, { backgroundColor: c.surface, borderColor: c.hairline }]}>
+        <Feather name="search" size={16} color={c.textMuted} />
         <TextInput
-          style={[styles.searchInput, { color: colors.foreground }]}
+          style={[styles.searchInput, { color: c.text }]}
           placeholder="ابحث عن منتج..."
-          placeholderTextColor={colors.mutedForeground}
+          placeholderTextColor={c.textFaint}
           value={search}
           onChangeText={setSearch}
           textAlign="right"
@@ -237,13 +249,13 @@ export default function ProductsScreen() {
       <FlatList
         data={products}
         keyExtractor={i => i.sync_id}
-        renderItem={({ item }) => <ProductCard item={item} colors={colors} />}
+        renderItem={({ item }) => <ProductCard item={item} t={t} />}
         contentContainerStyle={[styles.list, { paddingBottom: 90 + insets.bottom }]}
-        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary} />}
+        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={c.brand} />}
         ListEmptyComponent={
           <View style={styles.empty}>
-            <Feather name="package" size={40} color={colors.muted} />
-            <Text style={[styles.emptyText, { color: colors.mutedForeground }]}>
+            <Feather name="package" size={40} color={c.textFaint} />
+            <Text style={[styles.emptyText, { color: c.textMuted }]}>
               {search ? "لا توجد نتائج" : "لا توجد منتجات — قم بالمزامنة أولاً"}
             </Text>
           </View>
@@ -252,76 +264,76 @@ export default function ProductsScreen() {
       />
 
       {/* FAB */}
-      <TouchableOpacity
-        style={[styles.fab, { backgroundColor: colors.primary, bottom: 24 + insets.bottom }]}
+      <PressableScale
+        style={[styles.fab, { backgroundColor: c.brand, bottom: 24 + insets.bottom, ...t.elevation.glow }]}
         onPress={openModal}
-        activeOpacity={0.85}
+        haptic
+        accessibilityLabel="منتج جديد"
       >
-        <Feather name="plus" size={26} color="#fff" />
-      </TouchableOpacity>
+        <Feather name="plus" size={26} color={c.onBrand} />
+      </PressableScale>
 
       {/* New Product Modal */}
       <Modal visible={showModal} animationType="slide" transparent onRequestClose={() => setShowModal(false)}>
-        <View style={styles.overlay}>
+        <View style={[styles.overlay, { backgroundColor: c.scrim }]}>
           <KeyboardAvoidingView
             behavior={Platform.OS === "ios" ? "padding" : undefined}
             style={styles.sheetWrapper}
           >
-            <View style={[styles.sheet, { backgroundColor: colors.background, borderColor: colors.border }]}>
+            <View style={[styles.sheet, { backgroundColor: c.surface, borderColor: c.hairline }]}>
               {/* Header */}
-              <View style={[styles.sheetHeader, { borderBottomColor: colors.border }]}>
-                <TouchableOpacity onPress={() => setShowModal(false)} style={styles.closeBtn}>
-                  <Feather name="x" size={22} color={colors.foreground} />
-                </TouchableOpacity>
-                <Text style={[styles.sheetTitle, { color: colors.foreground }]}>منتج جديد</Text>
-                <TouchableOpacity
+              <View style={[styles.sheetHeader, { borderBottomColor: c.hairline }]}>
+                <PressableScale onPress={() => setShowModal(false)} style={styles.closeBtn} accessibilityLabel="إغلاق">
+                  <Feather name="x" size={22} color={c.text} />
+                </PressableScale>
+                <Text style={[styles.sheetTitle, { color: c.text }]}>منتج جديد</Text>
+                <PressableScale
                   onPress={saveProduct}
                   disabled={saving}
-                  style={[styles.saveBtn, { backgroundColor: colors.primary, opacity: saving ? 0.6 : 1 }]}
+                  style={[styles.saveBtn, { backgroundColor: c.brand, opacity: saving ? 0.6 : 1 }]}
                 >
-                  <Text style={styles.saveBtnText}>{saving ? "جاري الحفظ..." : "حفظ"}</Text>
-                </TouchableOpacity>
+                  <Text style={[styles.saveBtnText, { color: c.onBrand }]}>{saving ? "جاري الحفظ..." : "حفظ"}</Text>
+                </PressableScale>
               </View>
 
               <ScrollView style={styles.sheetScroll} keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
                 {/* Image Picker */}
-                <TouchableOpacity
-                  style={[styles.imagePicker, { borderColor: colors.border, backgroundColor: colors.card }]}
+                <PressableScale
+                  style={[styles.imagePicker, { borderColor: c.hairline, backgroundColor: c.bg }]}
                   onPress={pickImage}
-                  activeOpacity={0.8}
                 >
                   {formImageUri ? (
                     <Image source={{ uri: formImageUri }} style={styles.imagePreview} contentFit="cover" />
                   ) : (
                     <View style={styles.imagePlaceholder}>
-                      <Feather name="camera" size={28} color={colors.mutedForeground} />
-                      <Text style={[styles.imagePlaceholderText, { color: colors.mutedForeground }]}>اختر صورة</Text>
+                      <Feather name="camera" size={28} color={c.textMuted} />
+                      <Text style={[styles.imagePlaceholderText, { color: c.textMuted }]}>اختر صورة</Text>
                     </View>
                   )}
-                </TouchableOpacity>
+                </PressableScale>
 
                 {/* Name */}
                 <View style={styles.fieldGroup}>
-                  <Text style={[styles.fieldLabel, { color: colors.mutedForeground }]}>اسم المنتج *</Text>
+                  <Text style={[styles.fieldLabel, { color: c.textMuted }]}>اسم المنتج *</Text>
                   <TextInput
-                    style={[styles.input, { backgroundColor: colors.card, borderColor: colors.border, color: colors.foreground }]}
+                    style={[styles.input, { backgroundColor: c.bg, borderColor: c.hairline, color: c.text }]}
                     value={formName}
                     onChangeText={setFormName}
                     placeholder="أدخل اسم المنتج"
-                    placeholderTextColor={colors.mutedForeground}
+                    placeholderTextColor={c.textFaint}
                     textAlign="right"
                   />
                 </View>
 
                 {/* Barcode */}
                 <View style={styles.fieldGroup}>
-                  <Text style={[styles.fieldLabel, { color: colors.mutedForeground }]}>الباركود</Text>
+                  <Text style={[styles.fieldLabel, { color: c.textMuted }]}>الباركود</Text>
                   <TextInput
-                    style={[styles.input, { backgroundColor: colors.card, borderColor: colors.border, color: colors.foreground }]}
+                    style={[styles.input, { backgroundColor: c.bg, borderColor: c.hairline, color: c.text }]}
                     value={formBarcode}
                     onChangeText={setFormBarcode}
                     placeholder="اختياري"
-                    placeholderTextColor={colors.mutedForeground}
+                    placeholderTextColor={c.textFaint}
                     keyboardType="number-pad"
                     textAlign="right"
                   />
@@ -330,22 +342,22 @@ export default function ProductsScreen() {
                 {/* Category */}
                 {categories.length > 0 && (
                   <View style={styles.fieldGroup}>
-                    <Text style={[styles.fieldLabel, { color: colors.mutedForeground }]}>الفئة</Text>
+                    <Text style={[styles.fieldLabel, { color: c.textMuted }]}>الفئة</Text>
                     <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.chipsRow}>
-                      <TouchableOpacity
-                        style={[styles.chip, { backgroundColor: formCategoryId === null ? colors.primary : colors.card, borderColor: colors.border }]}
+                      <PressableScale
+                        style={[styles.chip, { backgroundColor: formCategoryId === null ? c.brand : c.surfaceElevated, borderColor: formCategoryId === null ? c.brand : c.hairline }]}
                         onPress={() => setFormCategoryId(null)}
                       >
-                        <Text style={[styles.chipText, { color: formCategoryId === null ? "#fff" : colors.foreground }]}>بدون</Text>
-                      </TouchableOpacity>
+                        <Text style={[styles.chipText, { color: formCategoryId === null ? c.onBrand : c.text }]}>بدون</Text>
+                      </PressableScale>
                       {categories.map(cat => (
-                        <TouchableOpacity
+                        <PressableScale
                           key={cat.sync_id}
-                          style={[styles.chip, { backgroundColor: formCategoryId === cat.id ? colors.primary : colors.card, borderColor: colors.border }]}
+                          style={[styles.chip, { backgroundColor: formCategoryId === cat.id ? c.brand : c.surfaceElevated, borderColor: formCategoryId === cat.id ? c.brand : c.hairline }]}
                           onPress={() => setFormCategoryId(cat.id ?? null)}
                         >
-                          <Text style={[styles.chipText, { color: formCategoryId === cat.id ? "#fff" : colors.foreground }]}>{cat.name}</Text>
-                        </TouchableOpacity>
+                          <Text style={[styles.chipText, { color: formCategoryId === cat.id ? c.onBrand : c.text }]}>{cat.name}</Text>
+                        </PressableScale>
                       ))}
                     </ScrollView>
                   </View>
@@ -354,37 +366,37 @@ export default function ProductsScreen() {
                 {/* Prices Row */}
                 <View style={styles.rowFields}>
                   <View style={[styles.fieldGroup, { flex: 1 }]}>
-                    <Text style={[styles.fieldLabel, { color: colors.mutedForeground }]}>تجزئة (د.ج)</Text>
+                    <Text style={[styles.fieldLabel, { color: c.textMuted }]}>تجزئة (DZD)</Text>
                     <TextInput
-                      style={[styles.input, { backgroundColor: colors.card, borderColor: colors.border, color: colors.foreground }]}
+                      style={[styles.input, { backgroundColor: c.bg, borderColor: c.hairline, color: c.text }]}
                       value={formPriceRetail}
                       onChangeText={setFormPriceRetail}
                       placeholder="0"
-                      placeholderTextColor={colors.mutedForeground}
+                      placeholderTextColor={c.textFaint}
                       keyboardType="decimal-pad"
                       textAlign="right"
                     />
                   </View>
                   <View style={[styles.fieldGroup, { flex: 1 }]}>
-                    <Text style={[styles.fieldLabel, { color: colors.mutedForeground }]}>نصف جملة</Text>
+                    <Text style={[styles.fieldLabel, { color: c.textMuted }]}>نصف جملة</Text>
                     <TextInput
-                      style={[styles.input, { backgroundColor: colors.card, borderColor: colors.border, color: colors.foreground }]}
+                      style={[styles.input, { backgroundColor: c.bg, borderColor: c.hairline, color: c.text }]}
                       value={formPriceHalf}
                       onChangeText={setFormPriceHalf}
                       placeholder="0"
-                      placeholderTextColor={colors.mutedForeground}
+                      placeholderTextColor={c.textFaint}
                       keyboardType="decimal-pad"
                       textAlign="right"
                     />
                   </View>
                   <View style={[styles.fieldGroup, { flex: 1 }]}>
-                    <Text style={[styles.fieldLabel, { color: colors.mutedForeground }]}>جملة</Text>
+                    <Text style={[styles.fieldLabel, { color: c.textMuted }]}>جملة</Text>
                     <TextInput
-                      style={[styles.input, { backgroundColor: colors.card, borderColor: colors.border, color: colors.foreground }]}
+                      style={[styles.input, { backgroundColor: c.bg, borderColor: c.hairline, color: c.text }]}
                       value={formPriceWholesale}
                       onChangeText={setFormPriceWholesale}
                       placeholder="0"
-                      placeholderTextColor={colors.mutedForeground}
+                      placeholderTextColor={c.textFaint}
                       keyboardType="decimal-pad"
                       textAlign="right"
                     />
@@ -394,28 +406,28 @@ export default function ProductsScreen() {
                 {/* Stock + Unit */}
                 <View style={styles.rowFields}>
                   <View style={[styles.fieldGroup, { flex: 1 }]}>
-                    <Text style={[styles.fieldLabel, { color: colors.mutedForeground }]}>الكمية</Text>
+                    <Text style={[styles.fieldLabel, { color: c.textMuted }]}>الكمية</Text>
                     <TextInput
-                      style={[styles.input, { backgroundColor: colors.card, borderColor: colors.border, color: colors.foreground }]}
+                      style={[styles.input, { backgroundColor: c.bg, borderColor: c.hairline, color: c.text }]}
                       value={formStock}
                       onChangeText={setFormStock}
                       placeholder="0"
-                      placeholderTextColor={colors.mutedForeground}
+                      placeholderTextColor={c.textFaint}
                       keyboardType="decimal-pad"
                       textAlign="right"
                     />
                   </View>
                   <View style={[styles.fieldGroup, { flex: 1.4 }]}>
-                    <Text style={[styles.fieldLabel, { color: colors.mutedForeground }]}>الوحدة</Text>
+                    <Text style={[styles.fieldLabel, { color: c.textMuted }]}>الوحدة</Text>
                     <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.chipsRow}>
                       {UNITS.map(u => (
-                        <TouchableOpacity
+                        <PressableScale
                           key={u}
-                          style={[styles.chip, { backgroundColor: formUnit === u ? colors.primary : colors.card, borderColor: colors.border }]}
+                          style={[styles.chip, { backgroundColor: formUnit === u ? c.brand : c.surfaceElevated, borderColor: formUnit === u ? c.brand : c.hairline }]}
                           onPress={() => setFormUnit(u)}
                         >
-                          <Text style={[styles.chipText, { color: formUnit === u ? "#fff" : colors.foreground }]}>{u}</Text>
-                        </TouchableOpacity>
+                          <Text style={[styles.chipText, { color: formUnit === u ? c.onBrand : c.text }]}>{u}</Text>
+                        </PressableScale>
                       ))}
                     </ScrollView>
                   </View>
@@ -427,6 +439,15 @@ export default function ProductsScreen() {
           </KeyboardAvoidingView>
         </View>
       </Modal>
+
+      <ResultDialog
+        visible={dialog.visible}
+        variant={dialog.variant}
+        title={dialog.title}
+        message={dialog.message}
+        actions={dialog.actions}
+        onRequestClose={hideDialog}
+      />
     </View>
   );
 }
@@ -438,33 +459,31 @@ const styles = StyleSheet.create({
     margin: 12, paddingHorizontal: 14, height: 44,
     borderRadius: 12, borderWidth: 1,
   },
-  searchInput: { flex: 1, fontSize: 14, fontFamily: "Cairo_400Regular" },
+  searchInput: { flex: 1, fontSize: 14, fontFamily: fonts.regular },
   list: { paddingHorizontal: 12, paddingBottom: 16, gap: 10 },
   card: { borderRadius: 14, borderWidth: 1, padding: 14, gap: 10 },
   cardRow: { flexDirection: "row-reverse", alignItems: "center", gap: 10 },
   avatar: { width: 48, height: 48, borderRadius: 10, alignItems: "center", justifyContent: "center" },
   imageWrapper: { width: 48, height: 48, borderRadius: 10, overflow: "hidden" },
   productImage: { width: 48, height: 48 },
-  productName: { fontSize: 15, fontFamily: "Cairo_600SemiBold" },
-  categoryTag: { fontSize: 12, fontFamily: "Cairo_400Regular" },
+  productName: { fontSize: 15, fontFamily: fonts.semibold },
+  categoryTag: { fontSize: 12, fontFamily: fonts.regular },
   pendingDot: { width: 8, height: 8, borderRadius: 4 },
   divider: { height: 1 },
   pricesRow: { flexDirection: "row-reverse", justifyContent: "space-around" },
   priceItem: { alignItems: "center", gap: 2 },
-  priceVal: { fontSize: 13, fontFamily: "Cairo_700Bold" },
-  priceLabel: { fontSize: 11, fontFamily: "Cairo_400Regular" },
+  priceVal: { fontSize: 13, fontFamily: fonts.bold },
+  priceLabel: { fontSize: 11, fontFamily: fonts.regular },
   empty: { alignItems: "center", paddingVertical: 60, gap: 12 },
-  emptyText: { fontSize: 14, fontFamily: "Cairo_400Regular", textAlign: "center" },
+  emptyText: { fontSize: 14, fontFamily: fonts.regular, textAlign: "center" },
   // FAB
   fab: {
     position: "absolute", right: 20,
     width: 58, height: 58, borderRadius: 29,
     alignItems: "center", justifyContent: "center",
-    elevation: 6,
-    shadowColor: "#000", shadowOffset: { width: 0, height: 3 }, shadowOpacity: 0.25, shadowRadius: 6,
   },
   // Modal
-  overlay: { flex: 1, backgroundColor: "rgba(0,0,0,0.45)", justifyContent: "flex-end" },
+  overlay: { flex: 1, justifyContent: "flex-end" },
   sheetWrapper: { maxHeight: "94%" },
   sheet: {
     borderTopLeftRadius: 22, borderTopRightRadius: 22,
@@ -475,10 +494,10 @@ const styles = StyleSheet.create({
     flexDirection: "row-reverse", alignItems: "center", justifyContent: "space-between",
     paddingHorizontal: 16, paddingVertical: 14, borderBottomWidth: 1,
   },
-  sheetTitle: { fontSize: 17, fontFamily: "Cairo_600SemiBold" },
+  sheetTitle: { fontSize: 17, fontFamily: fonts.semibold },
   closeBtn: { padding: 4 },
   saveBtn: { paddingHorizontal: 18, paddingVertical: 7, borderRadius: 10 },
-  saveBtnText: { color: "#fff", fontSize: 14, fontFamily: "Cairo_600SemiBold" },
+  saveBtnText: { fontSize: 14, fontFamily: fonts.semibold },
   sheetScroll: { paddingHorizontal: 16, paddingTop: 16 },
   // Image picker
   imagePicker: {
@@ -487,18 +506,18 @@ const styles = StyleSheet.create({
   },
   imagePreview: { width: "100%", height: "100%" },
   imagePlaceholder: { alignItems: "center", gap: 6 },
-  imagePlaceholderText: { fontSize: 13, fontFamily: "Cairo_400Regular" },
+  imagePlaceholderText: { fontSize: 13, fontFamily: fonts.regular },
   // Fields
   fieldGroup: { marginBottom: 14 },
-  fieldLabel: { fontSize: 12, fontFamily: "Cairo_400Regular", marginBottom: 6, textAlign: "right" },
+  fieldLabel: { fontSize: 12, fontFamily: fonts.regular, marginBottom: 6, textAlign: "right" },
   input: {
     height: 44, borderRadius: 10, borderWidth: 1,
-    paddingHorizontal: 12, fontSize: 14, fontFamily: "Cairo_400Regular",
+    paddingHorizontal: 12, fontSize: 14, fontFamily: fonts.regular,
   },
   rowFields: { flexDirection: "row-reverse", gap: 8 },
   chipsRow: { flexDirection: "row-reverse", gap: 6, paddingVertical: 2 },
   chip: {
     paddingHorizontal: 12, paddingVertical: 7, borderRadius: 20, borderWidth: 1,
   },
-  chipText: { fontSize: 12, fontFamily: "Cairo_400Regular" },
+  chipText: { fontSize: 12, fontFamily: fonts.regular },
 });
