@@ -63,7 +63,8 @@
       "uninstallerIcon": "build/icon.ico",
       "installerHeaderIcon": "build/icon.ico",
       "deleteAppDataOnUninstall": false,
-      "license": null
+      "license": null,
+      "artifactName": "ERP-Van-Sales-Setup-${version}.${ext}"
     },
     "nodeGypRebuild": false,
     "buildDependenciesFromSource": false,

@@ -189,5 +189,6 @@ jobs:
           files: |
             ${{ steps.find_installer.outputs.path }}
             desktop/dist-electron/latest.yml
+            desktop/dist-electron/*.blockmap
           draft: false
           prerelease: false
