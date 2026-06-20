@@ -4,7 +4,7 @@ import { useRefreshOnFocus } from "@/hooks/useRefreshOnFocus";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ActivityIndicator, Animated, Linking, ScrollView, StyleSheet, Text, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { MoneyText, PressableScale } from "@/components/ui";
+import { GradientHero, MoneyText, PressableScale } from "@/components/ui";
 import { Client, getDb } from "@/lib/db";
 import { useAuth } from "@/contexts/AuthContext";
 import { useSync } from "@/contexts/SyncContext";
@@ -214,56 +214,61 @@ export default function ClientProfileScreen() {
               const meta = STATE_META[intel.state];
               const tc = tones(meta.tone);
               const owes = credit < 0;
+              const grad = meta.tone === "success" ? (["#1FA971", "#0C8F6B"] as const)
+                : meta.tone === "warning" ? (["#E8902B", "#C9781E"] as const)
+                : meta.tone === "danger" ? (["#E2483F", "#B3322B"] as const)
+                : t.gradient.brand;
+              const W = "#FFFFFF", W8 = "rgba(255,255,255,0.85)", W6 = "rgba(255,255,255,0.7)";
               return (
-                <View style={[styles.hero, { backgroundColor: tc.tint, borderBottomColor: tc.solid }]}>
+                <GradientHero colors={grad} radius={26} glow={tc.solid} style={styles.hero}>
                   <View style={styles.heroTop}>
-                    <View style={[styles.av, { backgroundColor: c.brandTint, borderColor: c.brandBorder }]}>
-                      <Text style={[styles.avText, { color: c.brandText }]}>{client.name.charAt(0)}</Text>
+                    <View style={[styles.av, { backgroundColor: "rgba(255,255,255,0.2)", borderColor: "rgba(255,255,255,0.3)" }]}>
+                      <Text style={[styles.avText, { color: W }]}>{client.name.charAt(0)}</Text>
                     </View>
                     <View style={{ flex: 1, alignItems: "flex-end" }}>
-                      <Text style={[styles.heroName, { color: c.text }]} numberOfLines={1}>{client.name}</Text>
-                      <Text style={[styles.heroMeta, { color: c.textMuted }]}>{TIER_LABEL[client.client_type ?? "retail"]}{client.phone ? ` · ${client.phone}` : ""}</Text>
+                      <Text style={[styles.heroName, { color: W }]} numberOfLines={1}>{client.name}</Text>
+                      <Text style={[styles.heroMeta, { color: W8 }]}>{TIER_LABEL[client.client_type ?? "retail"]}{client.phone ? ` · ${client.phone}` : ""}</Text>
                     </View>
                   </View>
 
                   <View style={styles.stateRow}>
-                    <Feather name={meta.icon} size={18} color={tc.fg} />
-                    <Text style={[styles.stateWord, { color: tc.fg }]}>{meta.label}</Text>
+                    <Feather name={meta.icon} size={20} color={W} />
+                    <Text style={[styles.stateWord, { color: W }]}>{meta.label}</Text>
                   </View>
                   {intel.reasons.length > 0 && (
-                    <Text style={[styles.stateSub, { color: c.textMuted }]}>{intel.reasons.join(" · ")}</Text>
+                    <Text style={[styles.stateSub, { color: W8 }]}>{intel.reasons.join(" · ")}</Text>
                   )}
 
                   {/* gating money — dominant */}
                   <View style={styles.moneyBlock}>
                     {owes ? (
                       <>
-                        <Text style={[styles.moneyLabel, { color: c.textMuted }]}>مدين بـ</Text>
-                        <MoneyText amount={intel.debt} tone="negative" size="display" />
+                        <Text style={[styles.moneyLabel, { color: W8 }]}>مدين بـ</Text>
+                        <MoneyText amount={intel.debt} size="display" style={{ color: W }} />
                       </>
                     ) : credit > 0 ? (
                       <>
-                        <Text style={[styles.moneyLabel, { color: c.textMuted }]}>رصيد دائن</Text>
-                        <MoneyText amount={credit} tone="positive" absolute size="display" />
+                        <Text style={[styles.moneyLabel, { color: W8 }]}>رصيد دائن</Text>
+                        <MoneyText amount={credit} absolute size="display" style={{ color: W }} />
                       </>
                     ) : (
-                      <Text style={[styles.moneyClear, { color: c.textMuted }]}>الحساب خالص</Text>
+                      <Text style={[styles.moneyClear, { color: W }]}>الحساب خالص</Text>
                     )}
                     {intel.limit != null ? (
-                      <Text style={[styles.headroom, { color: intel.limitStatus === "within" ? c.textMuted : intel.limitStatus === "over" ? c.dangerText : c.warningText }]}>
+                      <Text style={[styles.headroom, { color: W8 }]}>
                         المتاح للآجل {formatMoney(Math.max(0, intel.headroom ?? 0))} — {LIMIT_LABEL[intel.limitStatus] ?? ""}
                       </Text>
                     ) : (
-                      <Text style={[styles.headroom, { color: c.textFaint }]}>بدون سقف للآجل</Text>
+                      <Text style={[styles.headroom, { color: W6 }]}>بدون سقف للآجل</Text>
                     )}
                   </View>
 
                   {/* the move */}
-                  <View style={[styles.action, { backgroundColor: c.brandTint, borderColor: c.brandBorder }]}>
-                    <Feather name="zap" size={14} color={c.brandText} />
-                    <Text style={[styles.actionText, { color: c.brandText }]}>{intel.action}</Text>
+                  <View style={[styles.action, { backgroundColor: "rgba(255,255,255,0.18)", borderColor: "rgba(255,255,255,0.25)" }]}>
+                    <Feather name="zap" size={14} color={W} />
+                    <Text style={[styles.actionText, { color: W }]}>{intel.action}</Text>
                   </View>
-                </View>
+                </GradientHero>
               );
             })()}
 
@@ -355,7 +360,7 @@ const styles = StyleSheet.create({
   emptyText: { fontSize: 14, fontFamily: fonts.regular },
 
   // Hero
-  hero: { paddingHorizontal: 18, paddingTop: 16, paddingBottom: 18, borderBottomWidth: 1 },
+  hero: { margin: 16, marginBottom: 8, padding: 20 },
   heroTop: { flexDirection: "row-reverse", alignItems: "center", gap: 11 },
   av: { width: 42, height: 42, borderRadius: 12, borderWidth: 1, alignItems: "center", justifyContent: "center" },
   avText: { fontSize: 18, fontFamily: fonts.bold },

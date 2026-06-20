@@ -2,8 +2,8 @@ import { Feather } from "@expo/vector-icons";
 import { router } from "expo-router";
 import { useState } from "react";
 import { ScrollView, StyleSheet, Text, View } from "react-native";
-import { SyncBar } from "@/components/SyncBar";
-import { AppButton, PressableScale, ResultDialog } from "@/components/ui";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { AppButton, GradientHero, PressableScale, ResultDialog } from "@/components/ui";
 import type { DialogAction, ResultVariant } from "@/components/ui";
 import { useAuth } from "@/contexts/AuthContext";
 import { useSync } from "@/contexts/SyncContext";
@@ -35,6 +35,7 @@ function SettingRow({ label, sub, icon, color, onPress, danger, c }: {
 export default function SettingsScreen() {
   const t = useTheme();
   const c = t.color;
+  const insets = useSafeAreaInsets();
   const { user, logout, resetDevice } = useAuth();
   const { triggerSync, doResetSync, syncing, resetting, lastSync, pending, error } = useSync();
 
@@ -95,12 +96,12 @@ export default function SettingsScreen() {
     : "لم تتم بعد";
 
   return (
-    <View style={[styles.container, { backgroundColor: c.bg }]}>
-      <SyncBar />
+    <View style={[styles.container, { backgroundColor: c.bg, paddingTop: insets.top + 8 }]}>
+      <Text style={[styles.pageTitle, { color: c.text }]}>الإعدادات</Text>
       <ScrollView contentContainerStyle={styles.scroll} showsVerticalScrollIndicator={false}>
 
         {/* User info */}
-        <View style={[styles.userCard, { backgroundColor: c.brand, ...t.elevation.glow }]}>
+        <GradientHero radius={20} style={styles.userCard}>
           <View style={[styles.userAvatar, { backgroundColor: c.onBrand }]}>
             <Feather name={user?.role === "truck" ? "truck" : "user"} size={28} color={c.brand} />
           </View>
@@ -111,7 +112,7 @@ export default function SettingsScreen() {
                user?.role === "truck" ? "سائق شاحنة" : "بائع"}
             </Text>
           </View>
-        </View>
+        </GradientHero>
 
         {/* Sync section */}
         <Text style={[styles.sectionTitle, { color: c.textMuted }]}>المزامنة</Text>
@@ -203,7 +204,8 @@ export default function SettingsScreen() {
 
 const styles = StyleSheet.create({
   container: { flex: 1 },
-  scroll: { padding: 16 },
+  pageTitle: { fontSize: 21, fontFamily: fonts.bold, textAlign: "right", paddingHorizontal: 16, marginBottom: 8 },
+  scroll: { padding: 16, paddingTop: 4 },
   userCard: {
     borderRadius: 16, padding: 20,
     flexDirection: "row-reverse", alignItems: "center", gap: 14, marginBottom: 24,

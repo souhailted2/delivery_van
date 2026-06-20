@@ -1,4 +1,4 @@
-import { elevation, fonts, motion, radius, spacing, theme, typeScale } from "@/constants/tokens";
+import { elevation, fonts, gradient, motion, radius, spacing, theme, typeScale } from "@/constants/tokens";
 
 /**
  * ALLAL Command Center theme hook — the structured token API for components.
@@ -10,6 +10,7 @@ export function useTheme() {
   return {
     scheme: theme.scheme,
     color: theme.color,
+    gradient,
     spacing,
     radius,
     elevation,

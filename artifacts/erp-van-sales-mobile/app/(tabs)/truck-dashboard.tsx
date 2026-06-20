@@ -1,14 +1,10 @@
 import { Feather } from "@expo/vector-icons";
-import * as Haptics from "expo-haptics";
 import { router } from "expo-router";
 import { useRefreshOnFocus } from "@/hooks/useRefreshOnFocus";
 import { useCallback, useEffect, useRef, useState } from "react";
-import {
-  Animated, Dimensions, FlatList, Image, NativeScrollEvent, NativeSyntheticEvent,
-  RefreshControl, ScrollView, StyleSheet, Text, View,
-} from "react-native";
+import { Animated, Image, RefreshControl, ScrollView, StyleSheet, Text, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { AmbientBackground, AppButton, DraggableSheet, GlassCard, MoneyText, PressableScale, StatusPill } from "@/components/ui";
+import { AppButton, Card, GradientHero, MoneyText, PressableScale, StatusPill } from "@/components/ui";
 import { useAuth } from "@/contexts/AuthContext";
 import { useSync } from "@/contexts/SyncContext";
 import { apiFetch } from "@/lib/api";
@@ -16,15 +12,11 @@ import { Client, getDb, Invoice } from "@/lib/db";
 import { getTruckForUser, TruckInfo } from "@/lib/truck";
 import { fonts, motion } from "@/constants/tokens";
 import { useTheme, type Theme } from "@/hooks/useTheme";
+import { FlatList } from "react-native";
 
 const logo = require("../../assets/images/logo.png");
 const DAY = 86_400_000;
 const LAPSE_DAYS = 14;
-
-const SCREEN_W = Dimensions.get("window").width;
-const DECK_GAP = 12;
-const DECK_W = SCREEN_W - 56;            // neighbour card peeks ~ on the side
-const DECK_SNAP = DECK_W + DECK_GAP;
 
 type TabKey = "invoices" | "clients";
 const TABS: { key: TabKey; label: string; icon: any }[] = [
@@ -37,37 +29,27 @@ interface StockRow { sync_id: string; product_id: number; product_name: string; 
 interface Debtor { sync_id: string; name: string; credit_balance: number; }
 interface AttentionClient { sync_id: string; name: string; days: number; }
 
-type DeckTone = "brand" | "danger" | "warning";
+type Tone = "brand" | "danger" | "warning" | "success";
+function toneColors(c: Theme["color"], tone: Tone) {
+  if (tone === "danger") return { tint: c.dangerTint, fg: c.dangerText };
+  if (tone === "warning") return { tint: c.warningTint, fg: c.warningText };
+  if (tone === "success") return { tint: c.successTint, fg: c.successText };
+  return { tint: c.brandTint, fg: c.brandText };
+}
 
-// ── One card in the swipeable cockpit deck ──────────────────────────────────
-function DeckCard({
-  tone, icon, label, value, valueNode, sub, onPress, t, animatedStyle,
-}: {
-  tone: DeckTone; icon: any; label: string; value?: string; valueNode?: React.ReactNode;
-  sub?: string; onPress: () => void; t: Theme; animatedStyle?: any;
+function DeckCard({ tone, icon, valueNode, value, label, onPress, t }: {
+  tone: Tone; icon: any; valueNode?: React.ReactNode; value?: string; label: string; onPress?: () => void; t: Theme;
 }) {
   const c = t.color;
-  const edge = tone === "danger" ? c.danger : tone === "warning" ? c.warning : c.brandBright;
-  const tint = tone === "danger" ? c.dangerTint : tone === "warning" ? c.warningTint : c.brandTint;
-  const fg = tone === "danger" ? c.dangerText : tone === "warning" ? c.warningText : c.brandText;
+  const tc = toneColors(c, tone);
   return (
-    <Animated.View style={[{ width: DECK_W, marginLeft: DECK_GAP }, animatedStyle]}>
-      <PressableScale onPress={onPress} haptic>
-        <GlassCard strong radius={22} style={[styles.deckCard, { borderColor: edge + "55", shadowColor: edge }]}>
-          <View style={styles.deckTop}>
-            <View style={[styles.deckBadge, { backgroundColor: tint, borderColor: edge + "44" }]}>
-              <Feather name={icon} size={18} color={fg} />
-            </View>
-            <Text style={[styles.deckLabel, { color: c.textMuted }]}>{label}</Text>
-          </View>
-          {valueNode ?? <Text style={[styles.deckValue, { color: c.text }]} numberOfLines={1}>{value}</Text>}
-          {sub ? <Text style={[styles.deckSub, { color: fg }]} numberOfLines={1}>{sub}</Text> : null}
-          <View style={styles.deckGo}>
-            <Feather name="chevron-left" size={16} color={c.textFaint} />
-          </View>
-        </GlassCard>
-      </PressableScale>
-    </Animated.View>
+    <PressableScale onPress={onPress} style={{ marginLeft: 12 }} haptic>
+      <Card radius={22} pad={16} style={styles.deckCard}>
+        <View style={[styles.deckIc, { backgroundColor: tc.tint }]}><Feather name={icon} size={18} color={tc.fg} /></View>
+        {valueNode ?? <Text style={[styles.deckV, { color: c.text }]} numberOfLines={1}>{value}</Text>}
+        <Text style={[styles.deckL, { color: c.textMuted }]} numberOfLines={1}>{label}</Text>
+      </Card>
+    </PressableScale>
   );
 }
 
@@ -77,21 +59,19 @@ function InvoiceCard({ item, t }: { item: InvoiceRow; t: Theme }) {
   const isPending = (item._pending ?? 0) > 0;
   const isCredit = item.payment_type === "credit";
   return (
-    <GlassCard radius={16} style={styles.row}>
-      <View style={styles.rowInner}>
-        <View style={[styles.avatar, { backgroundColor: isPending ? c.warningTint : c.successTint }]}>
-          <Feather name={isPending ? "clock" : "check-circle"} size={18} color={isPending ? c.warning : c.success} />
-        </View>
-        <View style={{ flex: 1, alignItems: "flex-end" }}>
-          <Text style={[styles.rowTitle, { color: c.text }]}>{item.client_name ?? "عميل غير معروف"}</Text>
-          <Text style={[styles.rowSub, { color: c.textMuted }]}>{date ? date.toLocaleDateString("ar-DZ") : "—"}</Text>
-        </View>
-        <View style={{ alignItems: "flex-end", gap: 4 }}>
-          <MoneyText amount={item.total_amount ?? 0} size="callout" />
-          <StatusPill status={isCredit ? "credit" : "paid"} />
-        </View>
+    <Card radius={18} pad={13} style={styles.row}>
+      <View style={[styles.av, { backgroundColor: isPending ? c.warningTint : c.successTint }]}>
+        <Feather name={isPending ? "clock" : "check-circle"} size={18} color={isPending ? c.warning : c.success} />
       </View>
-    </GlassCard>
+      <View style={{ flex: 1, alignItems: "flex-end" }}>
+        <Text style={[styles.rowTitle, { color: c.text }]} numberOfLines={1}>{item.client_name ?? "عميل غير معروف"}</Text>
+        <Text style={[styles.rowSub, { color: c.textFaint }]}>{date ? date.toLocaleDateString("ar-DZ") : "—"}</Text>
+      </View>
+      <View style={{ alignItems: "flex-end", gap: 4 }}>
+        <MoneyText amount={item.total_amount ?? 0} size="callout" />
+        <StatusPill status={isCredit ? "credit" : "paid"} />
+      </View>
+    </Card>
   );
 }
 
@@ -102,33 +82,17 @@ function ClientCard({ item, t }: { item: Client; t: Theme }) {
   const balance = Number(item.credit_balance ?? 0);
   const tone = balance < 0 ? "negative" : balance > 0 ? "positive" : "muted";
   return (
-    <GlassCard radius={16} style={styles.row}>
-      <View style={styles.rowInner}>
-        <View style={[styles.avatar, { backgroundColor: c.brandTint }]}><Feather name="user" size={18} color={c.brandText} /></View>
-        <View style={{ flex: 1, alignItems: "flex-end" }}>
-          <Text style={[styles.rowTitle, { color: c.text }]}>{item.name}</Text>
-          {item.phone ? <Text style={[styles.rowSub, { color: c.textMuted }]}>{item.phone}</Text> : null}
-        </View>
-        <View style={{ alignItems: "flex-end", gap: 4 }}>
-          <MoneyText amount={balance} tone={tone} absolute size="callout" />
-          <StatusPill status="neutral" label={CLIENT_TYPE_LABELS[item.client_type ?? "retail"] ?? item.client_type} />
-        </View>
+    <Card radius={18} pad={13} style={styles.row}>
+      <View style={[styles.av, { backgroundColor: c.brandTint }]}><Feather name="user" size={18} color={c.brandText} /></View>
+      <View style={{ flex: 1, alignItems: "flex-end" }}>
+        <Text style={[styles.rowTitle, { color: c.text }]} numberOfLines={1}>{item.name}</Text>
+        {item.phone ? <Text style={[styles.rowSub, { color: c.textFaint }]}>{item.phone}</Text> : null}
       </View>
-    </GlassCard>
-  );
-}
-
-function TodayPill({ label, amount, tone, t }: { label: string; amount: number; tone: "neutral" | "positive" | "brand"; t: Theme }) {
-  const c = t.color;
-  const dot = tone === "positive" ? c.successText : tone === "brand" ? c.brandBright : c.textMuted;
-  return (
-    <GlassCard radius={999} style={styles.pill}>
-      <View style={[styles.pillDot, { backgroundColor: dot }]} />
-      <View style={{ alignItems: "flex-end", flex: 1 }}>
-        <MoneyText amount={amount} tone={tone} size="footnote" />
-        <Text style={[styles.pillLabel, { color: c.textFaint }]} numberOfLines={1}>{label}</Text>
+      <View style={{ alignItems: "flex-end", gap: 4 }}>
+        <MoneyText amount={balance} tone={tone} absolute size="callout" />
+        <StatusPill status="neutral" label={CLIENT_TYPE_LABELS[item.client_type ?? "retail"] ?? item.client_type} />
       </View>
-    </GlassCard>
+    </Card>
   );
 }
 
@@ -153,11 +117,9 @@ export default function TruckDashboardScreen() {
   const [tab, setTab] = useState<TabKey>("invoices");
   const [refreshing, setRefreshing] = useState(false);
   const [pendingDispatch, setPendingDispatch] = useState(false);
-  const [deckIndex, setDeckIndex] = useState(0);
 
-  // Cockpit entrance — deck deals in.
   const fade = useRef(new Animated.Value(0)).current;
-  const rise = useRef(new Animated.Value(20)).current;
+  const rise = useRef(new Animated.Value(18)).current;
   useEffect(() => {
     Animated.parallel([
       Animated.timing(fade, { toValue: 1, duration: motion.duration.slow, easing: motion.easing.out, useNativeDriver: true }),
@@ -176,10 +138,8 @@ export default function TruckDashboardScreen() {
   const load = useCallback(async () => {
     const db = await getDb();
     if (!db) return;
-
     const truckRow = await getTruckForUser(db, user?.truckId);
     setTruck(truckRow);
-
     const truckId = truckRow?.id ?? user?.truckId ?? null;
     const cntFilter = truckId ? "AND (truck_id = ? OR (truck_id IS NULL AND _pending = 1))" : "";
     const invFilter = truckId ? "AND (i.truck_id = ? OR (i.truck_id IS NULL AND i._pending = 1))" : "";
@@ -200,9 +160,7 @@ export default function TruckDashboardScreen() {
 
     const debtRows = await db.getAllAsync<Debtor>(
       `SELECT sync_id, name, credit_balance FROM clients
-       WHERE is_deleted = 0 AND credit_balance < 0 ${clientScope} ORDER BY credit_balance ASC`,
-      idArg
-    );
+       WHERE is_deleted = 0 AND credit_balance < 0 ${clientScope} ORDER BY credit_balance ASC`, idArg);
     setOutstanding(debtRows.reduce((s, d) => s + -Number(d.credit_balance ?? 0), 0));
     setDebtors(debtRows.slice(0, 4));
 
@@ -210,9 +168,7 @@ export default function TruckDashboardScreen() {
       `SELECT cl.sync_id, cl.name, MAX(i.created_at) as last
        FROM clients cl LEFT JOIN invoices i ON (i.client_sync_id = cl.sync_id OR i.client_id = cl.id) AND i.is_deleted = 0
        WHERE cl.is_deleted = 0 ${clientScope ? "AND (cl.truck_id = ? OR cl.truck_id IS NULL)" : ""}
-       GROUP BY cl.sync_id, cl.name`,
-      idArg
-    );
+       GROUP BY cl.sync_id, cl.name`, idArg);
     const now = Date.now();
     const lapsed = attRows
       .map(r => ({ sync_id: r.sync_id, name: r.name, last: r.last ? Date.parse(r.last) : null }))
@@ -226,8 +182,7 @@ export default function TruckDashboardScreen() {
         `SELECT i.*, c.name as client_name FROM invoices i
          LEFT JOIN clients c ON i.client_id = c.id OR i.client_sync_id = c.sync_id
          WHERE i.is_deleted = 0 ${invFilter} ORDER BY i.created_at DESC LIMIT 100`, idArg),
-      db.getAllAsync<Client>(
-        `SELECT * FROM clients WHERE is_deleted = 0 ${clientScope} ORDER BY name`, idArg),
+      db.getAllAsync<Client>(`SELECT * FROM clients WHERE is_deleted = 0 ${clientScope} ORDER BY name`, idArg),
     ]);
     setInvoices(invRows);
     setClients(clientRows);
@@ -251,195 +206,173 @@ export default function TruckDashboardScreen() {
     setRefreshing(false);
   };
 
-  const handleNew = async () => {
-    await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-    router.push("/invoice/new");
-  };
-
   const lowStock = stock.filter(s => Number(s.quantity) <= 3);
   const data: any[] = tab === "invoices" ? invoices : clients;
 
-  // Build the deck: cash always first, then live signal cards.
-  const deck: React.ReactNode[] = [];
-  deck.push(
-    <DeckCard key="cash" tone="brand" icon="dollar-sign" label={truck?.name ?? "الصندوق"}
-      valueNode={<MoneyText amount={truck?.cash_balance ?? 0} size="display" />}
-      sub={truck?.plate_number ? `${truck.plate_number} · إدارة الصندوق` : "إدارة الصندوق والتسليم"}
-      onPress={() => router.push("/(tabs)/caisse")} t={t} />
-  );
-  if (outstanding > 0)
-    deck.push(
-      <DeckCard key="collect" tone="danger" icon="alert-circle" label="للتحصيل"
-        valueNode={<MoneyText amount={outstanding} tone="negative" size="display" />}
-        sub={debtors[0] ? `أكبر مدين: ${debtors[0].name}` : undefined}
-        onPress={() => router.push(debtors[0] ? `/client/${debtors[0].sync_id}` : "/(tabs)/clients")} t={t} />
-    );
-  if (attention.length > 0)
-    deck.push(
-      <DeckCard key="visits" tone="warning" icon="map-pin" label="تحتاج زيارة"
-        value={`${attention.length} عميل`}
-        sub={attention[0] ? `${attention[0].name} · منذ ${attention[0].days} يوماً` : undefined}
-        onPress={() => router.push(attention[0] ? `/client/${attention[0].sync_id}` : "/(tabs)/clients")} t={t} />
-    );
-  if (lowStock.length > 0)
-    deck.push(
-      <DeckCard key="stock" tone="warning" icon="package" label="مخزون منخفض"
-        value={`${lowStock.length} صنف`}
-        sub={lowStock[0] ? `${lowStock[0].product_name}` : undefined}
-        onPress={() => router.push("/(tabs)/truck")} t={t} />
-    );
-
-  const onDeckScroll = (e: NativeSyntheticEvent<NativeScrollEvent>) => {
-    const i = Math.round(Math.abs(e.nativeEvent.contentOffset.x) / DECK_SNAP);
-    if (i !== deckIndex) setDeckIndex(i);
-  };
-
-  const renderItem = ({ item }: { item: any }) => (
-    <PressableScale onPress={() => router.push(tab === "invoices" ? `/invoice/${item.sync_id}` : `/client/${item.sync_id}`)}>
-      {tab === "invoices" ? <InvoiceCard item={item} t={t} /> : <ClientCard item={item} t={t} />}
-    </PressableScale>
-  );
-
-  const sheetHeader = (
-    <View>
-      <View style={styles.sheetTitleRow}>
-        <Text style={[styles.sheetCount, { color: c.textFaint }]}>{data.length}</Text>
-        <Text style={[styles.sheetTitle, { color: c.text }]}>النشاط</Text>
+  const header = (
+    <Animated.View style={{ opacity: fade, transform: [{ translateY: rise }] }}>
+      {/* greeting + logo */}
+      <View style={styles.head}>
+        <View>
+          <Text style={[styles.hi, { color: c.textMuted }]}>مرحباً 👋</Text>
+          <Text style={[styles.hiName, { color: c.text }]}>{truck?.name ?? "السائق"}</Text>
+        </View>
+        <View style={styles.logoChip}><Image source={logo} style={styles.logoImg} resizeMode="contain" /></View>
       </View>
-      <GlassCard radius={12} style={styles.segment}>
+
+      {/* gradient cash hero */}
+      <GradientHero radius={28} style={{ padding: 22 }}>
+        <View style={styles.heroRow}>
+          <View style={styles.truck}>
+            <View style={styles.truckIcon}><Feather name="truck" size={20} color="#fff" /></View>
+            <View>
+              <Text style={styles.truckName}>{truck?.name ?? "شاحنتي"}</Text>
+              {truck?.plate_number ? <Text style={styles.truckPlate}>{truck.plate_number}</Text> : null}
+            </View>
+          </View>
+          <PressableScale style={styles.live} onPress={onRefresh}>
+            <View style={[styles.liveDot, { backgroundColor: pending > 0 ? "#FFD27B" : "#7BFFC4" }]} />
+            <Text style={styles.liveText}>{pending > 0 ? `${pending} بانتظار` : "مُزامَن الآن"}</Text>
+          </PressableScale>
+        </View>
+        <Text style={styles.balLbl}>رصيد الصندوق</Text>
+        <MoneyText amount={truck?.cash_balance ?? 0} size="display" style={styles.balValue} />
+        <View style={styles.heroFoot}>
+          <PressableScale onPress={() => router.push("/(tabs)/caisse")}>
+            <Text style={styles.heroLink}>إدارة الصندوق والتسليم ‹</Text>
+          </PressableScale>
+          {todaySales > 0 ? (
+            <View style={styles.delta}><Text style={styles.deltaText}>اليوم ▲ {fmt(todaySales)}</Text></View>
+          ) : null}
+        </View>
+      </GradientHero>
+
+      {/* dispatch alert */}
+      {pendingDispatch && (
+        <PressableScale style={[styles.dispatch, { backgroundColor: c.warningTint }]} onPress={() => router.push("/(tabs)/dispatch")} haptic>
+          <Feather name="download" size={16} color={c.warningText} />
+          <Text style={[styles.dispatchText, { color: c.warningText }]}>بضاعة بانتظار الاستلام — اضغط للاستلام</Text>
+          <Feather name="chevron-left" size={16} color={c.warningText} />
+        </PressableScale>
+      )}
+
+      {/* quick-look deck */}
+      <View style={styles.secRow}>
+        <Text style={[styles.secLbl, { color: c.text }]}>نظرة سريعة</Text>
+        <Text style={[styles.secHint, { color: c.textFaint }]}>اسحب ›</Text>
+      </View>
+      <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.deck}>
+        {outstanding > 0 && (
+          <DeckCard tone="danger" icon="alert-circle"
+            valueNode={<MoneyText amount={outstanding} tone="negative" size="title" />}
+            label={`للتحصيل · ${debtors.length} عملاء`}
+            onPress={() => router.push(debtors[0] ? `/client/${debtors[0].sync_id}` : "/(tabs)/clients")} t={t} />
+        )}
+        {attention.length > 0 && (
+          <DeckCard tone="warning" icon="map-pin" value={`${attention.length} عميل`} label="تحتاج زيارة"
+            onPress={() => router.push(attention[0] ? `/client/${attention[0].sync_id}` : "/(tabs)/clients")} t={t} />
+        )}
+        <DeckCard tone="success" icon="trending-up"
+          valueNode={<MoneyText amount={todaySales} tone="positive" size="title" />} label="مبيعات اليوم" t={t} />
+        {lowStock.length > 0 && (
+          <DeckCard tone="warning" icon="package" value={`${lowStock.length} أصناف`} label="مخزون منخفض"
+            onPress={() => router.push("/(tabs)/truck")} t={t} />
+        )}
+      </ScrollView>
+
+      <AppButton label="بيع جديد" icon="plus" size="lg" fullWidth onPress={() => router.push("/invoice/new")} style={{ marginTop: 16 }} />
+
+      {/* activity */}
+      <Text style={[styles.secLbl, { color: c.text, marginTop: 24, marginBottom: 12 }]}>النشاط</Text>
+      <Card radius={14} pad={5} style={styles.seg}>
         {TABS.map((tb) => {
           const active = tab === tb.key;
           return (
-            <PressableScale key={tb.key} style={[styles.segmentBtn, active && { backgroundColor: c.brand }]} onPress={() => setTab(tb.key)}>
+            <PressableScale key={tb.key} style={[styles.segBtn, active && { backgroundColor: c.brand }]} onPress={() => setTab(tb.key)}>
               <Feather name={tb.icon} size={15} color={active ? c.onBrand : c.textMuted} />
-              <Text style={[styles.segmentText, { color: active ? c.onBrand : c.textMuted }]}>{tb.label}</Text>
+              <Text style={[styles.segText, { color: active ? c.onBrand : c.textMuted }]}>{tb.label}</Text>
             </PressableScale>
           );
         })}
-      </GlassCard>
-    </View>
+      </Card>
+    </Animated.View>
   );
 
   return (
-    <View style={[styles.container, { backgroundColor: c.glassBase }]}>
-      <AmbientBackground />
-
-      {/* ── Fixed cockpit ── */}
-      <Animated.View style={[styles.cockpit, { paddingTop: insets.top + 8, opacity: fade, transform: [{ translateY: rise }] }]}>
-        <View style={styles.headerRow}>
-          <PressableScale style={styles.syncChip} onPress={onRefresh} haptic>
-            <View style={[styles.syncDot, { backgroundColor: pending > 0 ? c.warning : c.successText }]} />
-            <Text style={[styles.syncText, { color: c.textMuted }]}>{pending > 0 ? `${pending} بانتظار الرفع` : "مُزامَن"}</Text>
-            <Feather name="refresh-cw" size={13} color={c.textFaint} />
-          </PressableScale>
-          <View style={styles.logoChip}><Image source={logo} style={styles.logoImg} resizeMode="contain" /></View>
-        </View>
-
-        {pendingDispatch && (
-          <PressableScale style={[styles.dispatchAlert, { backgroundColor: c.warningTint, borderColor: c.warning }]} onPress={() => router.push("/(tabs)/dispatch")} haptic>
-            <Feather name="download" size={16} color={c.warningText} />
-            <Text style={[styles.dispatchText, { color: c.warningText }]}>بضاعة بانتظار الاستلام — اضغط للاستلام</Text>
-            <Feather name="chevron-left" size={16} color={c.warningText} />
+    <View style={[styles.container, { backgroundColor: c.bg, paddingTop: insets.top }]}>
+      <FlatList
+        data={data}
+        keyExtractor={(i) => i.sync_id}
+        renderItem={({ item }) => (
+          <PressableScale onPress={() => router.push(tab === "invoices" ? `/invoice/${item.sync_id}` : `/client/${item.sync_id}`)}>
+            {tab === "invoices" ? <InvoiceCard item={item} t={t} /> : <ClientCard item={item} t={t} />}
           </PressableScale>
         )}
-
-        {/* Swipeable card deck */}
-        <ScrollView
-          horizontal
-          showsHorizontalScrollIndicator={false}
-          snapToInterval={DECK_SNAP}
-          decelerationRate="fast"
-          onScroll={onDeckScroll}
-          scrollEventThrottle={32}
-          contentContainerStyle={styles.deckContent}
-        >
-          {deck}
-        </ScrollView>
-        {deck.length > 1 && (
-          <View style={styles.dots}>
-            {deck.map((_, i) => (
-              <View key={i} style={[styles.dot, { backgroundColor: i === deckIndex ? c.brandBright : c.glassBorder, width: i === deckIndex ? 18 : 6 }]} />
-            ))}
+        ListHeaderComponent={header}
+        contentContainerStyle={styles.list}
+        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={c.brand} />}
+        ListEmptyComponent={
+          <View style={styles.empty}>
+            <Feather name={tab === "invoices" ? "file-text" : "users"} size={36} color={c.textFaint} />
+            <Text style={[styles.emptyText, { color: c.textMuted }]}>{tab === "invoices" ? "لا توجد فواتير" : "لا يوجد عملاء"}</Text>
           </View>
-        )}
-
-        {/* Today pills */}
-        <View style={styles.pillRow}>
-          <TodayPill label="المبيعات" amount={todaySales} tone="neutral" t={t} />
-          <TodayPill label="نقداً" amount={todayCash} tone="positive" t={t} />
-          <TodayPill label="آجل" amount={todayCredit} tone="brand" t={t} />
-        </View>
-
-        <AppButton label="بيع جديد" size="lg" fullWidth onPress={handleNew} style={styles.cta} />
-      </Animated.View>
-
-      {/* ── Draggable activity sheet (rests peeking, pulls up over cockpit) ── */}
-      <DraggableSheet header={sheetHeader}>
-        <FlatList
-          data={data}
-          keyExtractor={(i) => i.sync_id}
-          renderItem={renderItem}
-          contentContainerStyle={styles.list}
-          refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={c.brand} />}
-          ListEmptyComponent={
-            <View style={styles.empty}>
-              <Feather name={tab === "invoices" ? "file-text" : "users"} size={36} color={c.textFaint} />
-              <Text style={[styles.emptyText, { color: c.textMuted }]}>{tab === "invoices" ? "لا توجد فواتير" : "لا يوجد عملاء"}</Text>
-            </View>
-          }
-          showsVerticalScrollIndicator={false}
-        />
-      </DraggableSheet>
+        }
+        showsVerticalScrollIndicator={false}
+      />
     </View>
   );
 }
 
+function fmt(n: number) {
+  const [i, d] = Math.abs(n).toFixed(2).split(".");
+  return i.replace(/\B(?=(\d{3})+(?!\d))/g, " ") + "." + d;
+}
+
 const styles = StyleSheet.create({
   container: { flex: 1 },
-  cockpit: { paddingHorizontal: 16, gap: 12 },
+  list: { paddingHorizontal: 16, paddingTop: 8, paddingBottom: 120, gap: 9 },
 
-  headerRow: { flexDirection: "row-reverse", justifyContent: "space-between", alignItems: "center" },
-  logoChip: { backgroundColor: "#fff", borderRadius: 10, paddingHorizontal: 10, paddingVertical: 6 },
-  logoImg: { width: 96, height: 30 },
-  syncChip: { flexDirection: "row-reverse", alignItems: "center", gap: 6 },
-  syncDot: { width: 8, height: 8, borderRadius: 4 },
-  syncText: { fontSize: 12, fontFamily: fonts.semibold },
+  head: { flexDirection: "row-reverse", justifyContent: "space-between", alignItems: "center", marginBottom: 14 },
+  hi: { fontSize: 13, fontFamily: fonts.regular },
+  hiName: { fontSize: 19, fontFamily: fonts.bold, marginTop: 1 },
+  logoChip: { backgroundColor: "#fff", borderRadius: 12, paddingHorizontal: 10, paddingVertical: 6, shadowColor: "#101C37", shadowOpacity: 0.08, shadowRadius: 10, shadowOffset: { width: 0, height: 4 }, elevation: 3 },
+  logoImg: { width: 96, height: 28 },
 
-  dispatchAlert: { flexDirection: "row-reverse", alignItems: "center", gap: 8, borderRadius: 12, borderWidth: 1, paddingHorizontal: 12, paddingVertical: 10 },
+  heroRow: { flexDirection: "row-reverse", justifyContent: "space-between", alignItems: "center" },
+  truck: { flexDirection: "row-reverse", alignItems: "center", gap: 10 },
+  truckIcon: { width: 42, height: 42, borderRadius: 13, backgroundColor: "rgba(255,255,255,0.18)", alignItems: "center", justifyContent: "center" },
+  truckName: { color: "#fff", fontSize: 16, fontFamily: fonts.bold, textAlign: "right" },
+  truckPlate: { color: "rgba(255,255,255,0.85)", fontSize: 12, fontFamily: fonts.regular, textAlign: "right" },
+  live: { flexDirection: "row-reverse", alignItems: "center", gap: 6, backgroundColor: "rgba(255,255,255,0.18)", paddingHorizontal: 11, paddingVertical: 6, borderRadius: 999 },
+  liveDot: { width: 7, height: 7, borderRadius: 4 },
+  liveText: { color: "#fff", fontSize: 11, fontFamily: fonts.bold },
+  balLbl: { color: "rgba(255,255,255,0.9)", fontSize: 13, fontFamily: fonts.regular, marginTop: 20, textAlign: "right" },
+  balValue: { color: "#fff", textAlign: "right", marginTop: 2 },
+  heroFoot: { flexDirection: "row-reverse", justifyContent: "space-between", alignItems: "center", marginTop: 16, borderTopWidth: 1, borderTopColor: "rgba(255,255,255,0.2)", paddingTop: 13 },
+  heroLink: { color: "#fff", fontSize: 13, fontFamily: fonts.bold },
+  delta: { backgroundColor: "rgba(255,255,255,0.18)", paddingHorizontal: 10, paddingVertical: 5, borderRadius: 999 },
+  deltaText: { color: "#fff", fontSize: 12, fontFamily: fonts.bold },
+
+  dispatch: { flexDirection: "row-reverse", alignItems: "center", gap: 8, borderRadius: 14, paddingHorizontal: 14, paddingVertical: 12, marginTop: 12 },
   dispatchText: { flex: 1, fontSize: 12, fontFamily: fonts.bold, textAlign: "right" },
 
-  deckContent: { paddingRight: 16, paddingLeft: 4, paddingVertical: 2 },
-  deckCard: { height: 158, padding: 18, justifyContent: "flex-start" },
-  deckTop: { flexDirection: "row-reverse", alignItems: "center", gap: 10, marginBottom: 14 },
-  deckBadge: { width: 38, height: 38, borderRadius: 12, alignItems: "center", justifyContent: "center", borderWidth: 1 },
-  deckLabel: { fontSize: 14, fontFamily: fonts.bold, flex: 1, textAlign: "right" },
-  deckValue: { fontSize: 26, fontFamily: fonts.bold, textAlign: "right" },
-  deckSub: { fontSize: 12, fontFamily: fonts.semibold, textAlign: "right", marginTop: 6 },
-  deckGo: { position: "absolute", bottom: 14, left: 16 },
+  secRow: { flexDirection: "row-reverse", justifyContent: "space-between", alignItems: "center", marginTop: 22, marginBottom: 12 },
+  secLbl: { fontSize: 14, fontFamily: fonts.bold, textAlign: "right" },
+  secHint: { fontSize: 12, fontFamily: fonts.regular },
+  deck: { paddingLeft: 12, paddingVertical: 2, flexDirection: "row-reverse" },
+  deckCard: { width: 150, alignItems: "flex-end" },
+  deckIc: { width: 38, height: 38, borderRadius: 12, alignItems: "center", justifyContent: "center", marginBottom: 12 },
+  deckV: { fontSize: 21, fontFamily: fonts.bold, textAlign: "right" },
+  deckL: { fontSize: 12, fontFamily: fonts.semibold, marginTop: 3, textAlign: "right" },
 
-  dots: { flexDirection: "row", justifyContent: "center", gap: 5, marginTop: -2 },
-  dot: { height: 6, borderRadius: 3 },
+  seg: { flexDirection: "row-reverse", gap: 5 },
+  segBtn: { flex: 1, flexDirection: "row-reverse", alignItems: "center", justifyContent: "center", gap: 6, paddingVertical: 10, borderRadius: 10 },
+  segText: { fontSize: 14, fontFamily: fonts.bold },
 
-  pillRow: { flexDirection: "row-reverse", gap: 8 },
-  pill: { flex: 1, flexDirection: "row-reverse", alignItems: "center", gap: 8, paddingVertical: 9, paddingHorizontal: 12 },
-  pillDot: { width: 8, height: 8, borderRadius: 4 },
-  pillLabel: { fontSize: 10, fontFamily: fonts.regular },
-
-  cta: { marginTop: 2 },
-
-  sheetTitleRow: { flexDirection: "row-reverse", alignItems: "center", justifyContent: "space-between", marginBottom: 10, paddingHorizontal: 2 },
-  sheetTitle: { fontSize: 16, fontFamily: fonts.bold },
-  sheetCount: { fontSize: 13, fontFamily: fonts.semibold },
-  segment: { flexDirection: "row-reverse", padding: 4, gap: 4 },
-  segmentBtn: { flex: 1, flexDirection: "row-reverse", alignItems: "center", justifyContent: "center", gap: 6, paddingVertical: 9, borderRadius: 9 },
-  segmentText: { fontSize: 13, fontFamily: fonts.semibold },
-
-  list: { paddingHorizontal: 16, paddingTop: 10, paddingBottom: 28, gap: 8 },
-  row: { padding: 14 },
-  rowInner: { flexDirection: "row-reverse", alignItems: "center", gap: 10 },
-  avatar: { width: 40, height: 40, borderRadius: 10, alignItems: "center", justifyContent: "center" },
+  row: { flexDirection: "row-reverse", alignItems: "center", gap: 11 },
+  av: { width: 44, height: 44, borderRadius: 13, alignItems: "center", justifyContent: "center" },
   rowTitle: { fontSize: 15, fontFamily: fonts.semibold },
-  rowSub: { fontSize: 12, fontFamily: fonts.regular },
+  rowSub: { fontSize: 12, fontFamily: fonts.regular, marginTop: 1 },
   empty: { alignItems: "center", paddingVertical: 40, gap: 12 },
   emptyText: { fontSize: 14, fontFamily: fonts.regular },
 });

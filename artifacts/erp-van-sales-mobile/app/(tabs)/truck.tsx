@@ -2,7 +2,7 @@ import { Feather } from "@expo/vector-icons";
 import { useRefreshOnFocus } from "@/hooks/useRefreshOnFocus";
 import { useCallback, useState } from "react";
 import { FlatList, RefreshControl, StyleSheet, Text, TextInput, View } from "react-native";
-import { SyncBar } from "@/components/SyncBar";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { MoneyText } from "@/components/ui";
 import { useAuth } from "@/contexts/AuthContext";
 import { useSync } from "@/contexts/SyncContext";
@@ -46,6 +46,7 @@ function StockCard({ item, t }: { item: StockRow; t: Theme }) {
 export default function TruckScreen() {
   const t = useTheme();
   const c = t.color;
+  const insets = useSafeAreaInsets();
   const { user } = useAuth();
   const { triggerSync } = useSync();
   const [truck, setTruck] = useState<TruckInfo | null>(null);
@@ -94,8 +95,8 @@ export default function TruckScreen() {
   const totalValue = stock.reduce((s, r) => s + r.quantity * r.selling_price_retail, 0);
 
   return (
-    <View style={[styles.container, { backgroundColor: c.bg }]}>
-      <SyncBar />
+    <View style={[styles.container, { backgroundColor: c.bg, paddingTop: insets.top + 8 }]}>
+      <Text style={[styles.pageTitle, { color: c.text }]}>شاحنتي</Text>
       {truck ? (
         <View style={[styles.header, { backgroundColor: c.surface, borderColor: c.brandBorder, ...t.elevation.glow }]}>
           <View style={styles.headerRow}>
@@ -169,6 +170,7 @@ export default function TruckScreen() {
 
 const styles = StyleSheet.create({
   container: { flex: 1 },
+  pageTitle: { fontSize: 21, fontFamily: fonts.bold, textAlign: "right", paddingHorizontal: 16, marginBottom: 4 },
   header: { margin: 12, borderRadius: 20, borderWidth: 1, padding: 16, gap: 12 },
   headerRow: { flexDirection: "row-reverse", justifyContent: "space-between", alignItems: "center" },
   truckBadge: { width: 40, height: 40, borderRadius: 20, alignItems: "center", justifyContent: "center" },
@@ -181,7 +183,7 @@ const styles = StyleSheet.create({
   statLabel: { fontSize: 11, fontFamily: fonts.regular },
   noTruck: { margin: 12, borderRadius: 14, borderWidth: 1, padding: 14, flexDirection: "row-reverse", alignItems: "center", gap: 8 },
   noTruckText: { fontSize: 13, fontFamily: fonts.regular },
-  list: { paddingHorizontal: 12, paddingBottom: 16, gap: 8 },
+  list: { paddingHorizontal: 12, paddingBottom: 120, gap: 8 },
   card: { borderRadius: 14, borderWidth: 1, padding: 12 },
   row: { flexDirection: "row-reverse", alignItems: "center", gap: 10 },
   avatar: { width: 36, height: 36, borderRadius: 8, alignItems: "center", justifyContent: "center" },

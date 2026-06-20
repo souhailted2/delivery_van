@@ -5,8 +5,9 @@ import {
   FlatList, Modal, RefreshControl, ScrollView, StyleSheet, Text,
   TextInput, View,
 } from "react-native";
-import { SyncBar } from "@/components/SyncBar";
-import { AppButton, MoneyText, PressableScale, ResultDialog, StatusPill } from "@/components/ui";
+import { router } from "expo-router";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { AppButton, GradientHero, MoneyText, PressableScale, ResultDialog, StatusPill } from "@/components/ui";
 import type { DialogAction, ResultVariant } from "@/components/ui";
 import { useAuth } from "@/contexts/AuthContext";
 import { useSync } from "@/contexts/SyncContext";
@@ -22,6 +23,7 @@ interface TruckRow { id: number; name: string; cash_balance: number; }
 export default function CaisseScreen() {
   const t = useTheme();
   const c = t.color;
+  const insets = useSafeAreaInsets();
   const { user } = useAuth();
   const isTruck = user?.role === "truck";
   const { triggerSync, bumpLocalVersion } = useSync();
@@ -145,45 +147,23 @@ export default function CaisseScreen() {
   const cashOnHand = baseBalance - pendingOut;
 
   return (
-    <View style={[styles.container, { backgroundColor: c.bg }]}>
-      <SyncBar />
-
-      <View style={[styles.summary, { backgroundColor: c.surface, borderColor: c.brandBorder, ...t.elevation.glow }]}>
-        {isTruck ? (
-          <>
-            <View style={styles.summaryItem}>
-              <MoneyText amount={Math.max(0, cashOnHand)} size="title" />
-              <Text style={[styles.summaryLabel, { color: c.textMuted }]}>نقداً في الصندوق</Text>
-            </View>
-            <View style={[styles.summaryDivider, { backgroundColor: c.hairline }]} />
-            <View style={styles.summaryItem}>
-              <MoneyText amount={pendingOut} size="title" tone={pendingOut > 0 ? "muted" : "neutral"} />
-              <Text style={[styles.summaryLabel, { color: c.textMuted }]}>بانتظار التأكيد</Text>
-            </View>
-          </>
-        ) : (
-          <>
-            <View style={styles.summaryItem}>
-              <MoneyText amount={totalIn} size="title" tone="positive" />
-              <Text style={[styles.summaryLabel, { color: c.textMuted }]}>إجمالي التحصيل</Text>
-            </View>
-            <View style={[styles.summaryDivider, { backgroundColor: c.hairline }]} />
-            <View style={styles.summaryItem}>
-              <MoneyText amount={totalOut} size="title" tone="negative" />
-              <Text style={[styles.summaryLabel, { color: c.textMuted }]}>إجمالي الصرف</Text>
-            </View>
-          </>
-        )}
+    <View style={[styles.container, { backgroundColor: c.bg, paddingTop: insets.top + 8 }]}>
+      <View style={styles.topBar}>
+        <PressableScale onPress={() => router.back()} hitSlop={10} accessibilityLabel="رجوع">
+          <Feather name="arrow-right" size={22} color={c.text} />
+        </PressableScale>
+        <Text style={[styles.pageTitle, { color: c.text }]}>{isTruck ? "صندوقي" : "الصندوق"}</Text>
+        <View style={{ width: 22 }} />
       </View>
 
-      <View style={[styles.topBar, { borderBottomColor: c.hairline }]}>
-        <AppButton
-          label={isTruck ? "تسليم دفعة" : "حركة جديدة"}
-          icon={isTruck ? "send" : "plus"}
-          size="sm"
-          onPress={openModal}
-        />
-        <Text style={[styles.pageTitle, { color: c.text }]}>{isTruck ? "صندوقي" : "الصندوق"}</Text>
+      <GradientHero colors={t.gradient.success} radius={26} glow="#1FA971" style={styles.heroCard}>
+        <Text style={styles.heroLbl}>{isTruck ? "نقداً في الصندوق" : "إجمالي التحصيل"}</Text>
+        <MoneyText amount={isTruck ? Math.max(0, cashOnHand) : totalIn} size="display" style={{ color: "#fff" }} />
+        <Text style={styles.heroSub}>{isTruck ? `بانتظار التأكيد: ${formatMoney(pendingOut)}` : `إجمالي الصرف: ${formatMoney(totalOut)}`}</Text>
+      </GradientHero>
+
+      <View style={styles.actionRow}>
+        <AppButton label={isTruck ? "تسليم دفعة للإدارة" : "حركة جديدة"} icon={isTruck ? "send" : "plus"} size="lg" fullWidth onPress={openModal} />
       </View>
 
       <FlatList
@@ -319,9 +299,13 @@ const styles = StyleSheet.create({
   summaryItem: { alignItems: "center", gap: 4 },
   summaryLabel: { fontSize: 11, fontFamily: fonts.regular },
   summaryDivider: { width: 1 },
-  topBar: { flexDirection: "row-reverse", alignItems: "center", justifyContent: "space-between", paddingHorizontal: 16, paddingVertical: 10, borderBottomWidth: 1 },
-  pageTitle: { fontSize: 17, fontFamily: fonts.bold },
-  list: { paddingHorizontal: 12, paddingTop: 12, paddingBottom: 16, gap: 8 },
+  topBar: { flexDirection: "row-reverse", alignItems: "center", justifyContent: "space-between", paddingHorizontal: 16, paddingBottom: 12 },
+  pageTitle: { fontSize: 20, fontFamily: fonts.bold },
+  heroCard: { marginHorizontal: 16, padding: 22, alignItems: "flex-end" },
+  heroLbl: { color: "rgba(255,255,255,0.9)", fontSize: 13, fontFamily: fonts.regular, textAlign: "right" },
+  heroSub: { color: "rgba(255,255,255,0.85)", fontSize: 12, fontFamily: fonts.semibold, textAlign: "right", marginTop: 8 },
+  actionRow: { paddingHorizontal: 16, marginTop: 12 },
+  list: { paddingHorizontal: 16, paddingTop: 14, paddingBottom: 120, gap: 9 },
   card: { borderRadius: 14, borderWidth: 1, padding: 14 },
   cardRow: { flexDirection: "row-reverse", alignItems: "center", gap: 10 },
   avatar: { width: 40, height: 40, borderRadius: 10, alignItems: "center", justifyContent: "center" },

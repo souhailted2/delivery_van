@@ -1,4 +1,5 @@
 import { Feather } from "@expo/vector-icons";
+import { LinearGradient } from "expo-linear-gradient";
 import React from "react";
 import { ActivityIndicator, StyleSheet, Text, View, type StyleProp, type ViewStyle } from "react-native";
 
@@ -58,6 +59,7 @@ export function AppButton({
     ghost: { bg: "transparent", fg: t.color.brandText },
   };
   const v = isDisabled ? { bg: t.color.hairline, fg: t.color.textFaint } : fills[variant];
+  const useGradient = variant === "primary" && !isDisabled;
 
   return (
     <PressableScale
@@ -73,12 +75,17 @@ export function AppButton({
           height: s.height,
           paddingHorizontal: s.padH,
           borderRadius: t.radius[s.radius],
-          backgroundColor: v.bg,
+          backgroundColor: useGradient ? "transparent" : v.bg,
+          overflow: "hidden",
+          ...(useGradient ? { shadowColor: t.color.brand, shadowOpacity: 0.4, shadowRadius: 18, shadowOffset: { width: 0, height: 10 }, elevation: 8 } : {}),
         },
         fullWidth && { alignSelf: "stretch" },
         style,
       ]}
     >
+      {useGradient ? (
+        <LinearGradient colors={t.gradient.brand as any} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={StyleSheet.absoluteFill} />
+      ) : null}
       <View style={styles.row}>
         {loading ? (
           <ActivityIndicator color={v.fg} size="small" />

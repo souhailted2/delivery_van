@@ -14,6 +14,9 @@ interface Props {
   header: React.ReactNode;
   /** Scrollable body (the list). Scrolls independently of the drag. */
   children: React.ReactNode;
+  /** Y where the sheet top rests in peek state (e.g. just below the cockpit).
+   * Falls back to a fixed peek height when omitted. */
+  peekTop?: number;
   style?: StyleProp<ViewStyle>;
 }
 
@@ -25,7 +28,7 @@ interface Props {
  * The sheet is the signature interaction of the "card-deck + sheet" dashboard:
  * the activity feed rests as a peeking layer and pulls up over the cockpit.
  */
-export function DraggableSheet({ header, children, style }: Props) {
+export function DraggableSheet({ header, children, peekTop, style }: Props) {
   const c = useTheme().color;
   const [h, setH] = useState(0);
   const translateY = useRef(new Animated.Value(0)).current;
@@ -41,17 +44,32 @@ export function DraggableSheet({ header, children, style }: Props) {
     return () => translateY.removeListener(id);
   }, [translateY]);
 
+  const recompute = (nh: number) => {
+    const ey = Math.round(nh * EXPAND_RATIO);
+    // Peek: rest just below the cockpit when peekTop is given, else a fixed peek.
+    const desired = peekTop != null ? Math.round(peekTop) : nh - PEEK_VISIBLE;
+    const py = Math.min(Math.max(desired, ey + 40), nh - 80);
+    expandedY.current = ey;
+    peekY.current = py;
+    return py;
+  };
+
   const onLayout = (e: LayoutChangeEvent) => {
     const nh = Math.round(e.nativeEvent.layout.height);
     if (!nh || nh === h) return;
     setH(nh);
-    const ey = Math.round(nh * EXPAND_RATIO);
-    const py = Math.max(ey, nh - PEEK_VISIBLE);
-    expandedY.current = ey;
-    peekY.current = py;
-    translateY.setValue(py);          // rest at peek
+    const py = recompute(nh);
+    translateY.setValue(py);           // rest at peek
     currentY.current = py;
   };
+
+  // Re-rest when the cockpit height (peekTop) changes.
+  useEffect(() => {
+    if (!h) return;
+    const py = recompute(h);
+    Animated.spring(translateY, { toValue: py, useNativeDriver: true, bounciness: 2, speed: 18 }).start();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [peekTop, h]);
 
   const snapTo = (to: number) =>
     Animated.spring(translateY, { toValue: to, useNativeDriver: true, bounciness: 3, speed: 16 }).start();

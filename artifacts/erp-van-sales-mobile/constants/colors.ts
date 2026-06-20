@@ -1,48 +1,43 @@
 /**
  * Legacy flat color object consumed by `useColors()` (used by not-yet-migrated
- * screens). Re-skinned to the ALLAL Command Center dark theme so the whole app
- * moves to the brand identity without a per-screen refactor. Values mirror the
- * desktop `.dark` theme (artifacts/erp-van-sales/src/index.css).
+ * screens). Re-skinned to the ALLAL "Premium Light" identity so the whole app
+ * moves to the new look without a per-screen refactor.
  *
- * New code should prefer `useTheme()`. Screens still on `useColors()` will read
- * dark surfaces here; any hardcoded light hex inside those screens is cleaned up
- * as each screen is migrated.
+ * New code should prefer `useTheme()`.
  */
 import { palette } from "./tokens";
 
 const colors = {
   light: {
-    // key name kept for back-compat; values are the dark command-center theme
-    text: palette.text,
+    text: palette.ink,
     tint: palette.brand,
-    background: palette.bg,
-    foreground: palette.text,
-    card: palette.surface,
-    cardForeground: palette.text,
+    background: palette.screen,
+    foreground: palette.ink,
+    card: palette.card,
+    cardForeground: palette.ink,
     primary: palette.brand,
     primaryForeground: palette.white,
-    secondary: palette.surfaceElevated,
-    secondaryForeground: palette.text,
-    muted: palette.surfaceElevated,
-    mutedForeground: palette.textMuted,
-    accent: "#12414A",
-    accentForeground: "#7FD6DF",
+    secondary: palette.bg,
+    secondaryForeground: palette.ink,
+    muted: palette.bg,
+    mutedForeground: palette.ink2,
+    accent: palette.soft,
+    accentForeground: palette.brand,
     destructive: palette.red,
     destructiveForeground: palette.white,
     success: palette.success,
     successForeground: palette.white,
     warning: palette.warning,
-    warningForeground: palette.bg,
-    border: palette.hairline,
-    input: palette.hairline,
+    warningForeground: palette.white,
+    border: palette.line,
+    input: palette.line,
     ring: palette.brandBright,
-    // additive semantic tints
-    successTint: "rgba(43,182,115,0.16)",
-    warningTint: "rgba(245,165,36,0.14)",
-    dangerTint: "rgba(216,40,40,0.16)",
-    brandTint: "rgba(14,154,167,0.14)",
+    successTint: "#E6F7F0",
+    warningTint: "#FCF1E3",
+    dangerTint: "#FCEBEA",
+    brandTint: "rgba(14,154,167,0.10)",
   },
-  radius: 12,
+  radius: 16,
 };
 
 export default colors;

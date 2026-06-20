@@ -5,7 +5,8 @@ import {
   ActivityIndicator, FlatList, RefreshControl,
   StyleSheet, Text, View,
 } from "react-native";
-import { SyncBar } from "@/components/SyncBar";
+import { router } from "expo-router";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { AppButton, PressableScale, ResultDialog, StatusPill } from "@/components/ui";
 import type { DialogAction, ResultVariant, Status } from "@/components/ui";
 import { useAuth } from "@/contexts/AuthContext";
@@ -46,6 +47,7 @@ function DispatchStatusBadge({ status }: { status: string }) {
 export default function DispatchScreen() {
   const t = useTheme();
   const c = t.color;
+  const insets = useSafeAreaInsets();
   const { user } = useAuth();
   const [inbox, setInbox] = useState<Dispatch | null | undefined>(undefined);
   const [loading, setLoading] = useState(true);
@@ -142,8 +144,14 @@ export default function DispatchScreen() {
   }
 
   return (
-    <View style={[styles.container, { backgroundColor: c.bg }]}>
-      <SyncBar />
+    <View style={[styles.container, { backgroundColor: c.bg, paddingTop: insets.top + 8 }]}>
+      <View style={styles.topBar}>
+        <PressableScale onPress={() => router.back()} hitSlop={10} accessibilityLabel="رجوع">
+          <Feather name="arrow-right" size={22} color={c.text} />
+        </PressableScale>
+        <Text style={[styles.topTitle, { color: c.text }]}>استلام البضاعة</Text>
+        <View style={{ width: 22 }} />
+      </View>
       <FlatList
         data={[]}
         keyExtractor={() => ""}
@@ -260,7 +268,9 @@ export default function DispatchScreen() {
 const styles = StyleSheet.create({
   container: { flex: 1 },
   center: { alignItems: "center", justifyContent: "center" },
-  content: { padding: 12, gap: 12 },
+  topBar: { flexDirection: "row-reverse", alignItems: "center", justifyContent: "space-between", paddingHorizontal: 16, paddingBottom: 8 },
+  topTitle: { fontSize: 20, fontFamily: fonts.bold },
+  content: { padding: 12, paddingBottom: 120, gap: 12 },
   headerCard: {
     borderRadius: 16, borderWidth: 1, padding: 20,
     alignItems: "center", gap: 8,
