@@ -1,11 +1,10 @@
 import { Feather } from "@expo/vector-icons";
 import { useRefreshOnFocus } from "@/hooks/useRefreshOnFocus";
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import {
   FlatList, Modal, RefreshControl, ScrollView, StyleSheet, Text,
   TextInput, View,
 } from "react-native";
-import { router } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { AppButton, GradientHero, MoneyText, PressableScale, ResultDialog, StatusPill } from "@/components/ui";
 import type { DialogAction, ResultVariant } from "@/components/ui";
@@ -26,7 +25,7 @@ export default function CaisseScreen() {
   const insets = useSafeAreaInsets();
   const { user } = useAuth();
   const isTruck = user?.role === "truck";
-  const { triggerSync, bumpLocalVersion } = useSync();
+  const { triggerSync, bumpLocalVersion, lastSync } = useSync();
   const [transfers, setTransfers] = useState<CashRow[]>([]);
   const [trucks, setTrucks] = useState<TruckRow[]>([]);
   const [pendingCash, setPendingCash] = useState(0);
@@ -77,7 +76,10 @@ export default function CaisseScreen() {
     }
   }, [isTruck, user?.truckId]);
 
-  useRefreshOnFocus(load);
+  // On open, pull the latest so approved deliveries clear; re-query whenever a
+  // sync completes so the status (قيد الانتظار → مؤكّد) updates without leaving.
+  useRefreshOnFocus(() => { triggerSync(); load(); });
+  useEffect(() => { load(); }, [lastSync, load]);
 
   const myTruck = isTruck ? trucks.find(t => t.id === user?.truckId) ?? trucks[0] : undefined;
 
@@ -149,17 +151,21 @@ export default function CaisseScreen() {
   return (
     <View style={[styles.container, { backgroundColor: c.bg, paddingTop: insets.top + 8 }]}>
       <View style={styles.topBar}>
-        <PressableScale onPress={() => router.back()} hitSlop={10} accessibilityLabel="رجوع">
-          <Feather name="arrow-right" size={22} color={c.text} />
-        </PressableScale>
-        <Text style={[styles.pageTitle, { color: c.text }]}>{isTruck ? "صندوقي" : "الصندوق"}</Text>
-        <View style={{ width: 22 }} />
+        <Text style={[styles.pageTitle, { color: c.text }]}>الصندوق</Text>
       </View>
 
       <GradientHero colors={t.gradient.success} radius={26} glow="#1FA971" style={styles.heroCard}>
-        <Text style={styles.heroLbl}>{isTruck ? "نقداً في الصندوق" : "إجمالي التحصيل"}</Text>
-        <MoneyText amount={isTruck ? Math.max(0, cashOnHand) : totalIn} size="display" style={{ color: "#fff" }} />
-        <Text style={styles.heroSub}>{isTruck ? `بانتظار التأكيد: ${formatMoney(pendingOut)}` : `إجمالي الصرف: ${formatMoney(totalOut)}`}</Text>
+        <View style={styles.heroTwo}>
+          <View style={styles.heroCol}>
+            <Text style={styles.heroLbl}>نقداً بحوزتك</Text>
+            <MoneyText amount={Math.max(0, cashOnHand)} size="title" style={{ color: "#fff" }} />
+          </View>
+          <View style={styles.heroDiv} />
+          <View style={styles.heroCol}>
+            <Text style={styles.heroLbl}>قيد التسليم للإدارة</Text>
+            <MoneyText amount={pendingOut} size="title" style={{ color: "rgba(255,255,255,0.92)" }} />
+          </View>
+        </View>
       </GradientHero>
 
       <View style={styles.actionRow}>
@@ -173,14 +179,15 @@ export default function CaisseScreen() {
           const isIn = item.direction === "in";
           const st = item.status ?? "pending";
           const pillStatus = st === "approved" ? "approved" : st === "rejected" ? "rejected" : "pending";
+          // direction "in" = truck → office: cash LEAVES the truck → show as "−" red.
           return (
             <View style={[styles.card, { backgroundColor: c.surface, borderColor: c.hairline }]}>
               <View style={styles.cardRow}>
-                <View style={[styles.avatar, { backgroundColor: isIn ? c.successTint : c.dangerTint }]}>
-                  <Feather name={isIn ? "arrow-down-circle" : "arrow-up-circle"} size={18} color={isIn ? c.success : c.danger} />
+                <View style={[styles.avatar, { backgroundColor: isIn ? c.dangerTint : c.successTint }]}>
+                  <Feather name={isIn ? "arrow-up-circle" : "arrow-down-circle"} size={18} color={isIn ? c.danger : c.success} />
                 </View>
                 <View style={{ flex: 1, alignItems: "flex-end" }}>
-                  <Text style={[styles.truckName, { color: c.text }]}>{item.truck_name ?? "—"}</Text>
+                  <Text style={[styles.truckName, { color: c.text }]}>{isIn ? "تسليم للإدارة" : "استلام من الإدارة"}</Text>
                   {item.note ? <Text style={[styles.note, { color: c.textMuted }]}>{item.note}</Text> : null}
                   <View style={styles.statusDateRow}>
                     <StatusPill status={pillStatus} />
@@ -189,7 +196,7 @@ export default function CaisseScreen() {
                     </Text>
                   </View>
                 </View>
-                <MoneyText amount={isIn ? Number(item.amount ?? 0) : -Number(item.amount ?? 0)} signed tone={isIn ? "positive" : "negative"} size="callout" />
+                <MoneyText amount={isIn ? -Number(item.amount ?? 0) : Number(item.amount ?? 0)} tone={isIn ? "negative" : "positive"} size="callout" />
               </View>
             </View>
           );
@@ -301,9 +308,11 @@ const styles = StyleSheet.create({
   summaryDivider: { width: 1 },
   topBar: { flexDirection: "row-reverse", alignItems: "center", justifyContent: "space-between", paddingHorizontal: 16, paddingBottom: 12 },
   pageTitle: { fontSize: 20, fontFamily: fonts.bold },
-  heroCard: { marginHorizontal: 16, padding: 22, alignItems: "flex-end" },
-  heroLbl: { color: "rgba(255,255,255,0.9)", fontSize: 13, fontFamily: fonts.regular, textAlign: "right" },
-  heroSub: { color: "rgba(255,255,255,0.85)", fontSize: 12, fontFamily: fonts.semibold, textAlign: "right", marginTop: 8 },
+  heroCard: { marginHorizontal: 16, padding: 20 },
+  heroTwo: { flexDirection: "row-reverse", alignItems: "center" },
+  heroCol: { flex: 1, alignItems: "flex-end", gap: 4 },
+  heroDiv: { width: 1, alignSelf: "stretch", backgroundColor: "rgba(255,255,255,0.25)", marginHorizontal: 14 },
+  heroLbl: { color: "rgba(255,255,255,0.9)", fontSize: 12, fontFamily: fonts.regular, textAlign: "right" },
   actionRow: { paddingHorizontal: 16, marginTop: 12 },
   list: { paddingHorizontal: 16, paddingTop: 14, paddingBottom: 120, gap: 9 },
   card: { borderRadius: 14, borderWidth: 1, padding: 14 },

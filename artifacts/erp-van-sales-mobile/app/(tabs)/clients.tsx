@@ -5,7 +5,7 @@ import { useRefreshOnFocus } from "@/hooks/useRefreshOnFocus";
 import { useCallback, useRef, useState } from "react";
 import { FlatList, Modal, RefreshControl, StyleSheet, Text, TextInput, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { AppButton, Avatar, Card, EmptyState, MoneyText, PressableScale, SkeletonList, StatusPill } from "@/components/ui";
+import { AppButton, Avatar, Card, EmptyState, MoneyText, PressableScale, SkeletonList } from "@/components/ui";
 import { useAuth } from "@/contexts/AuthContext";
 import { useSync } from "@/contexts/SyncContext";
 import { Client, getDb } from "@/lib/db";
@@ -14,11 +14,17 @@ import { fonts } from "@/constants/tokens";
 import { useTheme } from "@/hooks/useTheme";
 
 const TYPE_LABELS: Record<string, string> = { retail: "تجزئة", half_wholesale: "نصف جملة", wholesale: "جملة" };
+const DAY = 86_400_000;
+const LAPSE_DAYS = 14;
+type ClientLite = Client & { last_purchase?: string | null };
 
-function ClientRow({ item, theme }: { item: Client; theme: ReturnType<typeof useTheme> }) {
+function ClientRow({ item, theme }: { item: ClientLite; theme: ReturnType<typeof useTheme> }) {
   const c = theme.color;
   const balance = Number(item.credit_balance ?? 0);
   const tone = balance < 0 ? "negative" : balance > 0 ? "positive" : "muted";
+  const lastTs = item.last_purchase ? Date.parse(item.last_purchase) : null;
+  const days = lastTs ? Math.floor((Date.now() - lastTs) / DAY) : null;
+  const lapsed = days != null && days >= LAPSE_DAYS;
   return (
     <Card radius={18} pad={13} style={styles.row}>
       <Avatar name={item.name} size={44} />
@@ -27,13 +33,29 @@ function ClientRow({ item, theme }: { item: Client; theme: ReturnType<typeof use
         <Text style={[styles.sub, { color: c.textFaint }]} numberOfLines={1}>
           {TYPE_LABELS[item.client_type ?? "retail"]}{item.phone ? ` · ${item.phone}` : ""}
         </Text>
+        {(balance < 0 || lapsed) && (
+          <View style={styles.badges}>
+            {balance < 0 && (
+              <View style={[styles.badge, { backgroundColor: c.dangerTint }]}>
+                <Text style={[styles.badgeText, { color: c.dangerText }]}>مدين {fmtMoney(Math.abs(balance))}</Text>
+              </View>
+            )}
+            {lapsed && (
+              <View style={[styles.badge, { backgroundColor: c.warningTint }]}>
+                <Text style={[styles.badgeText, { color: c.warningText }]}>تحتاج زيارة · {days} يوم</Text>
+              </View>
+            )}
+          </View>
+        )}
       </View>
-      <View style={{ alignItems: "flex-end", gap: 4 }}>
-        <MoneyText amount={balance} tone={tone} absolute size="callout" />
-        {balance < 0 ? <StatusPill status="credit" label="مدين" /> : null}
-      </View>
+      <MoneyText amount={balance} tone={tone} absolute size="callout" />
     </Card>
   );
+}
+
+function fmtMoney(n: number) {
+  const [i, d] = Math.abs(n).toFixed(2).split(".");
+  return i.replace(/\B(?=(\d{3})+(?!\d))/g, " ") + "." + d;
 }
 
 export default function ClientsScreen() {
@@ -42,7 +64,7 @@ export default function ClientsScreen() {
   const insets = useSafeAreaInsets();
   const { user } = useAuth();
   const { triggerSync } = useSync();
-  const [clients, setClients] = useState<Client[]>([]);
+  const [clients, setClients] = useState<ClientLite[]>([]);
   const [loaded, setLoaded] = useState(false);
   const [search, setSearch] = useState("");
   const [refreshing, setRefreshing] = useState(false);
@@ -57,15 +79,19 @@ export default function ClientsScreen() {
     if (!db) return;
     const q = search.trim();
     const truckId = user?.truckId ?? null;
-    let rows: Client[];
+    const base = `SELECT cl.*, MAX(i.created_at) as last_purchase
+      FROM clients cl LEFT JOIN invoices i ON (i.client_sync_id = cl.sync_id OR i.client_id = cl.id) AND i.is_deleted = 0
+      WHERE cl.is_deleted = 0`;
+    const grp = "GROUP BY cl.sync_id ORDER BY cl.name";
+    let rows: ClientLite[];
     if (truckId !== null) {
-      rows = await db.getAllAsync<Client>(
-        `SELECT * FROM clients WHERE is_deleted = 0 AND truck_id = ? ${q ? "AND (name LIKE ? OR phone LIKE ?)" : ""} ORDER BY name`,
+      rows = await db.getAllAsync<ClientLite>(
+        `${base} AND cl.truck_id = ? ${q ? "AND (cl.name LIKE ? OR cl.phone LIKE ?)" : ""} ${grp}`,
         q ? [truckId, `%${q}%`, `%${q}%`] : [truckId]
       );
     } else {
-      rows = await db.getAllAsync<Client>(
-        `SELECT * FROM clients WHERE is_deleted = 0 ${q ? "AND (name LIKE ? OR phone LIKE ?)" : ""} ORDER BY name`,
+      rows = await db.getAllAsync<ClientLite>(
+        `${base} ${q ? "AND (cl.name LIKE ? OR cl.phone LIKE ?)" : ""} ${grp}`,
         q ? [`%${q}%`, `%${q}%`] : []
       );
     }
@@ -129,7 +155,8 @@ export default function ClientsScreen() {
       <View style={styles.titleRow}>
         <Text style={[styles.title, { color: c.text }]}>العملاء</Text>
         <PressableScale onPress={handleAdd} haptic style={[styles.addBtn, { backgroundColor: c.brandTint }]}>
-          <Feather name="user-plus" size={18} color={c.brand} />
+          <Feather name="user-plus" size={16} color={c.brand} />
+          <Text style={[styles.addBtnText, { color: c.brand }]}>زبون جديد</Text>
         </PressableScale>
       </View>
 
@@ -170,13 +197,17 @@ const styles = StyleSheet.create({
   container: { flex: 1 },
   titleRow: { flexDirection: "row-reverse", alignItems: "center", justifyContent: "space-between", paddingHorizontal: 16, marginBottom: 12 },
   title: { fontSize: 21, fontFamily: fonts.bold },
-  addBtn: { width: 40, height: 40, borderRadius: 12, alignItems: "center", justifyContent: "center" },
+  addBtn: { flexDirection: "row-reverse", alignItems: "center", gap: 6, height: 40, borderRadius: 12, paddingHorizontal: 14 },
+  addBtnText: { fontSize: 13, fontFamily: fonts.bold },
   searchBar: { flexDirection: "row-reverse", alignItems: "center", gap: 8, paddingHorizontal: 14, height: 46, marginHorizontal: 16, marginBottom: 12 },
   searchInput: { flex: 1, fontSize: 14, fontFamily: fonts.regular },
   list: { paddingHorizontal: 16, paddingBottom: 120, gap: 9 },
   row: { flexDirection: "row-reverse", alignItems: "center", gap: 11 },
   name: { fontSize: 15, fontFamily: fonts.semibold },
   sub: { fontSize: 12, fontFamily: fonts.regular, marginTop: 1 },
+  badges: { flexDirection: "row-reverse", flexWrap: "wrap", gap: 5, marginTop: 6 },
+  badge: { borderRadius: 8, paddingHorizontal: 8, paddingVertical: 3 },
+  badgeText: { fontSize: 11, fontFamily: fonts.bold },
   overlay: { flex: 1, alignItems: "center", justifyContent: "center", padding: 24 },
   modalTitle: { fontSize: 20, fontFamily: fonts.bold, textAlign: "right" },
   input: { borderWidth: 1, borderRadius: 12, paddingHorizontal: 14, height: 48, fontSize: 15, fontFamily: fonts.regular },

@@ -22,8 +22,8 @@ export const palette = {
   screen: "#F7F8FB",      // app surface behind cards
   card: "#FFFFFF",        // cards / panels
   ink: "#0E1525",         // primary text
-  ink2: "#5B6678",        // secondary text
-  ink3: "#9AA4B5",        // faint text
+  ink2: "#4C5666",        // secondary text (darkened for sunlight readability)
+  ink3: "#6E7A8C",        // faint text (darkened for sunlight readability)
   line: "#E8ECF3",        // hairlines / borders
   soft: "#EAF6F7",        // teal-tinted soft fill
 

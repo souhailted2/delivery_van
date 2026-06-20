@@ -469,6 +469,7 @@ export default function NewInvoiceScreen() {
                 },
               ]}
             >
+              <Feather name="box" size={9} color={isOutOfStock || lowStock ? "#fff" : c.textMuted} />
               <Text style={[styles.stockBadgeText, { color: isOutOfStock || lowStock ? "#fff" : c.textMuted }]}>
                 {isOutOfStock ? "نفد" : tq.toFixed(0)}
               </Text>
@@ -704,7 +705,7 @@ export default function NewInvoiceScreen() {
 
       {step === "payment" && (
         <Animated.View style={{ flex: 1, opacity: stepFade }}>
-          <ScrollView contentContainerStyle={{ padding: 16, gap: 16, paddingBottom: insets.bottom + 24 }}>
+          <ScrollView contentContainerStyle={{ padding: 16, gap: 16, paddingBottom: insets.bottom + 24, flexGrow: 1, justifyContent: "center" }}>
             <View style={[styles.summaryCard, { backgroundColor: c.surface, borderColor: c.hairline }]}>
               <Text style={[styles.summaryLabel, { color: c.textMuted }]}>العميل</Text>
               <Text style={[styles.summaryVal, { color: c.text }]}>{selectedClient?.name}</Text>
@@ -743,7 +744,7 @@ export default function NewInvoiceScreen() {
                 >
                   <Feather
                     name={pt === "cash" ? "dollar-sign" : "credit-card"}
-                    size={18}
+                    size={26}
                     color={paymentType === pt ? c.onBrand : c.textMuted}
                   />
                   <Text style={[styles.paymentBtnText, { color: paymentType === pt ? c.onBrand : c.text }]}>
@@ -924,7 +925,7 @@ const styles = StyleSheet.create({
   catImageWrap: { width: "100%", alignItems: "center" },
   stockBadge: {
     position: "absolute", top: 4, left: 4, minWidth: 28, paddingHorizontal: 6, paddingVertical: 3,
-    borderRadius: 8, borderWidth: 1, alignItems: "center", justifyContent: "center",
+    borderRadius: 8, borderWidth: 1, flexDirection: "row-reverse", alignItems: "center", justifyContent: "center", gap: 3,
   },
   stockBadgeText: { fontSize: 10, fontFamily: fonts.bold },
   catName: { fontSize: 13, fontFamily: fonts.semibold, textAlign: "center", minHeight: 36, marginTop: 2 },
@@ -981,12 +982,12 @@ const styles = StyleSheet.create({
   lineAmount: { fontSize: 13, fontFamily: fonts.semibold, fontVariant: ["tabular-nums"] },
   divider: { height: 1 },
   sectionTitle: { fontSize: 15, fontFamily: fonts.bold, textAlign: "right" },
-  paymentRow: { flexDirection: "row-reverse", gap: 10 },
+  paymentRow: { flexDirection: "row-reverse", gap: 12 },
   paymentBtn: {
-    flexDirection: "row-reverse", alignItems: "center", justifyContent: "center",
-    gap: 8, paddingVertical: 14, borderRadius: 12, borderWidth: 1,
+    flexDirection: "column", alignItems: "center", justifyContent: "center",
+    gap: 10, paddingVertical: 22, borderRadius: 18, borderWidth: 1.5,
   },
-  paymentBtnText: { fontSize: 15, fontFamily: fonts.semibold },
+  paymentBtnText: { fontSize: 16, fontFamily: fonts.bold },
 
   // ── Add-client modal ──────────────────────────────────────────────────────
   modalOverlay: { ...StyleSheet.absoluteFillObject },

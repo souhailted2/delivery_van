@@ -155,7 +155,7 @@ export default function SettingsScreen() {
         {/* About section */}
         <Text style={[styles.sectionTitle, { color: c.textMuted }]}>عن التطبيق</Text>
         <View style={[styles.card, { backgroundColor: c.surface, borderColor: c.hairline }]}>
-          <SettingRow label="ERP Van Sales" sub="نظام مبيعات الشاحنات — الجزائر" icon="info" c={c} />
+          <SettingRow label="ALLAL Delivery" sub="نظام مبيعات الشاحنة — الجزائر" icon="info" c={c} />
           <SettingRow label="العملة" sub="دينار جزائري (DZD)" icon="dollar-sign" c={c} />
           <SettingRow label="اللغة" sub="العربية" icon="globe" c={c} />
         </View>

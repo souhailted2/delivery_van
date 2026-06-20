@@ -4,7 +4,8 @@ import { useRefreshOnFocus } from "@/hooks/useRefreshOnFocus";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ActivityIndicator, Animated, Linking, ScrollView, StyleSheet, Text, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { GradientHero, MoneyText, PressableScale } from "@/components/ui";
+import { GradientHero, MoneyText, PressableScale, ResultDialog } from "@/components/ui";
+import type { DialogAction, ResultVariant } from "@/components/ui";
 import { Client, getDb } from "@/lib/db";
 import { useAuth } from "@/contexts/AuthContext";
 import { useSync } from "@/contexts/SyncContext";
@@ -61,6 +62,10 @@ export default function ClientProfileScreen() {
   const [loading, setLoading] = useState(true);
   const [intel, setIntel] = useState<Intel | null>(null);
   const [recent, setRecent] = useState<RecentInvoice[]>([]);
+  const [dialog, setDialog] = useState<{ visible: boolean; variant: ResultVariant; title: string; message?: string; actions?: DialogAction[] }>(
+    { visible: false, variant: "info", title: "" }
+  );
+  const hideDialog = () => setDialog((d) => ({ ...d, visible: false }));
   const fade = useRef(new Animated.Value(0)).current;
 
   const load = useCallback(async () => {
@@ -180,6 +185,18 @@ export default function ClientProfileScreen() {
     triggerSync();
   };
 
+  const askTier = (tier: string) => {
+    if (!client || (client.client_type ?? "retail") === tier) return;
+    setDialog({
+      visible: true, variant: "warning", title: "تغيير التسعيرة",
+      message: `تغيير تسعيرة هذا العميل إلى «${TIER_LABEL[tier]}»؟ سيُطبَّق على الفواتير الجديدة.`,
+      actions: [
+        { label: "تأكيد", onPress: () => updateTier(tier) },
+        { label: "إلغاء", variant: "tonal" },
+      ],
+    });
+  };
+
   const tones = (tone: Tone) => ({
     success: { fg: c.successText, tint: c.successTint, solid: c.success },
     warning: { fg: c.warningText, tint: c.warningTint, solid: c.warning },
@@ -283,30 +300,38 @@ export default function ClientProfileScreen() {
                 )}
 
                 {/* staples — emphasis strip, not a card */}
-                {intel.staples.length > 0 && (
-                  <>
-                    <Text style={[styles.flowLabel, { color: c.textFaint }]}>اعرض عليه الآن</Text>
-                    <View style={styles.strip}>
-                      {intel.staples.map((s, i) => {
-                        const t2 = s.inStock ? tones("success") : s.missing ? tones("warning") : null;
-                        return (
-                          <View key={s.name + i} style={[styles.pchip, t2 ? { backgroundColor: t2.tint } : { backgroundColor: c.surface, borderWidth: 1, borderColor: c.hairline }]}>
-                            {s.inStock ? <Feather name="check" size={11} color={c.successText} /> : s.missing ? <Feather name="corner-up-left" size={11} color={c.warningText} /> : null}
-                            <Text style={[styles.pchipText, { color: t2 ? t2.fg : c.text }]}>{s.name}</Text>
-                          </View>
-                        );
-                      })}
-                    </View>
-                  </>
-                )}
+                {(() => {
+                  const named = intel.staples.filter(s => s.name && s.name.trim());
+                  return (
+                    <>
+                      <Text style={[styles.flowLabel, { color: c.textFaint }]}>اعرض عليه الآن</Text>
+                      {named.length > 0 ? (
+                        <View style={styles.strip}>
+                          {named.map((s, i) => {
+                            const t2 = s.inStock ? tones("success") : s.missing ? tones("warning") : null;
+                            return (
+                              <View key={s.name + i} style={[styles.pchip, t2 ? { backgroundColor: t2.tint } : { backgroundColor: c.surface, borderWidth: 1, borderColor: c.hairline }]}>
+                                {s.inStock ? <Feather name="check" size={11} color={c.successText} /> : s.missing ? <Feather name="corner-up-left" size={11} color={c.warningText} /> : null}
+                                <Text style={[styles.pchipText, { color: t2 ? t2.fg : c.text }]}>{s.name}</Text>
+                              </View>
+                            );
+                          })}
+                        </View>
+                      ) : (
+                        <Text style={[styles.rhythm, { color: c.textFaint }]}>لا توجد بيانات شراء كافية بعد</Text>
+                      )}
+                    </>
+                  );
+                })()}
 
-                {/* tier — demoted, small */}
+                {/* tier — interactive, confirmed on change */}
+                <Text style={[styles.flowLabel, { color: c.textFaint }]}>التسعيرة · اضغط للتغيير</Text>
                 <View style={styles.tierRow}>
                   {TIERS.map(tier => {
                     const active = (client.client_type ?? "retail") === tier;
                     return (
-                      <PressableScale key={tier} style={[styles.tierChip, { backgroundColor: active ? c.brand : "transparent", borderColor: active ? c.brand : c.hairline }]} onPress={() => updateTier(tier)}>
-                        <Text style={[styles.tierChipText, { color: active ? c.onBrand : c.textMuted }]}>{TIER_LABEL[tier]}</Text>
+                      <PressableScale key={tier} style={[styles.tierChip, { backgroundColor: active ? c.brand : c.surface, borderColor: active ? c.brand : c.hairline }]} onPress={() => askTier(tier)}>
+                        <Text style={[styles.tierChipText, { color: active ? c.onBrand : c.text }]}>{TIER_LABEL[tier]}</Text>
                       </PressableScale>
                     );
                   })}
@@ -348,6 +373,8 @@ export default function ClientProfileScreen() {
           </View>
         </>
       )}
+
+      <ResultDialog visible={dialog.visible} variant={dialog.variant} title={dialog.title} message={dialog.message} actions={dialog.actions} onRequestClose={hideDialog} />
     </View>
   );
 }
