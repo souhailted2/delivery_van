@@ -38,6 +38,7 @@ const PULL_TABLES = [
   "cash_transfers", "truck_stock",
   "stock_transfers", "stock_transfer_items",
   "truck_commission_payments",
+  "client_payments",
 ];
 // Push order must also respect FK dependencies: a row's FK targets must be
 // pushed (and thus resolvable by sync_id on the cloud, see C1/FK_SYNC_RULES
@@ -92,6 +93,10 @@ const FK_SYNC_RULES = {
     { idCol: "product_id",  refTable: "products",        syncCol: "product_sync_id" },
   ],
   truck_commission_payments: [{ idCol: "truck_id", refTable: "trucks", syncCol: "truck_sync_id" }],
+  client_payments: [
+    { idCol: "truck_id",  refTable: "trucks",  syncCol: "truck_sync_id" },
+    { idCol: "client_id", refTable: "clients", syncCol: "client_sync_id" },
+  ],
 };
 
 /** Attach `*_sync_id` companion fields to each row for FK translation on push (C1). */

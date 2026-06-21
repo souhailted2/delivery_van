@@ -246,6 +246,17 @@ function createSchema() {
       ${SYNC_COLS}
     );
 
+    CREATE TABLE IF NOT EXISTS client_payments (
+      id         INTEGER PRIMARY KEY AUTOINCREMENT,
+      truck_id   INTEGER,
+      client_id  INTEGER NOT NULL,
+      amount     REAL NOT NULL,
+      method     TEXT NOT NULL DEFAULT 'cash',
+      note       TEXT,
+      created_at TEXT NOT NULL DEFAULT (${NOW_EXPR}),
+      ${SYNC_COLS}
+    );
+
     CREATE TABLE IF NOT EXISTS sync_log (
       id             INTEGER PRIMARY KEY AUTOINCREMENT,
       synced_at      TEXT NOT NULL DEFAULT (${NOW_EXPR}),
@@ -282,7 +293,7 @@ function runMigrations() {
     "categories","users","suppliers","products","purchases","purchase_items",
     "clients","trucks","truck_stock","stock_transfers","stock_transfer_items",
     "invoices","invoice_items","returns","return_items","cash_transfers",
-    "truck_commission_payments",
+    "truck_commission_payments","client_payments",
   ];
   for (const tbl of syncables) {
     try { db.exec(`ALTER TABLE ${tbl} ADD COLUMN sync_id TEXT`); } catch {}
@@ -318,7 +329,7 @@ function createTriggers() {
     "categories","users","suppliers","products","purchases","purchase_items",
     "clients","trucks","truck_stock","stock_transfers","stock_transfer_items",
     "invoices","invoice_items","returns","return_items","cash_transfers",
-    "truck_commission_payments",
+    "truck_commission_payments","client_payments",
   ];
   for (const tbl of tables) {
     db.exec(`

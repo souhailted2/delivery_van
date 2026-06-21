@@ -12,7 +12,7 @@ import {
   trucksTable, usersTable, purchasesTable, purchaseItemsTable,
   invoicesTable, invoiceItemsTable, returnsTable, returnItemsTable,
   cashTransfersTable, truckStockTable, stockTransfersTable, stockTransferItemsTable,
-  truckCommissionPaymentsTable,
+  truckCommissionPaymentsTable, clientPaymentsTable,
 } from "@workspace/db";
 import { and, eq, gt, or, isNull, sql, getTableName, inArray } from "drizzle-orm";
 import { randomUUID } from "node:crypto";
@@ -35,6 +35,7 @@ const TRUCK_PULL_ALLOWLIST = new Set([
   "invoices", "invoice_items",
   "returns", "return_items",
   "cash_transfers",
+  "client_payments",
   "stock_transfers", "stock_transfer_items",
 ]);
 
@@ -45,6 +46,7 @@ const TRUCK_PUSH_ALLOWLIST = new Set([
   "invoices", "invoice_items",
   "returns", "return_items",
   "cash_transfers",
+  "client_payments",
   "stock_transfers", "stock_transfer_items",
 ]);
 
@@ -73,6 +75,7 @@ const SYNC_TABLES = [
   { name: "stock_transfers",      table: stockTransfersTable,      hasUpdatedAt: true },
   { name: "stock_transfer_items", table: stockTransferItemsTable,  hasUpdatedAt: true },
   { name: "truck_commission_payments", table: truckCommissionPaymentsTable, hasUpdatedAt: true },
+  { name: "client_payments",          table: clientPaymentsTable,      hasUpdatedAt: true },
 ] as const;
 
 // ─── STATUS ───────────────────────────────────────────────────────────────────
@@ -236,6 +239,12 @@ router.post("/sync/v2/push", requireAuth, async (req, res): Promise<void> => {
       ? (await db.select({ s: returnsTable.syncId }).from(returnsTable).where(inArray(returnsTable.syncId, pushedReturnSyncIds))).map((r: any) => r.s)
       : [],
   );
+  const pushedClientPaymentSyncIds = (tables.client_payments ?? []).map((r: any) => r?.sync_id).filter(Boolean) as string[];
+  const preExistingClientPaymentSyncIds = new Set<string>(
+    pushedClientPaymentSyncIds.length
+      ? (await db.select({ s: clientPaymentsTable.syncId }).from(clientPaymentsTable).where(inArray(clientPaymentsTable.syncId, pushedClientPaymentSyncIds))).map((r: any) => r.s)
+      : [],
+  );
 
   for (const [tableName, records] of Object.entries(tables)) {
     const t = tableMap[tableName] as any;
@@ -320,7 +329,8 @@ router.post("/sync/v2/push", requireAuth, async (req, res): Promise<void> => {
   try {
     const newInvoiceSyncIds = pushedInvoiceSyncIds.filter((s) => !preExistingInvoiceSyncIds.has(s));
     const newReturnSyncIds = pushedReturnSyncIds.filter((s) => !preExistingReturnSyncIds.has(s));
-    if (newInvoiceSyncIds.length || newReturnSyncIds.length) {
+    const newClientPaymentSyncIds = pushedClientPaymentSyncIds.filter((s) => !preExistingClientPaymentSyncIds.has(s));
+    if (newInvoiceSyncIds.length || newReturnSyncIds.length || newClientPaymentSyncIds.length) {
       await db.transaction(async (tx) => {
         if (newInvoiceSyncIds.length) {
           const invs = await tx.select({
@@ -333,11 +343,20 @@ router.post("/sync/v2/push", requireAuth, async (req, res): Promise<void> => {
           }
         }
         if (newReturnSyncIds.length) {
-          const rets = await tx.select({ id: returnsTable.id, truckId: returnsTable.truckId, type: returnsTable.type })
+          const rets = await tx.select({ id: returnsTable.id, truckId: returnsTable.truckId, type: returnsTable.type, invoiceId: returnsTable.invoiceId })
             .from(returnsTable).where(inArray(returnsTable.syncId, newReturnSyncIds));
           for (const ret of rets) {
-            if (ret.type === "client_return" && ret.truckId != null) {
-              await applyClientReturnEffects(tx, { id: ret.id, truckId: ret.truckId }, req);
+            if ((ret.type === "client_return" || ret.type === "void") && ret.truckId != null) {
+              await applyReturnEffects(tx, { id: ret.id, truckId: ret.truckId, type: ret.type, invoiceId: ret.invoiceId ?? null }, req);
+            }
+          }
+        }
+        if (newClientPaymentSyncIds.length) {
+          const pays = await tx.select({ id: clientPaymentsTable.id, truckId: clientPaymentsTable.truckId, clientId: clientPaymentsTable.clientId, amount: clientPaymentsTable.amount })
+            .from(clientPaymentsTable).where(inArray(clientPaymentsTable.syncId, newClientPaymentSyncIds));
+          for (const pay of pays) {
+            if (pay.clientId != null) {
+              await applyClientPaymentEffects(tx, { id: pay.id, truckId: pay.truckId ?? null, clientId: pay.clientId, amount: Number(pay.amount) }, req);
             }
           }
         }
@@ -420,6 +439,10 @@ const PUSH_FK_RULES: Record<string, FkRule[]> = {
   truck_commission_payments: [
     { idCol: "truckId", syncCol: "truckSyncId", refTable: trucksTable, tag: "truck", required: true },
   ],
+  client_payments: [
+    { idCol: "truckId", syncCol: "truckSyncId", refTable: trucksTable, tag: "truck", required: true },
+    { idCol: "clientId", syncCol: "clientSyncId", refTable: clientsTable, tag: "client", required: true },
+  ],
 };
 
 /**
@@ -444,7 +467,8 @@ async function handleTruckPush(
   // authorization — never trust the truck_id the device sends).
   const sessionTruckId = Number((req as any).session?.truckId) || null;
   const newInvoices: Array<{ id: number; truckId: number; clientId: number | null; paymentType: string; totalAmount: number }> = [];
-  const newClientReturns: Array<{ id: number; truckId: number }> = [];
+  const newReturns: Array<{ id: number; truckId: number; type: string; invoiceId: number | null }> = [];
+  const newClientPayments: Array<{ id: number; truckId: number | null; clientId: number; amount: number }> = [];
 
   try {
     await db.transaction(async (tx) => {
@@ -536,6 +560,7 @@ async function handleTruckPush(
         await applyFk(rec, [
           { idCol: "clientId", syncCol: "clientSyncId", refTable: clientsTable, tag: "client" },
           { idCol: "truckId", syncCol: "truckSyncId", refTable: trucksTable, tag: "truck" },
+          { idCol: "invoiceId", syncCol: "invoiceSyncId", refTable: invoicesTable, tag: "invoice" },
         ]);
         const clean = sanitizeForTable(returnsTable, rec);
         if (!clean) continue;
@@ -543,9 +568,9 @@ async function handleTruckPush(
         if (!clean.type) continue; // NOT NULL
         const inserted = await tx.insert(returnsTable).values(clean)
           .onConflictDoNothing({ target: returnsTable.syncId })
-          .returning({ id: returnsTable.id, truckId: returnsTable.truckId, type: returnsTable.type });
-        if (inserted.length > 0 && inserted[0].type === "client_return" && inserted[0].truckId != null) {
-          newClientReturns.push({ id: inserted[0].id, truckId: inserted[0].truckId });
+          .returning({ id: returnsTable.id, truckId: returnsTable.truckId, type: returnsTable.type, invoiceId: returnsTable.invoiceId });
+        if (inserted.length > 0 && (inserted[0].type === "client_return" || inserted[0].type === "void") && inserted[0].truckId != null) {
+          newReturns.push({ id: inserted[0].id, truckId: inserted[0].truckId, type: inserted[0].type, invoiceId: inserted[0].invoiceId ?? null });
         }
       }
 
@@ -578,6 +603,29 @@ async function handleTruckPush(
         if (!clean) continue;
         if (clean.returnId == null || clean.productId == null) continue;
         await tx.insert(returnItemsTable).values(clean).onConflictDoNothing({ target: returnItemsTable.syncId });
+      }
+
+      // 5b. Client payments (تحصيل دفعة) — resolve client + truck, insert-only.
+      for (const raw of (tables["client_payments"] ?? [])) {
+        if (!raw.sync_id) continue;
+        const rec = camelCaseRecord(raw);
+        await applyFk(rec, [
+          { idCol: "clientId", syncCol: "clientSyncId", refTable: clientsTable, tag: "client" },
+          { idCol: "truckId", syncCol: "truckSyncId", refTable: trucksTable, tag: "truck" },
+        ]);
+        const clean = sanitizeForTable(clientPaymentsTable, rec);
+        if (!clean) continue;
+        if (sessionTruckId != null) clean.truckId = sessionTruckId; // truck-scope enforcement
+        if (clean.clientId == null) {
+          req.log?.warn?.({ syncId: clean.syncId, clientId: clean.clientId }, "truck push: client_payment skipped, unresolved client FK");
+          continue;
+        }
+        const inserted = await tx.insert(clientPaymentsTable).values(clean)
+          .onConflictDoNothing({ target: clientPaymentsTable.syncId })
+          .returning({ id: clientPaymentsTable.id, truckId: clientPaymentsTable.truckId, clientId: clientPaymentsTable.clientId, amount: clientPaymentsTable.amount });
+        if (inserted.length > 0 && inserted[0].clientId != null) {
+          newClientPayments.push({ id: inserted[0].id, truckId: inserted[0].truckId ?? null, clientId: inserted[0].clientId, amount: Number(inserted[0].amount) });
+        }
       }
 
       // 6. Reconciliation — once-only for invoices/returns inserted above.
@@ -650,26 +698,15 @@ async function handleTruckPush(
           }).where(eq(clientsTable.id, inv.clientId));
         }
       }
-      // Client return: add the returned quantity back to truck_stock (insert the
-      // row if the truck never carried that product). Mirrors web POST /returns.
-      for (const ret of newClientReturns) {
-        const items = await tx.select({ productId: returnItemsTable.productId, quantity: returnItemsTable.quantity })
-          .from(returnItemsTable).where(eq(returnItemsTable.returnId, ret.id));
-        for (const it of items) {
-          const qty = Number(it.quantity);
-          if (!qty || it.productId == null) continue;
-          const updated = await tx.update(truckStockTable).set({
-            quantity: sql`${truckStockTable.quantity} + ${qty}`,
-            updatedAt: new Date(),
-          }).where(and(eq(truckStockTable.truckId, ret.truckId), eq(truckStockTable.productId, it.productId)))
-            .returning({ id: truckStockTable.id });
-          if (updated.length === 0) {
-            await tx.insert(truckStockTable).values({
-              truckId: ret.truckId, productId: it.productId, quantity: String(qty),
-              syncId: randomUUID(), updatedAt: new Date(),
-            });
-          }
-        }
+      // Returns & voids: restore stock + reverse money (and soft-delete the
+      // invoice on a void). Client payments: reduce client debt + add truck cash.
+      // Shared with the desktop generic-push path via the same helpers so the two
+      // never diverge. Once-only — driven by the rows inserted in this request.
+      for (const ret of newReturns) {
+        await applyReturnEffects(tx, ret, req);
+      }
+      for (const pay of newClientPayments) {
+        await applyClientPaymentEffects(tx, pay, req);
       }
     });
   } catch (err) {
@@ -890,17 +927,72 @@ async function applyInvoiceEffects(
   }
 }
 
-async function applyClientReturnEffects(tx: any, ret: { id: number; truckId: number }, _req: any) {
-  const items = await tx.select({ productId: returnItemsTable.productId, quantity: returnItemsTable.quantity })
-    .from(returnItemsTable).where(eq(returnItemsTable.returnId, ret.id));
+// Apply a NEW return/void ONCE. Restore the returned stock to the truck, then
+// reverse the money against the original invoice: a credit sale reduces the
+// client's debt (balance += amount); a cash sale removes the refunded cash from
+// the truck (cash_balance −= amount). A "void" reverses the WHOLE invoice (using
+// the server-authoritative invoice total) and soft-deletes the invoice + its
+// items so it leaves history, commission and report totals. A "client_return"
+// reverses only the value of the returned lines. Caller MUST run this inside a
+// db.transaction, only for returns it just inserted (RETURNING/snapshot-gated),
+// so the effect is applied exactly once.
+async function applyReturnEffects(
+  tx: any,
+  ret: { id: number; truckId: number; type: string; invoiceId: number | null },
+  _req: any,
+) {
+  const items = await tx.select({
+    productId: returnItemsTable.productId,
+    quantity: returnItemsTable.quantity,
+    subtotal: returnItemsTable.subtotal,
+  }).from(returnItemsTable).where(eq(returnItemsTable.returnId, ret.id));
+
+  let reversedTotal = 0;
   for (const it of items) {
     const qty = Number(it.quantity);
+    reversedTotal += Number(it.subtotal ?? 0);
     if (!qty || it.productId == null) continue;
     const updated = await tx.update(truckStockTable).set({ quantity: sql`${truckStockTable.quantity} + ${qty}`, updatedAt: new Date() })
       .where(and(eq(truckStockTable.truckId, ret.truckId), eq(truckStockTable.productId, it.productId))).returning({ id: truckStockTable.id });
     if (updated.length === 0) {
       await tx.insert(truckStockTable).values({ truckId: ret.truckId, productId: it.productId, quantity: String(qty), syncId: randomUUID(), updatedAt: new Date() });
     }
+  }
+
+  if (ret.invoiceId == null) return; // unattributed return — stock only
+  const [inv] = await tx.select({
+    paymentType: invoicesTable.paymentType, clientId: invoicesTable.clientId,
+    truckId: invoicesTable.truckId, totalAmount: invoicesTable.totalAmount,
+  }).from(invoicesTable).where(eq(invoicesTable.id, ret.invoiceId)).limit(1);
+  if (!inv || inv.truckId !== ret.truckId) return; // never touch another truck's invoice
+
+  const reverseAmount = ret.type === "void" ? Number(inv.totalAmount ?? 0) : reversedTotal;
+  if (reverseAmount > 0) {
+    if (inv.paymentType === "credit" && inv.clientId != null) {
+      await tx.update(clientsTable).set({ balance: sql`${clientsTable.balance} + ${reverseAmount}`, updatedAt: new Date() }).where(eq(clientsTable.id, inv.clientId));
+    } else if (inv.paymentType === "cash") {
+      await tx.update(trucksTable).set({ cashBalance: sql`GREATEST(0, ${trucksTable.cashBalance} - ${reverseAmount})`, updatedAt: new Date() }).where(eq(trucksTable.id, inv.truckId));
+    }
+  }
+
+  if (ret.type === "void") {
+    await tx.update(invoicesTable).set({ isDeleted: true, updatedAt: new Date() }).where(eq(invoicesTable.id, ret.invoiceId));
+    await tx.update(invoiceItemsTable).set({ isDeleted: true, updatedAt: new Date() }).where(eq(invoiceItemsTable.invoiceId, ret.invoiceId));
+  }
+}
+
+// Apply a NEW client payment ONCE: reduce the client's debt and add the collected
+// cash to the truck. Both columns are cloud-authoritative (RECONCILED_COLUMNS),
+// so this delta is the only way they move for a payment.
+async function applyClientPaymentEffects(
+  tx: any,
+  pay: { id: number; truckId: number | null; clientId: number; amount: number },
+  _req: any,
+) {
+  if (!(pay.amount > 0)) return;
+  await tx.update(clientsTable).set({ balance: sql`${clientsTable.balance} + ${pay.amount}`, updatedAt: new Date() }).where(eq(clientsTable.id, pay.clientId));
+  if (pay.truckId != null) {
+    await tx.update(trucksTable).set({ cashBalance: sql`${trucksTable.cashBalance} + ${pay.amount}`, updatedAt: new Date() }).where(eq(trucksTable.id, pay.truckId));
   }
 }
 
