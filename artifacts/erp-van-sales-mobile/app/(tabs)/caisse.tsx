@@ -2,8 +2,8 @@ import { Feather } from "@expo/vector-icons";
 import { useRefreshOnFocus } from "@/hooks/useRefreshOnFocus";
 import { useCallback, useEffect, useState } from "react";
 import {
-  FlatList, Modal, RefreshControl, ScrollView, StyleSheet, Text,
-  TextInput, View,
+  FlatList, KeyboardAvoidingView, Modal, Platform, RefreshControl,
+  ScrollView, StyleSheet, Text, TextInput, TouchableWithoutFeedback, View,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { AppButton, GradientHero, MoneyText, PressableScale, ResultDialog, StatusPill } from "@/components/ui";
@@ -212,8 +212,11 @@ export default function CaisseScreen() {
         showsVerticalScrollIndicator={false}
       />
 
-      <Modal visible={showModal} animationType="slide" transparent onRequestClose={() => setShowModal(false)}>
-        <View style={[styles.overlay, { backgroundColor: c.scrim }]}>
+      <Modal visible={showModal} animationType="slide" transparent statusBarTranslucent onRequestClose={() => setShowModal(false)}>
+        <TouchableWithoutFeedback onPress={() => setShowModal(false)}>
+          <View style={[styles.overlay, { backgroundColor: c.scrim }]} />
+        </TouchableWithoutFeedback>
+        <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : "height"} style={styles.sheetWrap}>
           <View style={[styles.sheet, { backgroundColor: c.surface, borderColor: c.hairline }]}>
             <View style={[styles.sheetHeader, { borderBottomColor: c.hairline }]}>
               <PressableScale onPress={() => setShowModal(false)} hitSlop={10} accessibilityLabel="إغلاق">
@@ -285,7 +288,7 @@ export default function CaisseScreen() {
               <View style={{ height: 40 }} />
             </ScrollView>
           </View>
-        </View>
+        </KeyboardAvoidingView>
       </Modal>
 
       <ResultDialog
@@ -324,7 +327,8 @@ const styles = StyleSheet.create({
   statusDateRow: { flexDirection: "row-reverse", alignItems: "center", gap: 8, marginTop: 2 },
   empty: { alignItems: "center", paddingVertical: 60, gap: 12 },
   emptyText: { fontSize: 14, fontFamily: fonts.regular },
-  overlay: { flex: 1, justifyContent: "flex-end" },
+  overlay: { ...StyleSheet.absoluteFillObject },
+  sheetWrap: { position: "absolute", left: 0, right: 0, bottom: 0 },
   sheet: { borderTopLeftRadius: 22, borderTopRightRadius: 22, borderWidth: 1, borderBottomWidth: 0, maxHeight: "90%" },
   sheetHeader: { flexDirection: "row-reverse", alignItems: "center", justifyContent: "space-between", paddingHorizontal: 16, paddingVertical: 14, borderBottomWidth: 1 },
   sheetTitle: { fontSize: 17, fontFamily: fonts.semibold },

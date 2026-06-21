@@ -136,7 +136,7 @@ export default function NewInvoiceScreen() {
                  SELECT product_id, SUM(quantity) AS quantity
                  FROM truck_stock WHERE truck_id = ? GROUP BY product_id
                ) agg ON agg.product_id = p.id
-               WHERE p.is_deleted = 0 ORDER BY p.name`,
+               WHERE p.is_deleted = 0 ORDER BY truck_quantity DESC, p.name`,
               [truckId]
             )
           : db.getAllAsync<Product>("SELECT * FROM products WHERE is_deleted = 0 ORDER BY name"),
