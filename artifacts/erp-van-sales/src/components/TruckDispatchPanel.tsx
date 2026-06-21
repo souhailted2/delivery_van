@@ -6,8 +6,9 @@ import { Badge } from "@/components/ui/badge";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Trash2, Plus, Send, Package, CheckCircle, Clock, XCircle } from "lucide-react";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from "@/components/ui/command";
+import { Trash2, Plus, Send, Package, CheckCircle, Clock, XCircle, ChevronsUpDown, Check } from "lucide-react";
 import { toast } from "sonner";
 
 interface Product {
@@ -54,6 +55,7 @@ export function TruckDispatchPanel({ truck }: { truck: Truck }) {
   const [open, setOpen] = useState(false);
   const [items, setItems] = useState<DispatchItem[]>([]);
   const [selectedProduct, setSelectedProduct] = useState<string>("");
+  const [productPickerOpen, setProductPickerOpen] = useState(false);
   const [qty, setQty] = useState("1");
   const [note, setNote] = useState("");
   const [saving, setSaving] = useState(false);
@@ -192,20 +194,51 @@ export function TruckDispatchPanel({ truck }: { truck: Truck }) {
           <div className="space-y-4">
             {/* Product selector */}
             <div className="flex gap-2 items-end">
-              <div className="flex-1 space-y-1">
+              <div className="flex-1 space-y-1 min-w-0">
                 <Label>المنتج</Label>
-                <Select value={selectedProduct} onValueChange={setSelectedProduct}>
-                  <SelectTrigger>
-                    <SelectValue placeholder="اختر منتجاً..." />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {availableProducts.map(p => (
-                      <SelectItem key={p.id} value={String(p.id)}>
-                        {p.name} ({p.unit})
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
+                <Popover open={productPickerOpen} onOpenChange={setProductPickerOpen}>
+                  <PopoverTrigger asChild>
+                    <Button
+                      variant="outline"
+                      role="combobox"
+                      aria-expanded={productPickerOpen}
+                      className="w-full justify-between font-normal"
+                    >
+                      <span className="truncate">
+                        {selectedProduct
+                          ? products.find(p => String(p.id) === selectedProduct)?.name ?? "اختر منتجاً..."
+                          : "اختر منتجاً..."}
+                      </span>
+                      <ChevronsUpDown className="h-4 w-4 shrink-0 opacity-50" />
+                    </Button>
+                  </PopoverTrigger>
+                  <PopoverContent className="p-0 w-[--radix-popover-trigger-width]" align="start" dir="rtl">
+                    <Command>
+                      <CommandInput placeholder="ابحث عن منتج..." />
+                      <CommandList>
+                        <CommandEmpty>لا توجد نتائج</CommandEmpty>
+                        <CommandGroup>
+                          {availableProducts.map(p => (
+                            <CommandItem
+                              key={p.id}
+                              value={p.name}
+                              onSelect={() => {
+                                setSelectedProduct(String(p.id));
+                                setProductPickerOpen(false);
+                              }}
+                            >
+                              <Check
+                                className={`ml-2 h-4 w-4 ${selectedProduct === String(p.id) ? "opacity-100" : "opacity-0"}`}
+                              />
+                              <span className="flex-1 truncate">{p.name}</span>
+                              <span className="text-xs text-muted-foreground">{p.unit}</span>
+                            </CommandItem>
+                          ))}
+                        </CommandGroup>
+                      </CommandList>
+                    </Command>
+                  </PopoverContent>
+                </Popover>
               </div>
               <div className="w-24 space-y-1">
                 <Label>الكمية</Label>
