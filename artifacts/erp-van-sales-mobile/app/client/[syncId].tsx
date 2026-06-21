@@ -2,12 +2,16 @@ import { Feather } from "@expo/vector-icons";
 import { router, useLocalSearchParams } from "expo-router";
 import { useRefreshOnFocus } from "@/hooks/useRefreshOnFocus";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { ActivityIndicator, Animated, Linking, ScrollView, StyleSheet, Text, View } from "react-native";
+import {
+  ActivityIndicator, Animated, KeyboardAvoidingView, Linking, Modal, Platform,
+  ScrollView, StyleSheet, Text, TextInput, TouchableWithoutFeedback, View,
+} from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { GradientHero, MoneyText, PressableScale, ResultDialog } from "@/components/ui";
+import { AppButton, GradientHero, MoneyText, PressableScale, ResultDialog } from "@/components/ui";
 import type { DialogAction, ResultVariant } from "@/components/ui";
 import { Client, getDb } from "@/lib/db";
 import { captureLocation } from "@/lib/location";
+import { collectClientPayment } from "@/lib/txn";
 import { useAuth } from "@/contexts/AuthContext";
 import { useSync } from "@/contexts/SyncContext";
 import { formatMoney } from "@/lib/money";
@@ -68,6 +72,9 @@ export default function ClientProfileScreen() {
   );
   const hideDialog = () => setDialog((d) => ({ ...d, visible: false }));
   const [capturingLoc, setCapturingLoc] = useState(false);
+  const [payOpen, setPayOpen] = useState(false);
+  const [payAmount, setPayAmount] = useState("");
+  const [paySubmitting, setPaySubmitting] = useState(false);
   const fade = useRef(new Animated.Value(0)).current;
 
   const load = useCallback(async () => {
@@ -214,6 +221,33 @@ export default function ClientProfileScreen() {
       [coords.latitude, coords.longitude, new Date().toISOString(), client.sync_id]);
     setClient({ ...client, latitude: coords.latitude, longitude: coords.longitude });
     triggerSync();
+  };
+
+  const submitPayment = async () => {
+    if (!client) return;
+    const amount = parseFloat((payAmount ?? "").replace(",", "."));
+    if (!(amount > 0)) {
+      setDialog({ visible: true, variant: "warning", title: "تنبيه", message: "أدخل مبلغاً صحيحاً" });
+      return;
+    }
+    setPaySubmitting(true);
+    try {
+      const ok = await collectClientPayment({
+        client: { sync_id: client.sync_id, id: client.id ?? null },
+        truckId: user?.truckId ?? null,
+        amount,
+      });
+      if (!ok) { setDialog({ visible: true, variant: "error", title: "خطأ", message: "تعذّر تسجيل الدفعة" }); return; }
+      setPayOpen(false);
+      setPayAmount("");
+      triggerSync();
+      await load();
+      setDialog({ visible: true, variant: "success", title: "تم التحصيل", message: `سُجّلت دفعة ${formatMoney(amount)} وخُصمت من دين العميل.` });
+    } catch (e: any) {
+      setDialog({ visible: true, variant: "error", title: "خطأ", message: e?.message ?? "فشل التحصيل" });
+    } finally {
+      setPaySubmitting(false);
+    }
   };
 
   const tones = (tone: Tone) => ({
@@ -395,6 +429,11 @@ export default function ClientProfileScreen() {
               <Feather name="plus" size={18} color={c.onBrand} />
               <Text style={[styles.ctaText, { color: c.onBrand }]}>بيع جديد</Text>
             </PressableScale>
+            {Number(client.credit_balance ?? 0) < 0 ? (
+              <PressableScale style={[styles.icb, { backgroundColor: c.successTint, borderColor: c.successText }]} accessibilityLabel="تحصيل دفعة" onPress={() => { setPayAmount(""); setPayOpen(true); }}>
+                <Feather name="dollar-sign" size={18} color={c.successText} />
+              </PressableScale>
+            ) : null}
             {client.phone ? (
               <PressableScale style={[styles.icb, { backgroundColor: c.surface, borderColor: c.hairline }]} accessibilityLabel="اتصال" onPress={() => Linking.openURL(`tel:${client.phone}`)}>
                 <Feather name="phone" size={18} color={c.brandText} />
@@ -403,6 +442,38 @@ export default function ClientProfileScreen() {
           </View>
         </>
       )}
+
+      {/* تحصيل دفعة sheet */}
+      <Modal visible={payOpen} transparent animationType="slide" statusBarTranslucent onRequestClose={() => setPayOpen(false)}>
+        <TouchableWithoutFeedback onPress={() => setPayOpen(false)}>
+          <View style={[styles.payOverlay, { backgroundColor: c.scrim }]} />
+        </TouchableWithoutFeedback>
+        <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : "height"} style={styles.paySheetWrap}>
+          <View style={[styles.paySheet, { backgroundColor: c.surface, borderColor: c.hairline, paddingBottom: insets.bottom + 16 }]}>
+            <View style={[styles.payHandle, { backgroundColor: c.hairline }]} />
+            <Text style={[styles.payTitle, { color: c.text }]}>تحصيل دفعة</Text>
+            {client ? (
+              <Text style={[styles.payHint, { color: c.textMuted }]}>
+                {client.name} — الدين الحالي {formatMoney(Math.max(0, -Number(client.credit_balance ?? 0)))}
+              </Text>
+            ) : null}
+            <TextInput
+              style={[styles.payInput, { color: c.text, backgroundColor: c.bg, borderColor: c.hairline }]}
+              value={payAmount}
+              onChangeText={setPayAmount}
+              keyboardType="decimal-pad"
+              textAlign="center"
+              placeholder="0.00"
+              placeholderTextColor={c.textFaint}
+              autoFocus
+            />
+            <View style={styles.payActions}>
+              <AppButton label="إلغاء" variant="tonal" size="lg" onPress={() => setPayOpen(false)} style={{ flex: 1 }} />
+              <AppButton label="تحصيل" variant="primary" size="lg" icon="check" loading={paySubmitting} onPress={submitPayment} style={{ flex: 2 }} />
+            </View>
+          </View>
+        </KeyboardAvoidingView>
+      </Modal>
 
       <ResultDialog visible={dialog.visible} variant={dialog.variant} title={dialog.title} message={dialog.message} actions={dialog.actions} onRequestClose={hideDialog} />
     </View>
@@ -455,4 +526,12 @@ const styles = StyleSheet.create({
   cta: { flex: 1, flexDirection: "row-reverse", alignItems: "center", justifyContent: "center", gap: 8, height: 50, borderRadius: 14 },
   ctaText: { fontSize: 16, fontFamily: fonts.bold },
   icb: { width: 50, height: 50, borderRadius: 14, borderWidth: 1, alignItems: "center", justifyContent: "center" },
+  payOverlay: { ...StyleSheet.absoluteFillObject },
+  paySheetWrap: { position: "absolute", left: 0, right: 0, bottom: 0 },
+  paySheet: { borderTopLeftRadius: 22, borderTopRightRadius: 22, borderWidth: 1, borderBottomWidth: 0, padding: 16, gap: 12 },
+  payHandle: { width: 40, height: 4, borderRadius: 2, alignSelf: "center", marginBottom: 2 },
+  payTitle: { fontSize: 18, fontFamily: fonts.bold, textAlign: "right" },
+  payHint: { fontSize: 12, fontFamily: fonts.regular, textAlign: "right" },
+  payInput: { height: 56, borderRadius: 12, borderWidth: 1, fontSize: 22, fontFamily: fonts.bold },
+  payActions: { flexDirection: "row-reverse", gap: 10, marginTop: 2 },
 });
