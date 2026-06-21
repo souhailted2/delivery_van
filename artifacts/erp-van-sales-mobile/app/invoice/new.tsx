@@ -4,7 +4,7 @@ import { router, useLocalSearchParams } from "expo-router";
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Animated, Dimensions, FlatList, KeyboardAvoidingView, Modal, Platform,
-  Pressable, ScrollView, StyleSheet, Text, TextInput,
+  ScrollView, StyleSheet, Text, TextInput,
   TouchableWithoutFeedback, View,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -59,6 +59,7 @@ const TIER_OPTIONS: { value: Tier; label: string }[] = [
 const STEPS = [
   { key: "client", label: "العميل" },
   { key: "products", label: "المنتجات" },
+  { key: "cart", label: "السلة" },
   { key: "payment", label: "الدفع" },
 ] as const;
 
@@ -70,7 +71,7 @@ export default function NewInvoiceScreen() {
   const { triggerSync, bumpLocalVersion, localVersion } = useSync();
   const { clientSyncId } = useLocalSearchParams<{ clientSyncId?: string }>();
 
-  const [step, setStep] = useState<"client" | "products" | "payment">("client");
+  const [step, setStep] = useState<"client" | "products" | "cart" | "payment">("client");
   const [selectedClient, setSelectedClient] = useState<Client | null>(null);
   const [items, setItems] = useState<InvoiceItem[]>([]);
   const [paymentType, setPaymentType] = useState<"cash" | "credit">("cash");
@@ -101,9 +102,8 @@ export default function NewInvoiceScreen() {
   const [newClientType, setNewClientType] = useState<Tier>("retail");
   const [savingNewClient, setSavingNewClient] = useState(false);
 
-  // Inline quantity card state
-  const [activeProductId, setActiveProductId] = useState<string | null>(null);
-  const [inputQty, setInputQty] = useState("");
+  // Per-item quantity draft text, edited on the cart screen (keyed by sync_id).
+  const [qtyText, setQtyText] = useState<Record<string, string>>({});
 
   const clientTier = resolveTier(selectedClient);
 
@@ -220,64 +220,59 @@ export default function NewInvoiceScreen() {
     setNewClientType("retail");
   };
 
-  // Open the inline quantity card for a product
-  const openQtyCard = (product: Product, currentQty?: number) => {
-    setActiveProductId(product.sync_id);
-    setInputQty(currentQty !== undefined ? String(currentQty) : "");
-    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-  };
-
-  // Confirm the quantity entered in the card
-  const confirmQty = (product: Product, existingItem: InvoiceItem | undefined) => {
-    const raw = inputQty.replace(",", ".").trim();
-    let qty = parseFloat(raw);
-    if (!isNaN(qty) && qty > 0) {
-      // Guard against overselling: truck_quantity is set by the JOIN in the
-      // products query and represents what the truck currently carries.
-      // Only enforced when a specific truck is known (truck_quantity is defined).
-      const maxAvailable = Number((product as any).truck_quantity);
-      if (!isNaN(maxAvailable)) {
-        if (maxAvailable <= 0) {
-          showDialog("error", "نفدت الكمية", `لا يوجد مخزون من "${product.name}" في الشاحنة.`);
-          setActiveProductId(null);
-          setInputQty("");
-          return;
-        }
-        if (qty > maxAvailable) {
-          qty = maxAvailable;
-          showDialog(
-            "warning",
-            "تنبيه: تجاوز المخزون",
-            `الكمية المتوفرة من "${product.name}" في الشاحنة هي ${maxAvailable} وحدة فقط.\nتم ضبط الكمية تلقائياً.`,
-          );
-        }
-      }
-      if (existingItem) {
-        setItems(prev => prev.map(i =>
-          i.product.sync_id === product.sync_id ? { ...i, quantity: qty } : i
-        ));
-      } else {
-        setItems(prev => [...prev, {
-          product,
-          quantity: qty,
-          priceType: clientTier,
-          unitPrice: priceByType(product, clientTier),
-        }]);
-      }
-    } else if ((!isNaN(qty) && qty === 0) || raw === "0") {
-      setItems(prev => prev.filter(i => i.product.sync_id !== product.sync_id));
-    }
-    setActiveProductId(null);
-    setInputQty("");
-  };
-
-  const dismissCard = () => {
-    setActiveProductId(null);
-    setInputQty("");
-  };
-
   const removeItem = (syncId: string) => {
     setItems(prev => prev.filter(i => i.product.sync_id !== syncId));
+    setQtyText(prev => { const n = { ...prev }; delete n[syncId]; return n; });
+  };
+
+  // One tap on a product card adds it to the cart at qty 1; tapping again
+  // removes it. Quantities are then fine-tuned on the cart screen. Overselling
+  // is blocked up-front (truck_quantity comes from the JOIN in the products query).
+  const toggleProduct = (product: Product) => {
+    if (items.some(i => i.product.sync_id === product.sync_id)) {
+      removeItem(product.sync_id);
+      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+      return;
+    }
+    const tqRaw = (product as any).truck_quantity;
+    if (tqRaw !== undefined) {
+      const maxAvailable = Number(tqRaw);
+      if (!isNaN(maxAvailable) && maxAvailable <= 0) {
+        showDialog("error", "نفدت الكمية", `لا يوجد مخزون من "${product.name}" في الشاحنة.`);
+        return;
+      }
+    }
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    setItems(prev => [...prev, {
+      product,
+      quantity: 1,
+      priceType: clientTier,
+      unitPrice: priceByType(product, clientTier),
+    }]);
+  };
+
+  // Commit a quantity typed into a cart row (clamped to truck stock). An empty
+  // field leaves the value unchanged; zero/invalid removes the line.
+  const commitQty = (item: InvoiceItem) => {
+    const id = item.product.sync_id;
+    const raw = (qtyText[id] ?? "").replace(",", ".").trim();
+    if (raw === "") { setQtyText(prev => { const n = { ...prev }; delete n[id]; return n; }); return; }
+    let qty = parseFloat(raw);
+    if (isNaN(qty) || qty <= 0) { removeItem(id); return; }
+    const tqRaw = (item.product as any).truck_quantity;
+    if (tqRaw !== undefined) {
+      const maxAvailable = Number(tqRaw);
+      if (!isNaN(maxAvailable) && qty > maxAvailable) {
+        qty = maxAvailable;
+        showDialog(
+          "warning",
+          "تنبيه: تجاوز المخزون",
+          `الكمية المتوفرة من "${item.product.name}" في الشاحنة هي ${maxAvailable} وحدة فقط.\nتم ضبط الكمية تلقائياً.`,
+        );
+      }
+    }
+    setItems(prev => prev.map(it => it.product.sync_id === id ? { ...it, quantity: qty } : it));
+    setQtyText(prev => { const n = { ...prev }; delete n[id]; return n; });
   };
 
   const total = items.reduce((s, i) => s + i.quantity * i.unitPrice, 0);
@@ -430,7 +425,6 @@ export default function NewInvoiceScreen() {
   const renderProduct = ({ item: product }: { item: Product }) => {
     const cartItem = cartMap.get(product.sync_id);
     const inCart = !!cartItem;
-    const isActive = activeProductId === product.sync_id;
     const price = cartItem?.unitPrice ?? priceByType(product, clientTier);
     const tqRaw = (product as any).truck_quantity;
     const hasStockInfo = tqRaw !== undefined;
@@ -439,17 +433,15 @@ export default function NewInvoiceScreen() {
     const lowStock = hasStockInfo && tq > 0 && tq <= 3;
 
     return (
-      <Pressable
+      <PressableScale
         style={[
           styles.catCard,
-          { width: CARD_W, backgroundColor: c.surface, borderColor: inCart ? c.brand : c.hairline },
-          isActive && { borderColor: c.brand, borderWidth: 2 },
+          { width: CARD_W, backgroundColor: inCart ? c.brandTint : c.surface, borderColor: inCart ? c.brand : c.hairline },
+          inCart && { borderWidth: 2 },
           isOutOfStock && { opacity: 0.45 },
         ]}
-        onPress={() => {
-          if (isActive) return;
-          openQtyCard(product, cartItem?.quantity);
-        }}
+        onPress={() => toggleProduct(product)}
+        accessibilityLabel={`${product.name}${inCart ? " — في السلة، اضغط للإزالة" : " — اضغط للإضافة"}`}
       >
         <View style={styles.catImageWrap}>
           <ProductImage
@@ -475,63 +467,35 @@ export default function NewInvoiceScreen() {
               </Text>
             </View>
           )}
+          {inCart && (
+            <View style={[styles.selectTick, { backgroundColor: c.brand }]}>
+              <Feather name="check" size={14} color={c.onBrand} />
+            </View>
+          )}
         </View>
         <Text style={[styles.catName, { color: c.text }]} numberOfLines={2}>{product.name}</Text>
         <MoneyText amount={price} tone="brand" size="callout" />
 
-        {isActive ? (
-          <View style={[styles.qtyCard, { backgroundColor: c.surfaceElevated, borderColor: c.brandBorder }]}>
-            <TextInput
-              style={[styles.qtyInput, { color: c.text, backgroundColor: c.surface, borderColor: c.hairline }]}
-              value={inputQty}
-              onChangeText={setInputQty}
-              keyboardType="numeric"
-              autoFocus
-              textAlign="center"
-              placeholder="الكمية"
-              placeholderTextColor={c.textFaint}
-              returnKeyType="done"
-              onSubmitEditing={() => confirmQty(product, cartItem)}
-            />
-            <View style={styles.qtyCardActions}>
-              <PressableScale
-                style={[styles.qtyConfirmBtn, { backgroundColor: c.brand }]}
-                onPress={() => confirmQty(product, cartItem)}
-              >
-                <Text style={styles.qtyConfirmText}>{inCart ? "تحديث" : "أضف"}</Text>
-              </PressableScale>
-              <PressableScale style={[styles.qtyCancelBtn, { backgroundColor: c.surface, borderColor: c.hairline }]} onPress={dismissCard}>
-                <Feather name="x" size={15} color={c.text} />
-              </PressableScale>
-            </View>
-            {inCart && (
-              <Pressable onPress={() => { removeItem(product.sync_id); dismissCard(); }}>
-                <Text style={[styles.removeHint, { color: c.dangerText }]}>إزالة من السلة</Text>
-              </Pressable>
-            )}
-          </View>
-        ) : inCart ? (
-          <View style={[styles.inCartBadge, { borderColor: c.brandBorder, backgroundColor: c.brandTint }]}>
-            <Feather name="edit-2" size={12} color={c.brandText} />
+        {inCart ? (
+          <View style={[styles.inCartBadge, { borderColor: c.brand, backgroundColor: c.surface }]}>
+            <Feather name="shopping-cart" size={12} color={c.brandText} />
             <Text style={[styles.inCartQty, { color: c.brandText }]}>
-              {cartItem!.quantity % 1 === 0 ? cartItem!.quantity : cartItem!.quantity.toFixed(2)} وحدة
+              {cartItem!.quantity % 1 === 0 ? `في السلة · ${cartItem!.quantity}` : `في السلة · ${cartItem!.quantity.toFixed(2)}`}
             </Text>
           </View>
         ) : (
-          <View style={[styles.addBtn, { backgroundColor: c.brand }]}>
-            <Feather name="plus" size={16} color={c.onBrand} />
-            <Text style={[styles.addBtnText, { color: c.onBrand }]}>إضافة</Text>
-          </View>
+          <Text style={[styles.tapHint, { color: isOutOfStock ? c.dangerText : c.textFaint }]}>
+            {isOutOfStock ? "نفد المخزون" : "اضغط للإضافة"}
+          </Text>
         )}
-      </Pressable>
+      </PressableScale>
     );
   };
 
   const curIdx = STEPS.findIndex(s => s.key === step);
   const goStep = (key: typeof STEPS[number]["key"]) => {
     if (key === "products" && !selectedClient) return;
-    if (key === "payment" && items.length === 0) return;
-    dismissCard();
+    if ((key === "cart" || key === "payment") && items.length === 0) return;
     setStep(key);
   };
 
@@ -661,34 +625,113 @@ export default function NewInvoiceScreen() {
               textAlign="right"
             />
           </View>
-          <TouchableWithoutFeedback onPress={() => activeProductId !== null && dismissCard()}>
-            <View style={{ flex: 1 }}>
-              <FlatList
-                data={filteredProducts}
-                keyExtractor={i => i.sync_id}
-                renderItem={renderProduct}
-                numColumns={COLS}
-                columnWrapperStyle={{ gap: GAP, paddingHorizontal: H_PAD, flexDirection: "row-reverse" }}
-                contentContainerStyle={{ paddingVertical: 12, gap: GAP, paddingBottom: 110 }}
-                keyboardShouldPersistTaps="handled"
-                onScrollBeginDrag={dismissCard}
-                ListEmptyComponent={
-                  <View style={styles.empty}>
-                    <Feather name="package" size={40} color={c.textFaint} />
-                    <Text style={[styles.emptyText, { color: c.textMuted }]}>
-                      {productSearch.trim() ? "لا توجد نتائج" : "لا توجد منتجات"}
-                    </Text>
-                  </View>
-                }
-                showsVerticalScrollIndicator={false}
-              />
-            </View>
-          </TouchableWithoutFeedback>
+          <View style={{ flex: 1 }}>
+            <FlatList
+              data={filteredProducts}
+              keyExtractor={i => i.sync_id}
+              renderItem={renderProduct}
+              numColumns={COLS}
+              columnWrapperStyle={{ gap: GAP, paddingHorizontal: H_PAD, flexDirection: "row-reverse" }}
+              contentContainerStyle={{ paddingVertical: 12, gap: GAP, paddingBottom: 110 }}
+              keyboardShouldPersistTaps="handled"
+              ListEmptyComponent={
+                <View style={styles.empty}>
+                  <Feather name="package" size={40} color={c.textFaint} />
+                  <Text style={[styles.emptyText, { color: c.textMuted }]}>
+                    {productSearch.trim() ? "لا توجد نتائج" : "لا توجد منتجات"}
+                  </Text>
+                </View>
+              }
+              showsVerticalScrollIndicator={false}
+            />
+          </View>
           {items.length > 0 && (
             <View style={[styles.cartBar, { backgroundColor: c.rail, borderTopColor: c.hairline, paddingBottom: insets.bottom + 12 }]}>
               <PressableScale
                 style={[styles.nextBtn, { backgroundColor: c.brand, ...t.elevation.glow }]}
-                onPress={() => { dismissCard(); setStep("payment"); }}
+                onPress={() => setStep("cart")}
+                haptic
+              >
+                <Text style={[styles.nextBtnText, { color: c.onBrand }]}>السلة</Text>
+                <Feather name="arrow-left" size={18} color={c.onBrand} />
+              </PressableScale>
+              <View style={{ alignItems: "flex-end" }}>
+                <MoneyText amount={total} size="title" />
+                <Text style={[styles.cartSub, { color: c.textMuted }]}>{items.length} صنف • {totalUnits} وحدة</Text>
+              </View>
+            </View>
+          )}
+        </Animated.View>
+      )}
+
+      {step === "cart" && (
+        <Animated.View style={{ flex: 1, opacity: stepFade }}>
+          <View style={[styles.clientPill, { backgroundColor: c.brandTint, borderColor: c.brandBorder }]}>
+            <Feather name="shopping-cart" size={14} color={c.brandText} />
+            <Text style={[styles.clientPillText, { color: c.text }]} numberOfLines={1}>
+              {selectedClient?.name} — {items.length} صنف
+            </Text>
+          </View>
+          <KeyboardAvoidingView
+            behavior={Platform.OS === "ios" ? "padding" : undefined}
+            style={{ flex: 1 }}
+          >
+            <FlatList
+              data={items}
+              keyExtractor={i => i.product.sync_id}
+              keyboardShouldPersistTaps="handled"
+              renderItem={({ item: i }) => {
+                const lineTotal = i.quantity * i.unitPrice;
+                return (
+                  <View style={[styles.cartItemRow, { backgroundColor: c.surface, borderColor: c.hairline }]}>
+                    <PressableScale
+                      style={[styles.cartRemoveBtn, { backgroundColor: c.dangerTint }]}
+                      onPress={() => removeItem(i.product.sync_id)}
+                      hitSlop={6}
+                      accessibilityLabel="إزالة من السلة"
+                    >
+                      <Feather name="trash-2" size={17} color={c.dangerText} />
+                    </PressableScale>
+                    <View style={styles.cartQtyWrap}>
+                      <TextInput
+                        style={[styles.cartQtyInput, { color: c.text, backgroundColor: c.bg, borderColor: c.hairline }]}
+                        value={qtyText[i.product.sync_id] ?? (i.quantity % 1 === 0 ? String(i.quantity) : i.quantity.toFixed(2))}
+                        onChangeText={(txt) => setQtyText(prev => ({ ...prev, [i.product.sync_id]: txt }))}
+                        onEndEditing={() => commitQty(i)}
+                        keyboardType="numeric"
+                        textAlign="center"
+                        returnKeyType="done"
+                        selectTextOnFocus
+                        accessibilityLabel={`كمية ${i.product.name}`}
+                      />
+                      <Text style={[styles.cartQtyLabel, { color: c.textFaint }]}>الكمية</Text>
+                    </View>
+                    <View style={{ flex: 1, alignItems: "flex-end" }}>
+                      <Text style={[styles.cartItemName, { color: c.text }]} numberOfLines={2}>{i.product.name}</Text>
+                      <Text style={[styles.cartItemPrice, { color: c.textMuted }]}>
+                        {formatMoney(i.unitPrice)} للوحدة
+                      </Text>
+                      <MoneyText amount={lineTotal} tone="brand" size="callout" />
+                    </View>
+                  </View>
+                );
+              }}
+              contentContainerStyle={{ padding: 12, gap: 8, paddingBottom: 120 }}
+              ListEmptyComponent={
+                <View style={styles.empty}>
+                  <Feather name="shopping-cart" size={40} color={c.textFaint} />
+                  <Text style={[styles.emptyText, { color: c.textMuted }]}>السلة فارغة</Text>
+                  <AppButton label="اختر المنتجات" icon="package" size="md" onPress={() => setStep("products")} />
+                </View>
+              }
+              showsVerticalScrollIndicator={false}
+            />
+          </KeyboardAvoidingView>
+          {items.length > 0 && (
+            <View style={[styles.cartBar, { backgroundColor: c.rail, borderTopColor: c.hairline, paddingBottom: insets.bottom + 12 }]}>
+              <PressableScale
+                style={[styles.nextBtn, { backgroundColor: c.brand, ...t.elevation.glow }]}
+                onPress={() => setStep("payment")}
                 haptic
               >
                 <Text style={[styles.nextBtnText, { color: c.onBrand }]}>التالي</Text>
@@ -922,38 +965,35 @@ const styles = StyleSheet.create({
   },
   stockBadgeText: { fontSize: 10, fontFamily: fonts.bold },
   catName: { fontSize: 13, fontFamily: fonts.semibold, textAlign: "center", minHeight: 36, marginTop: 2 },
-
-  addBtn: {
-    flexDirection: "row-reverse", alignItems: "center", justifyContent: "center", gap: 6,
-    width: "100%", paddingVertical: 9, borderRadius: 10,
+  selectTick: {
+    position: "absolute", top: 4, right: 4, width: 24, height: 24, borderRadius: 12,
+    alignItems: "center", justifyContent: "center",
   },
-  addBtnText: { fontSize: 14, fontFamily: fonts.bold },
+  tapHint: { fontSize: 12, fontFamily: fonts.regular, textAlign: "center", paddingVertical: 9 },
 
   inCartBadge: {
     flexDirection: "row-reverse", alignItems: "center", justifyContent: "center", gap: 6,
-    width: "100%", paddingVertical: 8, borderRadius: 10, borderWidth: 1,
+    width: "100%", paddingVertical: 8, borderRadius: 10, borderWidth: 1.5,
   },
   inCartQty: { fontSize: 13, fontFamily: fonts.bold },
 
-  qtyCard: {
-    width: "100%", borderRadius: 10, borderWidth: 1,
-    padding: 8, gap: 6, alignItems: "center",
+  // Cart screen
+  cartItemRow: {
+    flexDirection: "row-reverse", alignItems: "center", gap: 12,
+    borderRadius: 14, borderWidth: 1, padding: 12,
   },
-  qtyInput: {
-    width: "100%", height: 42, borderRadius: 8, borderWidth: 1,
-    fontSize: 18, fontFamily: fonts.bold, textAlign: "center",
+  cartItemName: { fontSize: 14, fontFamily: fonts.semibold, textAlign: "right" },
+  cartItemPrice: { fontSize: 11, fontFamily: fonts.regular, marginVertical: 2 },
+  cartQtyWrap: { alignItems: "center", gap: 2 },
+  cartQtyInput: {
+    width: 64, height: 48, borderRadius: 10, borderWidth: 1,
+    fontSize: 18, fontFamily: fonts.bold,
   },
-  qtyCardActions: { flexDirection: "row-reverse", gap: 6, width: "100%" },
-  qtyConfirmBtn: {
-    flex: 1, paddingVertical: 8, borderRadius: 8,
+  cartQtyLabel: { fontSize: 10, fontFamily: fonts.regular },
+  cartRemoveBtn: {
+    width: 40, height: 40, borderRadius: 12,
     alignItems: "center", justifyContent: "center",
   },
-  qtyConfirmText: { color: "#fff", fontSize: 14, fontFamily: fonts.bold },
-  qtyCancelBtn: {
-    width: 38, paddingVertical: 8, borderRadius: 8, borderWidth: 1,
-    alignItems: "center", justifyContent: "center",
-  },
-  removeHint: { fontSize: 11, fontFamily: fonts.regular, textDecorationLine: "underline" },
 
   cartBar: {
     position: "absolute", left: 0, right: 0, bottom: 0,

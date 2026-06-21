@@ -26,6 +26,14 @@ AccessibilityInfo.isReduceMotionEnabled().then((v) => (reduceMotion = v));
 AccessibilityInfo.addEventListener("reduceMotionChanged", (v) => (reduceMotion = v));
 
 /**
+ * Animate the Pressable itself (not an inner wrapper) so that layout styles the
+ * caller passes — `flex`, `width`, `alignSelf` — land on the outermost element
+ * and actually participate in the parent's layout. Putting them on an inner
+ * view left the Pressable content-sized, silently breaking `flex: 1` rows.
+ */
+const AnimatedPressable = Animated.createAnimatedComponent(Pressable);
+
+/**
  * The motion foundation for every tappable surface.
  *
  * Press feedback within ~16ms via a native-driver spring on `transform` only
@@ -66,8 +74,14 @@ export function PressableScale({
   };
 
   return (
-    <Pressable onPressIn={handleIn} onPressOut={handleOut} disabled={disabled} {...rest}>
-      <Animated.View style={[{ transform: [{ scale }] }, style]}>{children}</Animated.View>
-    </Pressable>
+    <AnimatedPressable
+      onPressIn={handleIn}
+      onPressOut={handleOut}
+      disabled={disabled}
+      style={[style, { transform: [{ scale }] }]}
+      {...rest}
+    >
+      {children}
+    </AnimatedPressable>
   );
 }
