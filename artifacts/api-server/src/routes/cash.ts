@@ -61,7 +61,10 @@ router.post("/cash/transfers/:id/approve", async (req, res) => {
   // single caller that flips pending→approved.
   const outcome = await db.transaction(async (tx) => {
     const claimed = await tx.update(cashTransfersTable)
-      .set({ status: "approved" })
+      // Bump updated_at so the status change propagates to the truck via the
+      // incremental sync pull (Postgres does not auto-update it, and pull +
+      // last-write-wins both key off updated_at).
+      .set({ status: "approved", updatedAt: new Date() })
       .where(and(eq(cashTransfersTable.id, id), eq(cashTransfersTable.status, "pending")))
       .returning({
         truckId: cashTransfersTable.truckId,
@@ -83,7 +86,7 @@ router.post("/cash/transfers/:id/approve", async (req, res) => {
     // Atomic balance update (no read-modify-write) so concurrent approvals or
     // invoice-sync reconciliations for the same truck can't lose each other's deltas.
     await tx.update(trucksTable)
-      .set({ cashBalance: sql`GREATEST(0, ${trucksTable.cashBalance} + ${delta})` })
+      .set({ cashBalance: sql`GREATEST(0, ${trucksTable.cashBalance} + ${delta})`, updatedAt: new Date() })
       .where(eq(trucksTable.id, t.truckId));
     return { error: null };
   });
@@ -107,7 +110,7 @@ router.post("/cash/transfers/:id/approve", async (req, res) => {
 
 router.post("/cash/transfers/:id/reject", async (req, res) => {
   const id = parseInt(req.params.id);
-  await db.update(cashTransfersTable).set({ status: "rejected" }).where(eq(cashTransfersTable.id, id));
+  await db.update(cashTransfersTable).set({ status: "rejected", updatedAt: new Date() }).where(eq(cashTransfersTable.id, id));
   const [updated] = await db.select({
     id: cashTransfersTable.id,
     truckId: cashTransfersTable.truckId,
