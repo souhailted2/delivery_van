@@ -367,3 +367,22 @@ export const cashTransfersTable = pgTable("cash_transfers", {
 export const insertCashTransferSchema = createInsertSchema(cashTransfersTable).omit({ id: true, createdAt: true, updatedAt: true });
 export type InsertCashTransfer = z.infer<typeof insertCashTransferSchema>;
 export type CashTransfer = typeof cashTransfersTable.$inferSelect;
+
+// Client payments (تحصيل دفعة) — a driver collects cash from a client against
+// their outstanding debt. Reconciled server-side: clients.balance += amount
+// (debt is negative, so this moves it toward 0) and trucks.cash_balance += amount.
+export const clientPaymentsTable = pgTable("client_payments", {
+  id: serial("id").primaryKey(),
+  truckId: integer("truck_id").references(() => trucksTable.id),
+  clientId: integer("client_id").notNull().references(() => clientsTable.id),
+  amount: numeric("amount", { precision: 12, scale: 2 }).notNull(),
+  method: text("method").notNull().default("cash"), // cash (future: cheque/transfer)
+  note: text("note"),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+  syncId: text("sync_id").unique().default(sql`gen_random_uuid()::text`),
+  updatedAt: timestamp("updated_at").notNull().defaultNow(),
+  isDeleted: boolean("is_deleted").notNull().default(false),
+});
+export const insertClientPaymentSchema = createInsertSchema(clientPaymentsTable).omit({ id: true, createdAt: true, updatedAt: true });
+export type InsertClientPayment = z.infer<typeof insertClientPaymentSchema>;
+export type ClientPayment = typeof clientPaymentsTable.$inferSelect;
