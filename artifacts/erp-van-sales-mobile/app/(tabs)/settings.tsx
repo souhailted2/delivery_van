@@ -1,81 +1,92 @@
 import { Feather } from "@expo/vector-icons";
 import { router } from "expo-router";
-import { Alert, ScrollView, StyleSheet, Text, TouchableOpacity, View } from "react-native";
-import { SyncBar } from "@/components/SyncBar";
+import { useState } from "react";
+import { ScrollView, StyleSheet, Text, View } from "react-native";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { AppButton, GradientHero, PressableScale, ResultDialog } from "@/components/ui";
+import type { DialogAction, ResultVariant } from "@/components/ui";
 import { useAuth } from "@/contexts/AuthContext";
 import { useSync } from "@/contexts/SyncContext";
-import { useColors } from "@/hooks/useColors";
+import { fonts } from "@/constants/tokens";
+import { useTheme } from "@/hooks/useTheme";
 
-function SettingRow({ label, sub, icon, color, onPress, danger, colors }: {
+function SettingRow({ label, sub, icon, color, onPress, danger, c }: {
   label: string; sub?: string; icon: any; color?: string;
-  onPress?: () => void; danger?: boolean; colors: any;
+  onPress?: () => void; danger?: boolean; c: any;
 }) {
   return (
-    <TouchableOpacity
-      style={[styles.row, { borderBottomColor: colors.border }]}
+    <PressableScale
+      style={[styles.row, { borderBottomColor: c.hairline }]}
       onPress={onPress}
       disabled={!onPress}
-      activeOpacity={0.7}
     >
-      <Feather name="chevron-left" size={16} color={colors.mutedForeground} />
+      <Feather name="chevron-left" size={16} color={c.textMuted} />
       <View style={{ flex: 1, alignItems: "flex-end" }}>
-        <Text style={[styles.rowLabel, { color: danger ? colors.destructive : colors.foreground }]}>{label}</Text>
-        {sub && <Text style={[styles.rowSub, { color: colors.mutedForeground }]}>{sub}</Text>}
+        <Text style={[styles.rowLabel, { color: danger ? c.danger : c.text }]}>{label}</Text>
+        {sub && <Text style={[styles.rowSub, { color: c.textMuted }]}>{sub}</Text>}
       </View>
-      <View style={[styles.rowIcon, { backgroundColor: (color ?? colors.primary) + "22" }]}>
-        <Feather name={icon} size={18} color={danger ? colors.destructive : (color ?? colors.primary)} />
+      <View style={[styles.rowIcon, { backgroundColor: (color ?? c.brand) + "22" }]}>
+        <Feather name={icon} size={18} color={danger ? c.danger : (color ?? c.brand)} />
       </View>
-    </TouchableOpacity>
+    </PressableScale>
   );
 }
 
 export default function SettingsScreen() {
-  const colors = useColors();
+  const t = useTheme();
+  const c = t.color;
+  const insets = useSafeAreaInsets();
   const { user, logout, resetDevice } = useAuth();
   const { triggerSync, doResetSync, syncing, resetting, lastSync, pending, error } = useSync();
 
+  const [dialog, setDialog] = useState<{ visible: boolean; variant: ResultVariant; title: string; message?: string; actions?: DialogAction[] }>(
+    { visible: false, variant: "info", title: "" }
+  );
+  const showDialog = (variant: ResultVariant, title: string, message?: string, actions?: DialogAction[]) =>
+    setDialog({ visible: true, variant, title, message, actions });
+  const hideDialog = () => setDialog((d) => ({ ...d, visible: false }));
+
   const handleForceSync = () => {
-    Alert.alert("مزامنة", "هل تريد مزامنة البيانات الآن؟", [
-      { text: "إلغاء", style: "cancel" },
-      { text: "مزامنة", onPress: () => triggerSync() },
+    showDialog("info", "مزامنة", "هل تريد مزامنة البيانات الآن؟", [
+      { label: "مزامنة", onPress: () => triggerSync() },
+      { label: "إلغاء", variant: "tonal" },
     ]);
   };
 
   const handleResetSync = () => {
-    Alert.alert(
+    showDialog(
+      "warning",
       "إعادة ضبط المزامنة",
       "سيتم حذف جميع البيانات المحلية وإعادة تحميلها من الخادم. هل أنت متأكد؟",
       [
-        { text: "إلغاء", style: "cancel" },
-        {
-          text: "إعادة الضبط", style: "destructive",
-          onPress: () => doResetSync(),
-        },
+        { label: "إعادة الضبط", variant: "danger", onPress: () => doResetSync() },
+        { label: "إلغاء", variant: "tonal" },
       ]
     );
   };
 
   const handleLogout = () => {
-    Alert.alert("تسجيل الخروج", "هل تريد تسجيل الخروج؟", [
-      { text: "إلغاء", style: "cancel" },
-      { text: "خروج", style: "destructive", onPress: () => logout() },
+    showDialog("warning", "تسجيل الخروج", "هل تريد تسجيل الخروج؟", [
+      { label: "خروج", variant: "danger", onPress: () => logout() },
+      { label: "إلغاء", variant: "tonal" },
     ]);
   };
 
   const handleResetDevice = () => {
-    Alert.alert(
+    showDialog(
+      "warning",
       "إعادة تعيين الجهاز",
       "سيتم مسح بيانات الشاحنة المرتبطة وإعادة الجهاز لشاشة الإعداد. يجب إعادة ربط الجهاز بشاحنة بعد ذلك.",
       [
-        { text: "إلغاء", style: "cancel" },
         {
-          text: "إعادة التعيين",
-          style: "destructive",
+          label: "إعادة التعيين",
+          variant: "danger",
           onPress: async () => {
             await resetDevice();
             router.replace("/setup");
           },
         },
+        { label: "إلغاء", variant: "tonal" },
       ]
     );
   };
@@ -85,41 +96,41 @@ export default function SettingsScreen() {
     : "لم تتم بعد";
 
   return (
-    <View style={[styles.container, { backgroundColor: colors.background }]}>
-      <SyncBar />
+    <View style={[styles.container, { backgroundColor: c.bg, paddingTop: insets.top + 8 }]}>
+      <Text style={[styles.pageTitle, { color: c.text }]}>الإعدادات</Text>
       <ScrollView contentContainerStyle={styles.scroll} showsVerticalScrollIndicator={false}>
 
         {/* User info */}
-        <View style={[styles.userCard, { backgroundColor: colors.primary }]}>
-          <View style={styles.userAvatar}>
-            <Feather name={user?.role === "truck" ? "truck" : "user"} size={28} color={colors.primary} />
+        <GradientHero radius={20} style={styles.userCard}>
+          <View style={[styles.userAvatar, { backgroundColor: c.onBrand }]}>
+            <Feather name={user?.role === "truck" ? "truck" : "user"} size={28} color={c.brand} />
           </View>
           <View style={{ alignItems: "flex-end" }}>
-            <Text style={styles.userName}>{user?.fullName ?? user?.username}</Text>
-            <Text style={styles.userRole}>
+            <Text style={[styles.userName, { color: c.onBrand }]}>{user?.fullName ?? user?.username}</Text>
+            <Text style={[styles.userRole, { color: c.onBrand }]}>
               {user?.role === "admin" ? "مدير النظام" :
                user?.role === "truck" ? "سائق شاحنة" : "بائع"}
             </Text>
           </View>
-        </View>
+        </GradientHero>
 
         {/* Sync section */}
-        <Text style={[styles.sectionTitle, { color: colors.mutedForeground }]}>المزامنة</Text>
-        <View style={[styles.card, { backgroundColor: colors.card, borderColor: colors.border }]}>
+        <Text style={[styles.sectionTitle, { color: c.textMuted }]}>المزامنة</Text>
+        <View style={[styles.card, { backgroundColor: c.surface, borderColor: c.hairline }]}>
           <SettingRow
             label="مزامنة الآن"
             sub={syncing ? "جاري المزامنة..." : `آخر مزامنة: ${lastSyncText}`}
             icon="refresh-cw"
-            color={colors.primary}
+            color={c.brand}
             onPress={handleForceSync}
-            colors={colors}
+            c={c}
           />
           {pending > 0 && (
             <SettingRow
               label={`${pending} سجل في انتظار الرفع`}
               icon="clock"
-              color="#f59e0b"
-              colors={colors}
+              color={c.warning}
+              c={c}
             />
           )}
           {error && (
@@ -127,8 +138,8 @@ export default function SettingsScreen() {
               label="خطأ في المزامنة"
               sub={error}
               icon="alert-circle"
-              color={colors.destructive}
-              colors={colors}
+              color={c.danger}
+              c={c}
             />
           )}
           <SettingRow
@@ -137,76 +148,81 @@ export default function SettingsScreen() {
             icon="trash-2"
             danger
             onPress={handleResetSync}
-            colors={colors}
+            c={c}
           />
         </View>
 
         {/* About section */}
-        <Text style={[styles.sectionTitle, { color: colors.mutedForeground }]}>عن التطبيق</Text>
-        <View style={[styles.card, { backgroundColor: colors.card, borderColor: colors.border }]}>
-          <SettingRow label="ERP Van Sales" sub="نظام مبيعات الشاحنات — الجزائر" icon="info" colors={colors} />
-          <SettingRow label="العملة" sub="دينار جزائري (د.ج)" icon="dollar-sign" colors={colors} />
-          <SettingRow label="اللغة" sub="العربية" icon="globe" colors={colors} />
+        <Text style={[styles.sectionTitle, { color: c.textMuted }]}>عن التطبيق</Text>
+        <View style={[styles.card, { backgroundColor: c.surface, borderColor: c.hairline }]}>
+          <SettingRow label="ALLAL Delivery" sub="نظام مبيعات الشاحنة — الجزائر" icon="info" c={c} />
+          <SettingRow label="العملة" sub="دينار جزائري (DZD)" icon="dollar-sign" c={c} />
+          <SettingRow label="اللغة" sub="العربية" icon="globe" c={c} />
         </View>
 
         {/* Device section — truck devices only */}
         {user?.role === "truck" && (
           <>
-            <Text style={[styles.sectionTitle, { color: colors.mutedForeground }]}>الجهاز</Text>
-            <View style={[styles.card, { backgroundColor: colors.card, borderColor: colors.border }]}>
+            <Text style={[styles.sectionTitle, { color: c.textMuted }]}>الجهاز</Text>
+            <View style={[styles.card, { backgroundColor: c.surface, borderColor: c.hairline }]}>
               <SettingRow
                 label="إعادة تعيين الجهاز"
                 sub="تغيير الشاحنة المرتبطة بهذا الجهاز"
                 icon="refresh-ccw"
                 danger
                 onPress={handleResetDevice}
-                colors={colors}
+                c={c}
               />
             </View>
           </>
         )}
 
         {/* Logout */}
-        <TouchableOpacity
-          style={[styles.logoutBtn, { backgroundColor: colors.destructive }]}
+        <AppButton
+          label="تسجيل الخروج"
+          icon="log-out"
+          variant="danger"
+          size="lg"
+          fullWidth
           onPress={handleLogout}
-          activeOpacity={0.85}
-        >
-          <Feather name="log-out" size={18} color="#fff" />
-          <Text style={styles.logoutText}>تسجيل الخروج</Text>
-        </TouchableOpacity>
+        />
 
         <View style={{ height: 100 }} />
       </ScrollView>
+
+      <ResultDialog
+        visible={dialog.visible}
+        variant={dialog.variant}
+        title={dialog.title}
+        message={dialog.message}
+        actions={dialog.actions}
+        onRequestClose={hideDialog}
+      />
     </View>
   );
 }
 
 const styles = StyleSheet.create({
   container: { flex: 1 },
-  scroll: { padding: 16 },
+  pageTitle: { fontSize: 21, fontFamily: fonts.bold, textAlign: "right", paddingHorizontal: 16, marginBottom: 8 },
+  scroll: { padding: 16, paddingTop: 4 },
   userCard: {
     borderRadius: 16, padding: 20,
     flexDirection: "row-reverse", alignItems: "center", gap: 14, marginBottom: 24,
   },
   userAvatar: {
     width: 52, height: 52, borderRadius: 14,
-    backgroundColor: "#fff", alignItems: "center", justifyContent: "center",
+    alignItems: "center", justifyContent: "center",
   },
-  userName: { color: "#fff", fontSize: 18, fontFamily: "Cairo_700Bold" },
-  userRole: { color: "#ffffff99", fontSize: 13, fontFamily: "Cairo_400Regular" },
-  sectionTitle: { fontSize: 12, fontFamily: "Cairo_600SemiBold", textAlign: "right", marginBottom: 8, marginLeft: 4 },
+  userName: { fontSize: 18, fontFamily: fonts.bold },
+  userRole: { fontSize: 13, fontFamily: fonts.regular, opacity: 0.7 },
+  sectionTitle: { fontSize: 12, fontFamily: fonts.semibold, textAlign: "right", marginBottom: 8, marginLeft: 4 },
   card: { borderRadius: 16, borderWidth: 1, overflow: "hidden", marginBottom: 20 },
   row: {
     flexDirection: "row-reverse", alignItems: "center", gap: 12,
     padding: 14, borderBottomWidth: 1,
   },
   rowIcon: { width: 38, height: 38, borderRadius: 10, alignItems: "center", justifyContent: "center" },
-  rowLabel: { fontSize: 14, fontFamily: "Cairo_600SemiBold" },
-  rowSub: { fontSize: 11, fontFamily: "Cairo_400Regular", marginTop: 2 },
-  logoutBtn: {
-    flexDirection: "row-reverse", alignItems: "center", justifyContent: "center",
-    gap: 10, padding: 16, borderRadius: 16,
-  },
-  logoutText: { color: "#fff", fontSize: 16, fontFamily: "Cairo_700Bold" },
+  rowLabel: { fontSize: 14, fontFamily: fonts.semibold },
+  rowSub: { fontSize: 11, fontFamily: fonts.regular, marginTop: 2 },
 });

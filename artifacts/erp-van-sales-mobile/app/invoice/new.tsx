@@ -1,22 +1,26 @@
 import { Feather } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
-import { router } from "expo-router";
-import { useEffect, useMemo, useState } from "react";
+import { router, useLocalSearchParams } from "expo-router";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
-  Alert, Dimensions, FlatList, KeyboardAvoidingView, Modal, Platform,
-  Pressable, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity,
+  Animated, Dimensions, FlatList, KeyboardAvoidingView, Modal, Platform,
+  ScrollView, StyleSheet, Text, TextInput,
   TouchableWithoutFeedback, View,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { ProductImage } from "@/components/ProductImage";
+import { AppButton, MoneyText, PressableScale, ResultDialog } from "@/components/ui";
+import type { DialogAction, ResultVariant } from "@/components/ui";
 import { useAuth } from "@/contexts/AuthContext";
 import { useSync } from "@/contexts/SyncContext";
 import { Client, getDb, Product } from "@/lib/db";
+import { formatMoney } from "@/lib/money";
 import { printInvoiceReceipt, ReceiptInvoice } from "@/lib/receipt";
 import { getTruckForUser } from "@/lib/truck";
 import { newSyncId } from "@/lib/uuid";
 import { canonicalizeTruckStock } from "@/lib/truckStock";
-import { useColors } from "@/hooks/useColors";
+import { fonts, motion } from "@/constants/tokens";
+import { useTheme } from "@/hooks/useTheme";
 
 type Tier = "retail" | "half_wholesale" | "wholesale";
 
@@ -52,16 +56,33 @@ const TIER_OPTIONS: { value: Tier; label: string }[] = [
   { value: "wholesale", label: "جملة" },
 ];
 
+const STEPS = [
+  { key: "client", label: "العميل" },
+  { key: "products", label: "المنتجات" },
+  { key: "cart", label: "السلة" },
+  { key: "payment", label: "الدفع" },
+] as const;
+
 export default function NewInvoiceScreen() {
-  const colors = useColors();
+  const t = useTheme();
+  const c = t.color;
   const insets = useSafeAreaInsets();
   const { user } = useAuth();
   const { triggerSync, bumpLocalVersion, localVersion } = useSync();
+  const { clientSyncId } = useLocalSearchParams<{ clientSyncId?: string }>();
 
-  const [step, setStep] = useState<"client" | "products" | "payment">("client");
+  const [step, setStep] = useState<"client" | "products" | "cart" | "payment">("client");
   const [selectedClient, setSelectedClient] = useState<Client | null>(null);
   const [items, setItems] = useState<InvoiceItem[]>([]);
   const [paymentType, setPaymentType] = useState<"cash" | "credit">("cash");
+
+  // Branded dialog (replaces native Alert.alert).
+  const [dialog, setDialog] = useState<{ visible: boolean; variant: ResultVariant; title: string; message?: string; actions?: DialogAction[] }>(
+    { visible: false, variant: "info", title: "" }
+  );
+  const showDialog = (variant: ResultVariant, title: string, message?: string, actions?: DialogAction[]) =>
+    setDialog({ visible: true, variant, title, message, actions });
+  const hideDialog = () => setDialog((d) => ({ ...d, visible: false }));
 
   // Enforce cash-only when truck is not permitted to sell on credit
   useEffect(() => {
@@ -81,11 +102,17 @@ export default function NewInvoiceScreen() {
   const [newClientType, setNewClientType] = useState<Tier>("retail");
   const [savingNewClient, setSavingNewClient] = useState(false);
 
-  // Inline quantity card state
-  const [activeProductId, setActiveProductId] = useState<string | null>(null);
-  const [inputQty, setInputQty] = useState("");
+  // Per-item quantity draft text, edited on the cart screen (keyed by sync_id).
+  const [qtyText, setQtyText] = useState<Record<string, string>>({});
 
   const clientTier = resolveTier(selectedClient);
+
+  // Subtle cross-fade between steps — communicates the move through the flow.
+  const stepFade = useRef(new Animated.Value(1)).current;
+  useEffect(() => {
+    stepFade.setValue(0);
+    Animated.timing(stepFade, { toValue: 1, duration: motion.duration.normal, easing: motion.easing.out, useNativeDriver: true }).start();
+  }, [step, stepFade]);
 
   // Refresh truck stock from the server as soon as this screen opens, so the
   // quantities shown below aren't stale (e.g. right after a dispatch/return).
@@ -109,7 +136,7 @@ export default function NewInvoiceScreen() {
                  SELECT product_id, SUM(quantity) AS quantity
                  FROM truck_stock WHERE truck_id = ? GROUP BY product_id
                ) agg ON agg.product_id = p.id
-               WHERE p.is_deleted = 0 ORDER BY p.name`,
+               WHERE p.is_deleted = 0 ORDER BY truck_quantity DESC, p.name`,
               [truckId]
             )
           : db.getAllAsync<Product>("SELECT * FROM products WHERE is_deleted = 0 ORDER BY name"),
@@ -127,6 +154,14 @@ export default function NewInvoiceScreen() {
       i.overridden ? i : { ...i, priceType: tier, unitPrice: priceByType(i.product, tier) }
     ));
   }, [selectedClient]);
+
+  // Preselect a client when arriving from the Client Profile "بيع جديد" action.
+  const presetRef = useRef(false);
+  useEffect(() => {
+    if (presetRef.current || !clientSyncId || selectedClient) return;
+    const match = clients.find(cl => cl.sync_id === clientSyncId);
+    if (match) { presetRef.current = true; setSelectedClient(match); setStep("products"); }
+  }, [clients, clientSyncId, selectedClient]);
 
   const filteredClients = clients.filter(c =>
     c.name.includes(clientSearch) || (c.phone ?? "").includes(clientSearch)
@@ -172,7 +207,7 @@ export default function NewInvoiceScreen() {
       triggerSync();
       setStep("products");
     } catch (e: any) {
-      Alert.alert("خطأ", e?.message ?? "فشل حفظ الزبون");
+      showDialog("error", "خطأ", e?.message ?? "فشل حفظ الزبون");
     } finally {
       setSavingNewClient(false);
     }
@@ -185,63 +220,59 @@ export default function NewInvoiceScreen() {
     setNewClientType("retail");
   };
 
-  // Open the inline quantity card for a product
-  const openQtyCard = (product: Product, currentQty?: number) => {
-    setActiveProductId(product.sync_id);
-    setInputQty(currentQty !== undefined ? String(currentQty) : "");
-    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-  };
-
-  // Confirm the quantity entered in the card
-  const confirmQty = (product: Product, existingItem: InvoiceItem | undefined) => {
-    const raw = inputQty.replace(",", ".").trim();
-    let qty = parseFloat(raw);
-    if (!isNaN(qty) && qty > 0) {
-      // Guard against overselling: truck_quantity is set by the JOIN in the
-      // products query and represents what the truck currently carries.
-      // Only enforced when a specific truck is known (truck_quantity is defined).
-      const maxAvailable = Number((product as any).truck_quantity);
-      if (!isNaN(maxAvailable)) {
-        if (maxAvailable <= 0) {
-          Alert.alert("نفدت الكمية", `لا يوجد مخزون من "${product.name}" في الشاحنة.`);
-          setActiveProductId(null);
-          setInputQty("");
-          return;
-        }
-        if (qty > maxAvailable) {
-          qty = maxAvailable;
-          Alert.alert(
-            "تنبيه: تجاوز المخزون",
-            `الكمية المتوفرة من "${product.name}" في الشاحنة هي ${maxAvailable} وحدة فقط.\nتم ضبط الكمية تلقائياً.`,
-          );
-        }
-      }
-      if (existingItem) {
-        setItems(prev => prev.map(i =>
-          i.product.sync_id === product.sync_id ? { ...i, quantity: qty } : i
-        ));
-      } else {
-        setItems(prev => [...prev, {
-          product,
-          quantity: qty,
-          priceType: clientTier,
-          unitPrice: priceByType(product, clientTier),
-        }]);
-      }
-    } else if ((!isNaN(qty) && qty === 0) || raw === "0") {
-      setItems(prev => prev.filter(i => i.product.sync_id !== product.sync_id));
-    }
-    setActiveProductId(null);
-    setInputQty("");
-  };
-
-  const dismissCard = () => {
-    setActiveProductId(null);
-    setInputQty("");
-  };
-
   const removeItem = (syncId: string) => {
     setItems(prev => prev.filter(i => i.product.sync_id !== syncId));
+    setQtyText(prev => { const n = { ...prev }; delete n[syncId]; return n; });
+  };
+
+  // One tap on a product card adds it to the cart at qty 1; tapping again
+  // removes it. Quantities are then fine-tuned on the cart screen. Overselling
+  // is blocked up-front (truck_quantity comes from the JOIN in the products query).
+  const toggleProduct = (product: Product) => {
+    if (items.some(i => i.product.sync_id === product.sync_id)) {
+      removeItem(product.sync_id);
+      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+      return;
+    }
+    const tqRaw = (product as any).truck_quantity;
+    if (tqRaw !== undefined) {
+      const maxAvailable = Number(tqRaw);
+      if (!isNaN(maxAvailable) && maxAvailable <= 0) {
+        showDialog("error", "نفدت الكمية", `لا يوجد مخزون من "${product.name}" في الشاحنة.`);
+        return;
+      }
+    }
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    setItems(prev => [...prev, {
+      product,
+      quantity: 1,
+      priceType: clientTier,
+      unitPrice: priceByType(product, clientTier),
+    }]);
+  };
+
+  // Commit a quantity typed into a cart row (clamped to truck stock). An empty
+  // field leaves the value unchanged; zero/invalid removes the line.
+  const commitQty = (item: InvoiceItem) => {
+    const id = item.product.sync_id;
+    const raw = (qtyText[id] ?? "").replace(",", ".").trim();
+    if (raw === "") { setQtyText(prev => { const n = { ...prev }; delete n[id]; return n; }); return; }
+    let qty = parseFloat(raw);
+    if (isNaN(qty) || qty <= 0) { removeItem(id); return; }
+    const tqRaw = (item.product as any).truck_quantity;
+    if (tqRaw !== undefined) {
+      const maxAvailable = Number(tqRaw);
+      if (!isNaN(maxAvailable) && qty > maxAvailable) {
+        qty = maxAvailable;
+        showDialog(
+          "warning",
+          "تنبيه: تجاوز المخزون",
+          `الكمية المتوفرة من "${item.product.name}" في الشاحنة هي ${maxAvailable} وحدة فقط.\nتم ضبط الكمية تلقائياً.`,
+        );
+      }
+    }
+    setItems(prev => prev.map(it => it.product.sync_id === id ? { ...it, quantity: qty } : it));
+    setQtyText(prev => { const n = { ...prev }; delete n[id]; return n; });
   };
 
   const total = items.reduce((s, i) => s + i.quantity * i.unitPrice, 0);
@@ -249,7 +280,7 @@ export default function NewInvoiceScreen() {
 
   const saveInvoice = async () => {
     if (!selectedClient) return;
-    if (items.length === 0) { Alert.alert("تنبيه", "أضف منتجاً واحداً على الأقل"); return; }
+    if (items.length === 0) { showDialog("warning", "تنبيه", "أضف منتجاً واحداً على الأقل"); return; }
 
     // Credit-limit check (offline-safe — uses locally synced credit_limit)
     if (paymentType === "credit") {
@@ -258,10 +289,10 @@ export default function NewInvoiceScreen() {
         const currentDebt = -Number(selectedClient.credit_balance ?? 0); // positive = client owes
         if (currentDebt + total > limit) {
           const remaining = Math.max(0, limit - currentDebt);
-          Alert.alert(
+          showDialog(
+            "warning",
             "تجاوز سقف الآجل",
-            `ديْن هذا العميل الحالي ${currentDebt.toLocaleString("fr-DZ")} د.ج — السقف ${limit.toLocaleString("fr-DZ")} د.ج — المتاح ${remaining.toLocaleString("fr-DZ")} د.ج`,
-            [{ text: "موافق" }]
+            `ديْن هذا العميل الحالي ${formatMoney(currentDebt)} — السقف ${formatMoney(limit)} — المتاح ${formatMoney(remaining)}`,
           );
           return;
         }
@@ -286,7 +317,8 @@ export default function NewInvoiceScreen() {
       // otherwise stock can't be decremented and the invoice has no truck
       // context. Block with a clear message ( finally{} resets `saving` ).
       if (user?.role === "truck" && effectiveTruckId == null) {
-        Alert.alert(
+        showDialog(
+          "error",
           "لا توجد شاحنة",
           "لا يمكن حفظ الفاتورة: لم يتم تعيين شاحنة لحسابك. تواصل مع الإدارة لربط حسابك بشاحنة."
         );
@@ -366,19 +398,17 @@ export default function NewInvoiceScreen() {
       await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
       bumpLocalVersion();
       triggerSync();
-      Alert.alert("تم", "تم حفظ الفاتورة بنجاح", [
+      showDialog("success", "تم", "تم حفظ الفاتورة بنجاح", [
         {
-          text: "طباعة الإيصال",
-          onPress: async () => {
-            try { await printInvoiceReceipt(receipt); }
-            catch (e: any) { Alert.alert("خطأ", e?.message ?? "تعذّرت الطباعة"); }
-            finally { router.back(); }
+          label: "طباعة الإيصال",
+          onPress: () => {
+            printInvoiceReceipt(receipt).catch(() => {}).finally(() => router.back());
           },
         },
-        { text: "إغلاق", style: "cancel", onPress: () => router.back() },
+        { label: "إغلاق", variant: "tonal", onPress: () => router.back() },
       ]);
     } catch (e: any) {
-      Alert.alert("خطأ", e?.message ?? "فشل حفظ الفاتورة");
+      showDialog("error", "خطأ", e?.message ?? "فشل حفظ الفاتورة");
     } finally {
       setSaving(false);
     }
@@ -390,10 +420,11 @@ export default function NewInvoiceScreen() {
     return m;
   }, [items]);
 
+  const imgColors = { secondary: c.surfaceElevated, mutedForeground: c.textMuted };
+
   const renderProduct = ({ item: product }: { item: Product }) => {
     const cartItem = cartMap.get(product.sync_id);
     const inCart = !!cartItem;
-    const isActive = activeProductId === product.sync_id;
     const price = cartItem?.unitPrice ?? priceByType(product, clientTier);
     const tqRaw = (product as any).truck_quantity;
     const hasStockInfo = tqRaw !== undefined;
@@ -402,17 +433,15 @@ export default function NewInvoiceScreen() {
     const lowStock = hasStockInfo && tq > 0 && tq <= 3;
 
     return (
-      <Pressable
+      <PressableScale
         style={[
           styles.catCard,
-          { width: CARD_W, backgroundColor: colors.card, borderColor: inCart ? colors.primary : colors.border },
-          isActive && { borderColor: colors.primary, borderWidth: 2 },
-          isOutOfStock && { opacity: 0.5 },
+          { width: CARD_W, backgroundColor: inCart ? c.brandTint : c.surface, borderColor: inCart ? c.brand : c.hairline },
+          inCart && { borderWidth: 2 },
+          isOutOfStock && { opacity: 0.45 },
         ]}
-        onPress={() => {
-          if (isActive) return;
-          openQtyCard(product, cartItem?.quantity);
-        }}
+        onPress={() => toggleProduct(product)}
+        accessibilityLabel={`${product.name}${inCart ? " — في السلة، اضغط للإزالة" : " — اضغط للإضافة"}`}
       >
         <View style={styles.catImageWrap}>
           <ProductImage
@@ -420,303 +449,357 @@ export default function NewInvoiceScreen() {
             localUri={product.local_image_uri}
             size={IMG_SIZE}
             radius={12}
-            colors={colors}
+            colors={imgColors}
           />
           {hasStockInfo && (
             <View
               style={[
                 styles.stockBadge,
                 {
-                  backgroundColor: isOutOfStock
-                    ? colors.destructive
-                    : lowStock
-                    ? colors.destructive + "cc"
-                    : colors.background + "ee",
-                  borderColor: colors.border,
+                  backgroundColor: isOutOfStock || lowStock ? c.danger : c.surfaceElevated,
+                  borderColor: isOutOfStock || lowStock ? c.danger : c.hairline,
                 },
               ]}
             >
-              <Text
-                style={[
-                  styles.stockBadgeText,
-                  { color: isOutOfStock || lowStock ? "#fff" : colors.mutedForeground },
-                ]}
-              >
+              <Feather name="box" size={9} color={isOutOfStock || lowStock ? "#fff" : c.textMuted} />
+              <Text style={[styles.stockBadgeText, { color: isOutOfStock || lowStock ? "#fff" : c.textMuted }]}>
                 {isOutOfStock ? "نفد" : tq.toFixed(0)}
               </Text>
             </View>
           )}
-        </View>
-        <Text style={[styles.catName, { color: colors.foreground }]} numberOfLines={2}>{product.name}</Text>
-        <View style={styles.catPriceRow}>
-          <Text style={[styles.catPrice, { color: colors.primary }]}>{price.toLocaleString("fr-DZ")} د.ج</Text>
-        </View>
-
-        {isActive ? (
-          <View style={[styles.qtyCard, { backgroundColor: colors.background, borderColor: colors.primary + "44" }]}>
-            <TextInput
-              style={[styles.qtyInput, { color: colors.foreground, backgroundColor: colors.card, borderColor: colors.border }]}
-              value={inputQty}
-              onChangeText={setInputQty}
-              keyboardType="numeric"
-              autoFocus
-              textAlign="center"
-              placeholder="الكمية"
-              placeholderTextColor={colors.mutedForeground}
-              returnKeyType="done"
-              onSubmitEditing={() => confirmQty(product, cartItem)}
-            />
-            <View style={styles.qtyCardActions}>
-              <Pressable
-                style={[styles.qtyConfirmBtn, { backgroundColor: colors.primary }]}
-                onPress={() => confirmQty(product, cartItem)}
-              >
-                <Text style={styles.qtyConfirmText}>{inCart ? "تحديث" : "أضف"}</Text>
-              </Pressable>
-              <Pressable
-                style={[styles.qtyCancelBtn, { backgroundColor: colors.muted }]}
-                onPress={dismissCard}
-              >
-                <Feather name="x" size={15} color={colors.foreground} />
-              </Pressable>
+          {inCart && (
+            <View style={[styles.selectTick, { backgroundColor: c.brand }]}>
+              <Feather name="check" size={14} color={c.onBrand} />
             </View>
-            {inCart && (
-              <Pressable onPress={() => { removeItem(product.sync_id); dismissCard(); }}>
-                <Text style={[styles.removeHint, { color: colors.destructive }]}>إزالة من السلة</Text>
-              </Pressable>
-            )}
-          </View>
-        ) : inCart ? (
-          <View style={[styles.inCartBadge, { borderColor: colors.primary + "55", backgroundColor: colors.primary + "10" }]}>
-            <Feather name="edit-2" size={12} color={colors.primary} />
-            <Text style={[styles.inCartQty, { color: colors.primary }]}>
-              {cartItem!.quantity % 1 === 0 ? cartItem!.quantity : cartItem!.quantity.toFixed(2)} وحدة
+          )}
+        </View>
+        <Text style={[styles.catName, { color: c.text }]} numberOfLines={2}>{product.name}</Text>
+        <MoneyText amount={price} tone="brand" size="callout" />
+
+        {inCart ? (
+          <View style={[styles.inCartBadge, { borderColor: c.brand, backgroundColor: c.surface }]}>
+            <Feather name="shopping-cart" size={12} color={c.brandText} />
+            <Text style={[styles.inCartQty, { color: c.brandText }]}>
+              {cartItem!.quantity % 1 === 0 ? `في السلة · ${cartItem!.quantity}` : `في السلة · ${cartItem!.quantity.toFixed(2)}`}
             </Text>
           </View>
         ) : (
-          <View style={[styles.addBtn, { backgroundColor: colors.primary }]}>
-            <Feather name="plus" size={16} color="#fff" />
-            <Text style={styles.addBtnText}>إضافة</Text>
-          </View>
+          <Text style={[styles.tapHint, { color: isOutOfStock ? c.dangerText : c.textFaint }]}>
+            {isOutOfStock ? "نفد المخزون" : "اضغط للإضافة"}
+          </Text>
         )}
-      </Pressable>
+      </PressableScale>
     );
   };
 
+  const curIdx = STEPS.findIndex(s => s.key === step);
+  const goStep = (key: typeof STEPS[number]["key"]) => {
+    if (key === "products" && !selectedClient) return;
+    if ((key === "cart" || key === "payment") && items.length === 0) return;
+    setStep(key);
+  };
+
   return (
-    <View style={[styles.container, { backgroundColor: colors.background, paddingTop: insets.top }]}>
-      <View style={[styles.topBar, { borderBottomColor: colors.border }]}>
-        <TouchableOpacity onPress={() => router.back()}>
-          <Feather name="x" size={22} color={colors.foreground} />
-        </TouchableOpacity>
-        <Text style={[styles.title, { color: colors.foreground }]}>فاتورة جديدة</Text>
+    <View style={[styles.container, { backgroundColor: c.bg, paddingTop: insets.top }]}>
+      <View style={[styles.topBar, { backgroundColor: c.rail, borderBottomColor: c.hairline }]}>
+        <PressableScale onPress={() => router.back()} hitSlop={10} accessibilityLabel="إغلاق">
+          <Feather name="x" size={22} color={c.text} />
+        </PressableScale>
+        <Text style={[styles.title, { color: c.text }]}>فاتورة جديدة</Text>
         <View style={{ width: 22 }} />
       </View>
 
-      <View style={[styles.steps, { backgroundColor: colors.card, borderBottomColor: colors.border }]}>
-        {[
-          { key: "client", label: "العميل" },
-          { key: "products", label: "المنتجات" },
-          { key: "payment", label: "الدفع" },
-        ].map(s => (
-          <TouchableOpacity key={s.key} onPress={() => {
-            if (s.key === "products" && !selectedClient) return;
-            if (s.key === "payment" && items.length === 0) return;
-            dismissCard();
-            setStep(s.key as any);
-          }}>
-            <Text style={[
-              styles.stepLabel,
-              { color: step === s.key ? colors.primary : colors.mutedForeground },
-              step === s.key && styles.stepActive,
-            ]}>
+      {/* Stepper */}
+      <View style={[styles.steps, { backgroundColor: c.rail, borderBottomColor: c.hairline }]}>
+        <View style={styles.stepRow}>
+          {STEPS.map((s, i) => {
+            const done = i < curIdx;
+            const active = i === curIdx;
+            return (
+              <View key={s.key} style={styles.stepNodeWrap}>
+                <PressableScale onPress={() => goStep(s.key)} hitSlop={8}>
+                  <View
+                    style={[
+                      styles.stepDot,
+                      done && { backgroundColor: c.brand },
+                      active && { backgroundColor: c.brand, ...t.elevation.glow },
+                      !done && !active && { backgroundColor: c.surfaceElevated },
+                    ]}
+                  >
+                    {done ? (
+                      <Feather name="check" size={12} color={c.onBrand} />
+                    ) : (
+                      <Text style={[styles.stepDotText, { color: active ? c.onBrand : c.textMuted }]}>{i + 1}</Text>
+                    )}
+                  </View>
+                </PressableScale>
+                {i < STEPS.length - 1 && (
+                  <View style={[styles.stepTrack, { backgroundColor: i < curIdx ? c.brand : c.hairline }]} />
+                )}
+              </View>
+            );
+          })}
+        </View>
+        <View style={styles.stepLabels}>
+          {STEPS.map((s, i) => (
+            <Text key={s.key} style={[styles.stepLabel, { color: i === curIdx ? c.brandText : i < curIdx ? c.text : c.textFaint }]}>
               {s.label}
             </Text>
-          </TouchableOpacity>
-        ))}
+          ))}
+        </View>
       </View>
 
       {step === "client" && (
-        <View style={{ flex: 1 }}>
+        <Animated.View style={{ flex: 1, opacity: stepFade }}>
           {/* Search bar + add-client button */}
           <View style={styles.clientSearchRow}>
-            <View style={[styles.searchBar, { flex: 1, backgroundColor: colors.card, borderColor: colors.border }]}>
-              <Feather name="search" size={16} color={colors.mutedForeground} />
+            <View style={[styles.searchBar, { flex: 1, backgroundColor: c.surface, borderColor: c.hairline }]}>
+              <Feather name="search" size={16} color={c.textMuted} />
               <TextInput
-                style={[styles.searchInput, { color: colors.foreground }]}
+                style={[styles.searchInput, { color: c.text }]}
                 placeholder="ابحث عن عميل..."
-                placeholderTextColor={colors.mutedForeground}
+                placeholderTextColor={c.textFaint}
                 value={clientSearch}
                 onChangeText={setClientSearch}
                 textAlign="right"
               />
             </View>
-            <TouchableOpacity
-              style={[styles.addClientBtn, { backgroundColor: colors.primary }]}
+            <PressableScale
+              style={[styles.addClientBtn, { backgroundColor: c.brand }]}
               onPress={() => setAddClientOpen(true)}
+              haptic
+              accessibilityLabel="إضافة عميل"
             >
-              <Feather name="plus" size={20} color="#fff" />
-            </TouchableOpacity>
+              <Feather name="plus" size={20} color={c.onBrand} />
+            </PressableScale>
           </View>
 
           <FlatList
             data={filteredClients}
             keyExtractor={i => i.sync_id}
             renderItem={({ item }) => (
-              <TouchableOpacity
+              <PressableScale
                 style={[
                   styles.clientRow,
-                  { backgroundColor: selectedClient?.sync_id === item.sync_id ? colors.primary + "22" : colors.card, borderColor: colors.border }
+                  { backgroundColor: selectedClient?.sync_id === item.sync_id ? c.brandTint : c.surface, borderColor: selectedClient?.sync_id === item.sync_id ? c.brandBorder : c.hairline }
                 ]}
                 onPress={() => { setSelectedClient(item); setStep("products"); }}
               >
-                <Feather name="check" size={16} color={selectedClient?.sync_id === item.sync_id ? colors.primary : "transparent"} />
+                <Feather name="check" size={16} color={selectedClient?.sync_id === item.sync_id ? c.brandText : "transparent"} />
                 <View style={{ flex: 1, alignItems: "flex-end" }}>
-                  <Text style={[styles.clientName, { color: colors.foreground }]}>{item.name}</Text>
+                  <Text style={[styles.clientName, { color: c.text }]}>{item.name}</Text>
                   {item.phone ? (
-                    <Text style={[styles.clientPhone, { color: colors.mutedForeground }]}>{item.phone}</Text>
+                    <Text style={[styles.clientPhone, { color: c.textMuted }]}>{item.phone}</Text>
                   ) : null}
                 </View>
-              </TouchableOpacity>
+              </PressableScale>
             )}
             contentContainerStyle={{ padding: 12, gap: 6 }}
             ListEmptyComponent={
               <View style={styles.empty}>
-                <Feather name="users" size={40} color={colors.muted} />
-                <Text style={[styles.emptyText, { color: colors.mutedForeground }]}>لا يوجد عملاء</Text>
-                <TouchableOpacity
-                  style={[styles.addClientEmptyBtn, { backgroundColor: colors.primary }]}
-                  onPress={() => setAddClientOpen(true)}
-                >
-                  <Feather name="plus" size={16} color="#fff" />
-                  <Text style={styles.addClientEmptyBtnText}>إضافة زبون جديد</Text>
-                </TouchableOpacity>
+                <Feather name="users" size={40} color={c.textFaint} />
+                <Text style={[styles.emptyText, { color: c.textMuted }]}>لا يوجد عملاء</Text>
+                <AppButton label="إضافة زبون جديد" icon="plus" size="md" onPress={() => setAddClientOpen(true)} />
               </View>
             }
           />
-        </View>
+        </Animated.View>
       )}
 
       {step === "products" && (
-        <View style={{ flex: 1 }}>
-          <View style={[styles.clientPill, { backgroundColor: colors.primary + "12", borderColor: colors.primary + "33" }]}>
-            <Feather name="user" size={14} color={colors.primary} />
-            <Text style={[styles.clientPillText, { color: colors.foreground }]} numberOfLines={1}>
+        <Animated.View style={{ flex: 1, opacity: stepFade }}>
+          <View style={[styles.clientPill, { backgroundColor: c.brandTint, borderColor: c.brandBorder }]}>
+            <Feather name="user" size={14} color={c.brandText} />
+            <Text style={[styles.clientPillText, { color: c.text }]} numberOfLines={1}>
               {selectedClient?.name}
             </Text>
           </View>
-          <View style={[styles.searchBar, { backgroundColor: colors.card, borderColor: colors.border }]}>
-            <Feather name="search" size={16} color={colors.mutedForeground} />
+          <View style={[styles.searchBar, { backgroundColor: c.surface, borderColor: c.hairline }]}>
+            <Feather name="search" size={16} color={c.textMuted} />
             <TextInput
-              style={[styles.searchInput, { color: colors.foreground }]}
+              style={[styles.searchInput, { color: c.text }]}
               placeholder="ابحث عن منتج..."
-              placeholderTextColor={colors.mutedForeground}
+              placeholderTextColor={c.textFaint}
               value={productSearch}
               onChangeText={setProductSearch}
               textAlign="right"
             />
           </View>
-          <TouchableWithoutFeedback onPress={() => activeProductId !== null && dismissCard()}>
-            <View style={{ flex: 1 }}>
-              <FlatList
-                data={filteredProducts}
-                keyExtractor={i => i.sync_id}
-                renderItem={renderProduct}
-                numColumns={COLS}
-                columnWrapperStyle={{ gap: GAP, paddingHorizontal: H_PAD, flexDirection: "row-reverse" }}
-                contentContainerStyle={{ paddingVertical: 12, gap: GAP, paddingBottom: 110 }}
-                keyboardShouldPersistTaps="handled"
-                onScrollBeginDrag={dismissCard}
-                ListEmptyComponent={
-                  <View style={styles.empty}>
-                    <Feather name="package" size={40} color={colors.muted} />
-                    <Text style={[styles.emptyText, { color: colors.mutedForeground }]}>
-                      {productSearch.trim() ? "لا توجد نتائج" : "لا توجد منتجات"}
-                    </Text>
-                  </View>
-                }
-                showsVerticalScrollIndicator={false}
-              />
-            </View>
-          </TouchableWithoutFeedback>
+          <View style={{ flex: 1 }}>
+            <FlatList
+              data={filteredProducts}
+              keyExtractor={i => i.sync_id}
+              renderItem={renderProduct}
+              numColumns={COLS}
+              columnWrapperStyle={{ gap: GAP, paddingHorizontal: H_PAD, flexDirection: "row-reverse" }}
+              contentContainerStyle={{ paddingVertical: 12, gap: GAP, paddingBottom: 110 }}
+              keyboardShouldPersistTaps="handled"
+              ListEmptyComponent={
+                <View style={styles.empty}>
+                  <Feather name="package" size={40} color={c.textFaint} />
+                  <Text style={[styles.emptyText, { color: c.textMuted }]}>
+                    {productSearch.trim() ? "لا توجد نتائج" : "لا توجد منتجات"}
+                  </Text>
+                </View>
+              }
+              showsVerticalScrollIndicator={false}
+            />
+          </View>
           {items.length > 0 && (
-            <View style={[styles.cartBar, { backgroundColor: colors.card, borderTopColor: colors.border, paddingBottom: insets.bottom + 12 }]}>
-              <TouchableOpacity
-                style={[styles.nextBtn, { backgroundColor: colors.primary }]}
-                onPress={() => { dismissCard(); setStep("payment"); }}
+            <View style={[styles.cartBar, { backgroundColor: c.rail, borderTopColor: c.hairline, paddingBottom: insets.bottom + 12 }]}>
+              <PressableScale
+                style={[styles.nextBtn, { backgroundColor: c.brand, ...t.elevation.glow }]}
+                onPress={() => setStep("cart")}
+                haptic
               >
-                <Text style={styles.nextBtnText}>التالي</Text>
-                <Feather name="arrow-left" size={18} color="#fff" />
-              </TouchableOpacity>
+                <Text style={[styles.nextBtnText, { color: c.onBrand }]}>السلة</Text>
+                <Feather name="arrow-left" size={18} color={c.onBrand} />
+              </PressableScale>
               <View style={{ alignItems: "flex-end" }}>
-                <Text style={[styles.totalText, { color: colors.foreground }]}>{total.toLocaleString("fr-DZ")} د.ج</Text>
-                <Text style={[styles.cartSub, { color: colors.mutedForeground }]}>{items.length} صنف • {totalUnits} وحدة</Text>
+                <MoneyText amount={total} size="title" />
+                <Text style={[styles.cartSub, { color: c.textMuted }]}>{items.length} صنف • {totalUnits} وحدة</Text>
               </View>
             </View>
           )}
-        </View>
+        </Animated.View>
+      )}
+
+      {step === "cart" && (
+        <Animated.View style={{ flex: 1, opacity: stepFade }}>
+          <View style={[styles.clientPill, { backgroundColor: c.brandTint, borderColor: c.brandBorder }]}>
+            <Feather name="shopping-cart" size={14} color={c.brandText} />
+            <Text style={[styles.clientPillText, { color: c.text }]} numberOfLines={1}>
+              {selectedClient?.name} — {items.length} صنف
+            </Text>
+          </View>
+          <KeyboardAvoidingView
+            behavior={Platform.OS === "ios" ? "padding" : undefined}
+            style={{ flex: 1 }}
+          >
+            <FlatList
+              data={items}
+              keyExtractor={i => i.product.sync_id}
+              keyboardShouldPersistTaps="handled"
+              renderItem={({ item: i }) => {
+                const lineTotal = i.quantity * i.unitPrice;
+                return (
+                  <View style={[styles.cartItemRow, { backgroundColor: c.surface, borderColor: c.hairline }]}>
+                    <PressableScale
+                      style={[styles.cartRemoveBtn, { backgroundColor: c.dangerTint }]}
+                      onPress={() => removeItem(i.product.sync_id)}
+                      hitSlop={6}
+                      accessibilityLabel="إزالة من السلة"
+                    >
+                      <Feather name="trash-2" size={17} color={c.dangerText} />
+                    </PressableScale>
+                    <View style={styles.cartQtyWrap}>
+                      <TextInput
+                        style={[styles.cartQtyInput, { color: c.text, backgroundColor: c.bg, borderColor: c.hairline }]}
+                        value={qtyText[i.product.sync_id] ?? (i.quantity % 1 === 0 ? String(i.quantity) : i.quantity.toFixed(2))}
+                        onChangeText={(txt) => setQtyText(prev => ({ ...prev, [i.product.sync_id]: txt }))}
+                        onEndEditing={() => commitQty(i)}
+                        keyboardType="numeric"
+                        textAlign="center"
+                        returnKeyType="done"
+                        selectTextOnFocus
+                        accessibilityLabel={`كمية ${i.product.name}`}
+                      />
+                      <Text style={[styles.cartQtyLabel, { color: c.textFaint }]}>الكمية</Text>
+                    </View>
+                    <View style={{ flex: 1, alignItems: "flex-end" }}>
+                      <Text style={[styles.cartItemName, { color: c.text }]} numberOfLines={2}>{i.product.name}</Text>
+                      <Text style={[styles.cartItemPrice, { color: c.textMuted }]}>
+                        {formatMoney(i.unitPrice)} للوحدة
+                      </Text>
+                      <MoneyText amount={lineTotal} tone="brand" size="callout" />
+                    </View>
+                  </View>
+                );
+              }}
+              contentContainerStyle={{ padding: 12, gap: 8, paddingBottom: 120 }}
+              ListEmptyComponent={
+                <View style={styles.empty}>
+                  <Feather name="shopping-cart" size={40} color={c.textFaint} />
+                  <Text style={[styles.emptyText, { color: c.textMuted }]}>السلة فارغة</Text>
+                  <AppButton label="اختر المنتجات" icon="package" size="md" onPress={() => setStep("products")} />
+                </View>
+              }
+              showsVerticalScrollIndicator={false}
+            />
+          </KeyboardAvoidingView>
+          {items.length > 0 && (
+            <View style={[styles.cartBar, { backgroundColor: c.rail, borderTopColor: c.hairline, paddingBottom: insets.bottom + 12 }]}>
+              <PressableScale
+                style={[styles.nextBtn, { backgroundColor: c.brand, ...t.elevation.glow }]}
+                onPress={() => setStep("payment")}
+                haptic
+              >
+                <Text style={[styles.nextBtnText, { color: c.onBrand }]}>التالي</Text>
+                <Feather name="arrow-left" size={18} color={c.onBrand} />
+              </PressableScale>
+              <View style={{ alignItems: "flex-end" }}>
+                <MoneyText amount={total} size="title" />
+                <Text style={[styles.cartSub, { color: c.textMuted }]}>{items.length} صنف • {totalUnits} وحدة</Text>
+              </View>
+            </View>
+          )}
+        </Animated.View>
       )}
 
       {step === "payment" && (
-        <ScrollView contentContainerStyle={{ padding: 16, gap: 16, paddingBottom: insets.bottom + 24 }}>
-          <View style={[styles.summaryCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
-            <Text style={[styles.summaryLabel, { color: colors.mutedForeground }]}>العميل</Text>
-            <Text style={[styles.summaryVal, { color: colors.foreground }]}>{selectedClient?.name}</Text>
-            <View style={[styles.divider, { backgroundColor: colors.border }]} />
-            {items.map(i => (
-              <View key={i.product.sync_id} style={styles.lineRow}>
-                <Text style={[styles.lineAmount, { color: colors.foreground }]}>
-                  {(i.quantity * i.unitPrice).toLocaleString("fr-DZ")}
-                </Text>
-                <Text style={[styles.lineName, { color: colors.mutedForeground }]} numberOfLines={1}>
-                  {i.product.name} ({i.quantity % 1 === 0 ? i.quantity : i.quantity.toFixed(2)} × {i.unitPrice.toLocaleString("fr-DZ")})
-                </Text>
-              </View>
-            ))}
-            <View style={[styles.divider, { backgroundColor: colors.border }]} />
-            <Text style={[styles.summaryLabel, { color: colors.mutedForeground }]}>الإجمالي</Text>
-            <Text style={[styles.summaryTotal, { color: colors.primary }]}>{total.toLocaleString("fr-DZ")} د.ج</Text>
-          </View>
+        <Animated.View style={{ flex: 1, opacity: stepFade }}>
+          <ScrollView contentContainerStyle={{ padding: 16, gap: 16, paddingBottom: insets.bottom + 24, flexGrow: 1, justifyContent: "center" }}>
+            <View style={[styles.summaryCard, { backgroundColor: c.surface, borderColor: c.hairline }]}>
+              <Text style={[styles.summaryLabel, { color: c.textMuted }]}>العميل</Text>
+              <Text style={[styles.summaryVal, { color: c.text }]}>{selectedClient?.name}</Text>
+              <View style={[styles.divider, { backgroundColor: c.hairline }]} />
+              {items.map(i => (
+                <View key={i.product.sync_id} style={styles.lineRow}>
+                  <Text style={[styles.lineAmount, { color: c.text }]}>
+                    {formatMoney(i.quantity * i.unitPrice)}
+                  </Text>
+                  <Text style={[styles.lineName, { color: c.textMuted }]} numberOfLines={1}>
+                    {i.product.name} ({i.quantity % 1 === 0 ? i.quantity : i.quantity.toFixed(2)} × {formatMoney(i.unitPrice)})
+                  </Text>
+                </View>
+              ))}
+              <View style={[styles.divider, { backgroundColor: c.hairline }]} />
+              <Text style={[styles.summaryLabel, { color: c.textMuted }]}>الإجمالي</Text>
+              <MoneyText amount={total} tone="brand" size="display" />
+            </View>
 
-          <Text style={[styles.sectionTitle, { color: colors.foreground }]}>طريقة الدفع</Text>
-          <View style={styles.paymentRow}>
-            {(["cash", "credit"] as const)
-              .filter(pt => pt === "cash" || (user?.truckCanSellOnCredit !== false))
-              .map(pt => (
-              <TouchableOpacity
-                key={pt}
-                style={[
-                  styles.paymentBtn,
-                  {
-                    backgroundColor: paymentType === pt ? colors.primary : colors.card,
-                    borderColor: paymentType === pt ? colors.primary : colors.border,
-                    flex: 1,
-                  }
-                ]}
-                onPress={() => setPaymentType(pt)}
-              >
-                <Feather
-                  name={pt === "cash" ? "dollar-sign" : "credit-card"}
-                  size={18}
-                  color={paymentType === pt ? "#fff" : colors.mutedForeground}
-                />
-                <Text style={[styles.paymentBtnText, { color: paymentType === pt ? "#fff" : colors.foreground }]}>
-                  {pt === "cash" ? "نقد" : "آجل"}
-                </Text>
-              </TouchableOpacity>
-            ))}
-          </View>
+            <Text style={[styles.sectionTitle, { color: c.text }]}>طريقة الدفع</Text>
+            <View style={styles.paymentRow}>
+              {(["cash", "credit"] as const)
+                .filter(pt => pt === "cash" || (user?.truckCanSellOnCredit !== false))
+                .map(pt => {
+                  const on = paymentType === pt;
+                  return (
+                    <PressableScale
+                      key={pt}
+                      style={[styles.paymentBtn, { backgroundColor: c.surface, borderColor: on ? c.brand : c.hairline, borderWidth: on ? 2 : 1.5, flex: 1 }]}
+                      onPress={() => setPaymentType(pt)}
+                    >
+                      <View style={[styles.payIcon, { backgroundColor: on ? c.brand : c.brandTint }]}>
+                        <Feather name={pt === "cash" ? "dollar-sign" : "credit-card"} size={22} color={on ? c.onBrand : c.brand} />
+                      </View>
+                      <Text style={[styles.paymentBtnText, { color: on ? c.brand : c.text }]}>{pt === "cash" ? "نقد" : "آجل"}</Text>
+                      <Text style={[styles.payHint, { color: c.textFaint }]}>{pt === "cash" ? "يُحصّل الآن" : "على الحساب"}</Text>
+                    </PressableScale>
+                  );
+                })}
+            </View>
 
-          <TouchableOpacity
-            style={[styles.saveBtn, { backgroundColor: saving ? colors.muted : colors.primary }]}
-            onPress={saveInvoice}
-            disabled={saving}
-            activeOpacity={0.8}
-          >
-            <Feather name="save" size={20} color="#fff" />
-            <Text style={styles.saveBtnText}>{saving ? "جاري الحفظ..." : "حفظ الفاتورة"}</Text>
-          </TouchableOpacity>
-        </ScrollView>
+            <AppButton
+              label={saving ? "جاري الحفظ..." : "حفظ الفاتورة"}
+              icon="save"
+              size="lg"
+              fullWidth
+              loading={saving}
+              onPress={saveInvoice}
+            />
+          </ScrollView>
+        </Animated.View>
       )}
 
       {/* ── Add-client modal ──────────────────────────────────────────────── */}
@@ -727,27 +810,27 @@ export default function NewInvoiceScreen() {
         onRequestClose={resetAddClientModal}
       >
         <TouchableWithoutFeedback onPress={resetAddClientModal}>
-          <View style={styles.modalOverlay} />
+          <View style={[styles.modalOverlay, { backgroundColor: c.scrim }]} />
         </TouchableWithoutFeedback>
         <KeyboardAvoidingView
           behavior={Platform.OS === "ios" ? "padding" : "height"}
           style={styles.modalKav}
         >
-          <View style={[styles.modalSheet, { backgroundColor: colors.card, borderColor: colors.border, paddingBottom: insets.bottom + 16 }]}>
+          <View style={[styles.modalSheet, { backgroundColor: c.surface, borderColor: c.hairline, paddingBottom: insets.bottom + 16 }]}>
             {/* Handle */}
-            <View style={[styles.modalHandle, { backgroundColor: colors.border }]} />
+            <View style={[styles.modalHandle, { backgroundColor: c.hairline }]} />
 
-            <Text style={[styles.modalTitle, { color: colors.foreground }]}>زبون جديد</Text>
+            <Text style={[styles.modalTitle, { color: c.text }]}>زبون جديد</Text>
 
             {/* Name */}
             <View style={styles.modalField}>
-              <Text style={[styles.modalLabel, { color: colors.mutedForeground }]}>الاسم *</Text>
+              <Text style={[styles.modalLabel, { color: c.textMuted }]}>الاسم *</Text>
               <TextInput
-                style={[styles.modalInput, { color: colors.foreground, backgroundColor: colors.background, borderColor: colors.border }]}
+                style={[styles.modalInput, { color: c.text, backgroundColor: c.bg, borderColor: c.hairline }]}
                 value={newClientName}
                 onChangeText={setNewClientName}
                 placeholder="اسم الزبون"
-                placeholderTextColor={colors.mutedForeground}
+                placeholderTextColor={c.textFaint}
                 textAlign="right"
                 autoFocus
                 returnKeyType="next"
@@ -756,13 +839,13 @@ export default function NewInvoiceScreen() {
 
             {/* Phone */}
             <View style={styles.modalField}>
-              <Text style={[styles.modalLabel, { color: colors.mutedForeground }]}>الهاتف (اختياري)</Text>
+              <Text style={[styles.modalLabel, { color: c.textMuted }]}>الهاتف (اختياري)</Text>
               <TextInput
-                style={[styles.modalInput, { color: colors.foreground, backgroundColor: colors.background, borderColor: colors.border }]}
+                style={[styles.modalInput, { color: c.text, backgroundColor: c.bg, borderColor: c.hairline }]}
                 value={newClientPhone}
                 onChangeText={setNewClientPhone}
                 placeholder="0555 000 000"
-                placeholderTextColor={colors.mutedForeground}
+                placeholderTextColor={c.textFaint}
                 keyboardType="phone-pad"
                 textAlign="right"
                 returnKeyType="done"
@@ -771,55 +854,55 @@ export default function NewInvoiceScreen() {
 
             {/* Client type selector */}
             <View style={styles.modalField}>
-              <Text style={[styles.modalLabel, { color: colors.mutedForeground }]}>نوع العميل</Text>
+              <Text style={[styles.modalLabel, { color: c.textMuted }]}>نوع العميل</Text>
               <View style={styles.tierRow}>
                 {TIER_OPTIONS.map(opt => (
-                  <TouchableOpacity
+                  <PressableScale
                     key={opt.value}
                     style={[
                       styles.tierBtn,
                       {
-                        backgroundColor: newClientType === opt.value ? colors.primary : colors.background,
-                        borderColor: newClientType === opt.value ? colors.primary : colors.border,
+                        backgroundColor: newClientType === opt.value ? c.brand : c.bg,
+                        borderColor: newClientType === opt.value ? c.brand : c.hairline,
                       },
                     ]}
                     onPress={() => setNewClientType(opt.value)}
                   >
                     <Text style={[
                       styles.tierBtnText,
-                      { color: newClientType === opt.value ? "#fff" : colors.foreground },
+                      { color: newClientType === opt.value ? c.onBrand : c.text },
                     ]}>
                       {opt.label}
                     </Text>
-                  </TouchableOpacity>
+                  </PressableScale>
                 ))}
               </View>
             </View>
 
             {/* Actions */}
             <View style={styles.modalActions}>
-              <TouchableOpacity
-                style={[styles.modalCancelBtn, { backgroundColor: colors.background, borderColor: colors.border }]}
-                onPress={resetAddClientModal}
-              >
-                <Text style={[styles.modalCancelText, { color: colors.foreground }]}>إلغاء</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={[
-                  styles.modalSaveBtn,
-                  { backgroundColor: savingNewClient || !newClientName.trim() ? colors.muted : colors.primary },
-                ]}
+              <AppButton label="إلغاء" variant="tonal" size="lg" onPress={resetAddClientModal} style={{ flex: 1 }} />
+              <AppButton
+                label={savingNewClient ? "جاري الحفظ..." : "حفظ وتحديد"}
+                size="lg"
+                loading={savingNewClient}
+                disabled={!newClientName.trim()}
                 onPress={saveNewClient}
-                disabled={savingNewClient || !newClientName.trim()}
-              >
-                <Text style={styles.modalSaveText}>
-                  {savingNewClient ? "جاري الحفظ..." : "حفظ وتحديد"}
-                </Text>
-              </TouchableOpacity>
+                style={{ flex: 2 }}
+              />
             </View>
           </View>
         </KeyboardAvoidingView>
       </Modal>
+
+      <ResultDialog
+        visible={dialog.visible}
+        variant={dialog.variant}
+        title={dialog.title}
+        message={dialog.message}
+        actions={dialog.actions}
+        onRequestClose={hideDialog}
+      />
     </View>
   );
 }
@@ -830,13 +913,17 @@ const styles = StyleSheet.create({
     flexDirection: "row-reverse", alignItems: "center", justifyContent: "space-between",
     paddingHorizontal: 16, paddingVertical: 12, borderBottomWidth: 1,
   },
-  title: { fontSize: 17, fontFamily: "Cairo_700Bold" },
-  steps: {
-    flexDirection: "row-reverse", justifyContent: "space-around",
-    paddingVertical: 10, borderBottomWidth: 1,
-  },
-  stepLabel: { fontSize: 13, fontFamily: "Cairo_600SemiBold", paddingVertical: 4, paddingHorizontal: 12 },
-  stepActive: { borderBottomWidth: 2, borderBottomColor: "#f97316" } as any,
+  title: { fontSize: 17, fontFamily: fonts.bold },
+
+  // Stepper
+  steps: { paddingHorizontal: 30, paddingTop: 14, paddingBottom: 12, borderBottomWidth: 1 },
+  stepRow: { flexDirection: "row-reverse", alignItems: "center" },
+  stepNodeWrap: { flexDirection: "row-reverse", alignItems: "center", flex: 1 },
+  stepDot: { width: 26, height: 26, borderRadius: 13, alignItems: "center", justifyContent: "center" },
+  stepDotText: { fontSize: 12, fontFamily: fonts.bold },
+  stepTrack: { flex: 1, height: 3, borderRadius: 2, marginHorizontal: 6 },
+  stepLabels: { flexDirection: "row-reverse", marginTop: 7 },
+  stepLabel: { flex: 1, textAlign: "center", fontSize: 12, fontFamily: fonts.semibold },
 
   // Client search row with + button
   clientSearchRow: {
@@ -853,146 +940,110 @@ const styles = StyleSheet.create({
     marginHorizontal: 12, marginTop: 10, paddingHorizontal: 14, height: 44,
     borderRadius: 12, borderWidth: 1,
   },
-  searchInput: { flex: 1, fontSize: 14, fontFamily: "Cairo_400Regular" },
+  searchInput: { flex: 1, fontSize: 14, fontFamily: fonts.regular },
   clientRow: {
     flexDirection: "row-reverse", alignItems: "center", gap: 10,
     padding: 12, borderRadius: 12, borderWidth: 1,
   },
-  clientName: { fontSize: 15, fontFamily: "Cairo_600SemiBold" },
-  clientPhone: { fontSize: 12, fontFamily: "Cairo_400Regular" },
+  clientName: { fontSize: 15, fontFamily: fonts.semibold },
+  clientPhone: { fontSize: 12, fontFamily: fonts.regular },
 
   clientPill: {
     flexDirection: "row-reverse", alignItems: "center", gap: 8,
     marginHorizontal: 12, marginTop: 10, paddingHorizontal: 12, paddingVertical: 8,
     borderRadius: 12, borderWidth: 1,
   },
-  clientPillText: { flex: 1, fontSize: 13, fontFamily: "Cairo_600SemiBold", textAlign: "right" },
+  clientPillText: { flex: 1, fontSize: 13, fontFamily: fonts.semibold, textAlign: "right" },
 
   catCard: {
     borderRadius: 16, borderWidth: 1.5, padding: 10, gap: 6, alignItems: "center",
-    shadowColor: "#000", shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.06,
-    shadowRadius: 6, elevation: 1,
   },
   catImageWrap: { width: "100%", alignItems: "center" },
   stockBadge: {
     position: "absolute", top: 4, left: 4, minWidth: 28, paddingHorizontal: 6, paddingVertical: 3,
-    borderRadius: 8, borderWidth: 1, alignItems: "center", justifyContent: "center",
+    borderRadius: 8, borderWidth: 1, flexDirection: "row-reverse", alignItems: "center", justifyContent: "center", gap: 3,
   },
-  stockBadgeText: { fontSize: 10, fontFamily: "Cairo_700Bold" },
-  catName: { fontSize: 13, fontFamily: "Cairo_600SemiBold", textAlign: "center", minHeight: 36, marginTop: 2 },
-  catPriceRow: { flexDirection: "row-reverse", alignItems: "center", gap: 6, flexWrap: "wrap", justifyContent: "center" },
-  catPrice: { fontSize: 15, fontFamily: "Cairo_700Bold" },
-
-  addBtn: {
-    flexDirection: "row-reverse", alignItems: "center", justifyContent: "center", gap: 6,
-    width: "100%", paddingVertical: 9, borderRadius: 10,
+  stockBadgeText: { fontSize: 10, fontFamily: fonts.bold },
+  catName: { fontSize: 13, fontFamily: fonts.semibold, textAlign: "center", minHeight: 36, marginTop: 2 },
+  selectTick: {
+    position: "absolute", top: 4, right: 4, width: 24, height: 24, borderRadius: 12,
+    alignItems: "center", justifyContent: "center",
   },
-  addBtnText: { color: "#fff", fontSize: 14, fontFamily: "Cairo_700Bold" },
+  tapHint: { fontSize: 12, fontFamily: fonts.regular, textAlign: "center", paddingVertical: 9 },
 
   inCartBadge: {
     flexDirection: "row-reverse", alignItems: "center", justifyContent: "center", gap: 6,
-    width: "100%", paddingVertical: 8, borderRadius: 10, borderWidth: 1,
+    width: "100%", paddingVertical: 8, borderRadius: 10, borderWidth: 1.5,
   },
-  inCartQty: { fontSize: 13, fontFamily: "Cairo_700Bold" },
+  inCartQty: { fontSize: 13, fontFamily: fonts.bold },
 
-  qtyCard: {
-    width: "100%", borderRadius: 10, borderWidth: 1,
-    padding: 8, gap: 6, alignItems: "center",
+  // Cart screen
+  cartItemRow: {
+    flexDirection: "row-reverse", alignItems: "center", gap: 12,
+    borderRadius: 14, borderWidth: 1, padding: 12,
   },
-  qtyInput: {
-    width: "100%", height: 42, borderRadius: 8, borderWidth: 1,
-    fontSize: 18, fontFamily: "Cairo_700Bold", textAlign: "center",
+  cartItemName: { fontSize: 14, fontFamily: fonts.semibold, textAlign: "right" },
+  cartItemPrice: { fontSize: 11, fontFamily: fonts.regular, marginVertical: 2 },
+  cartQtyWrap: { alignItems: "center", gap: 2 },
+  cartQtyInput: {
+    width: 64, height: 48, borderRadius: 10, borderWidth: 1,
+    fontSize: 18, fontFamily: fonts.bold,
   },
-  qtyCardActions: { flexDirection: "row-reverse", gap: 6, width: "100%" },
-  qtyConfirmBtn: {
-    flex: 1, paddingVertical: 8, borderRadius: 8,
+  cartQtyLabel: { fontSize: 10, fontFamily: fonts.regular },
+  cartRemoveBtn: {
+    width: 40, height: 40, borderRadius: 12,
     alignItems: "center", justifyContent: "center",
   },
-  qtyConfirmText: { color: "#fff", fontSize: 14, fontFamily: "Cairo_700Bold" },
-  qtyCancelBtn: {
-    width: 38, paddingVertical: 8, borderRadius: 8,
-    alignItems: "center", justifyContent: "center",
-  },
-  removeHint: { fontSize: 11, fontFamily: "Cairo_400Regular", textDecorationLine: "underline" },
 
   cartBar: {
     position: "absolute", left: 0, right: 0, bottom: 0,
     flexDirection: "row-reverse", alignItems: "center", justifyContent: "space-between",
     paddingHorizontal: 16, paddingTop: 12, borderTopWidth: 1,
   },
-  totalText: { fontSize: 17, fontFamily: "Cairo_700Bold" },
-  cartSub: { fontSize: 11, fontFamily: "Cairo_400Regular" },
+  cartSub: { fontSize: 11, fontFamily: fonts.regular },
   nextBtn: { flexDirection: "row-reverse", alignItems: "center", gap: 6, paddingHorizontal: 20, paddingVertical: 12, borderRadius: 12 },
-  nextBtnText: { color: "#fff", fontSize: 15, fontFamily: "Cairo_700Bold" },
+  nextBtnText: { fontSize: 15, fontFamily: fonts.bold },
 
   empty: { alignItems: "center", paddingVertical: 60, gap: 12 },
-  emptyText: { fontSize: 14, fontFamily: "Cairo_400Regular" },
-  addClientEmptyBtn: {
-    flexDirection: "row-reverse", alignItems: "center", gap: 6,
-    paddingHorizontal: 20, paddingVertical: 10, borderRadius: 12,
-  },
-  addClientEmptyBtnText: { color: "#fff", fontSize: 14, fontFamily: "Cairo_700Bold" },
+  emptyText: { fontSize: 14, fontFamily: fonts.regular },
 
-  summaryCard: { borderRadius: 14, borderWidth: 1, padding: 16, gap: 8 },
-  summaryLabel: { fontSize: 12, fontFamily: "Cairo_400Regular" },
-  summaryVal: { fontSize: 15, fontFamily: "Cairo_600SemiBold", textAlign: "right" },
-  summaryTotal: { fontSize: 20, fontFamily: "Cairo_700Bold", textAlign: "right" },
+  summaryCard: { borderRadius: 16, borderWidth: 1, padding: 16, gap: 8 },
+  summaryLabel: { fontSize: 12, fontFamily: fonts.regular },
+  summaryVal: { fontSize: 15, fontFamily: fonts.semibold, textAlign: "right" },
   lineRow: { flexDirection: "row-reverse", alignItems: "center", justifyContent: "space-between", gap: 8 },
-  lineName: { flex: 1, fontSize: 12, fontFamily: "Cairo_400Regular", textAlign: "right" },
-  lineAmount: { fontSize: 13, fontFamily: "Cairo_600SemiBold" },
+  lineName: { flex: 1, fontSize: 12, fontFamily: fonts.regular, textAlign: "right" },
+  lineAmount: { fontSize: 13, fontFamily: fonts.semibold, fontVariant: ["tabular-nums"] },
   divider: { height: 1 },
-  sectionTitle: { fontSize: 15, fontFamily: "Cairo_700Bold", textAlign: "right" },
-  paymentRow: { flexDirection: "row-reverse", gap: 10 },
+  sectionTitle: { fontSize: 15, fontFamily: fonts.bold, textAlign: "right" },
+  paymentRow: { flexDirection: "row-reverse", gap: 12 },
   paymentBtn: {
-    flexDirection: "row-reverse", alignItems: "center", justifyContent: "center",
-    gap: 8, paddingVertical: 14, borderRadius: 12, borderWidth: 1,
+    flexDirection: "column", alignItems: "center", justifyContent: "center",
+    gap: 8, paddingVertical: 18, borderRadius: 18,
   },
-  paymentBtnText: { fontSize: 15, fontFamily: "Cairo_600SemiBold" },
-  saveBtn: {
-    flexDirection: "row-reverse", alignItems: "center", justifyContent: "center",
-    gap: 10, paddingVertical: 16, borderRadius: 14, marginTop: 8,
-  },
-  saveBtnText: { color: "#fff", fontSize: 17, fontFamily: "Cairo_700Bold" },
+  payIcon: { width: 46, height: 46, borderRadius: 14, alignItems: "center", justifyContent: "center", marginBottom: 2 },
+  paymentBtnText: { fontSize: 16, fontFamily: fonts.bold },
+  payHint: { fontSize: 11, fontFamily: fonts.regular },
 
   // ── Add-client modal ──────────────────────────────────────────────────────
-  modalOverlay: {
-    ...StyleSheet.absoluteFillObject,
-    backgroundColor: "rgba(0,0,0,0.45)",
-  },
-  modalKav: {
-    position: "absolute", left: 0, right: 0, bottom: 0,
-  },
+  modalOverlay: { ...StyleSheet.absoluteFillObject },
+  modalKav: { position: "absolute", left: 0, right: 0, bottom: 0 },
   modalSheet: {
     borderTopLeftRadius: 24, borderTopRightRadius: 24,
-    borderWidth: 1, paddingHorizontal: 20, paddingTop: 12,
-    gap: 14,
+    borderWidth: 1, paddingHorizontal: 20, paddingTop: 12, gap: 14,
   },
-  modalHandle: {
-    width: 40, height: 4, borderRadius: 2,
-    alignSelf: "center", marginBottom: 4,
-  },
-  modalTitle: { fontSize: 17, fontFamily: "Cairo_700Bold", textAlign: "right" },
+  modalHandle: { width: 40, height: 4, borderRadius: 2, alignSelf: "center", marginBottom: 4 },
+  modalTitle: { fontSize: 17, fontFamily: fonts.bold, textAlign: "right" },
   modalField: { gap: 6 },
-  modalLabel: { fontSize: 12, fontFamily: "Cairo_400Regular", textAlign: "right" },
+  modalLabel: { fontSize: 12, fontFamily: fonts.regular, textAlign: "right" },
   modalInput: {
     height: 46, borderRadius: 10, borderWidth: 1,
-    paddingHorizontal: 14, fontSize: 15, fontFamily: "Cairo_400Regular",
+    paddingHorizontal: 14, fontSize: 15, fontFamily: fonts.regular,
   },
   tierRow: { flexDirection: "row-reverse", gap: 8 },
   tierBtn: {
     flex: 1, paddingVertical: 10, borderRadius: 10, borderWidth: 1,
     alignItems: "center", justifyContent: "center",
   },
-  tierBtnText: { fontSize: 13, fontFamily: "Cairo_600SemiBold" },
+  tierBtnText: { fontSize: 13, fontFamily: fonts.semibold },
   modalActions: { flexDirection: "row-reverse", gap: 10, marginTop: 4 },
-  modalCancelBtn: {
-    flex: 1, paddingVertical: 13, borderRadius: 12, borderWidth: 1,
-    alignItems: "center", justifyContent: "center",
-  },
-  modalCancelText: { fontSize: 15, fontFamily: "Cairo_600SemiBold" },
-  modalSaveBtn: {
-    flex: 2, paddingVertical: 13, borderRadius: 12,
-    alignItems: "center", justifyContent: "center",
-  },
-  modalSaveText: { color: "#fff", fontSize: 15, fontFamily: "Cairo_700Bold" },
 });

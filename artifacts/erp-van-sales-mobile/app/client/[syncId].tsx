@@ -1,304 +1,537 @@
 import { Feather } from "@expo/vector-icons";
 import { router, useLocalSearchParams } from "expo-router";
 import { useRefreshOnFocus } from "@/hooks/useRefreshOnFocus";
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
-  ActivityIndicator, ScrollView, StyleSheet, Text, TouchableOpacity, View,
+  ActivityIndicator, Animated, KeyboardAvoidingView, Linking, Modal, Platform,
+  ScrollView, StyleSheet, Text, TextInput, TouchableWithoutFeedback, View,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { AppButton, GradientHero, MoneyText, PressableScale, ResultDialog } from "@/components/ui";
+import type { DialogAction, ResultVariant } from "@/components/ui";
 import { Client, getDb } from "@/lib/db";
+import { captureLocation } from "@/lib/location";
+import { collectClientPayment } from "@/lib/txn";
+import { useAuth } from "@/contexts/AuthContext";
 import { useSync } from "@/contexts/SyncContext";
-import { useColors } from "@/hooks/useColors";
+import { formatMoney } from "@/lib/money";
+import { fonts, motion } from "@/constants/tokens";
+import { useTheme } from "@/hooks/useTheme";
 
-const TIER_LABEL: Record<string, string> = {
-  retail: "تجزئة", half_wholesale: "نصف جملة", wholesale: "جملة",
-};
+const TIER_LABEL: Record<string, string> = { retail: "تجزئة", half_wholesale: "نصف جملة", wholesale: "جملة" };
 const TIERS = ["retail", "half_wholesale", "wholesale"] as const;
-const fmt = (n: number) => Number(n ?? 0).toLocaleString("fr-DZ") + " د.ج";
+const DAY = 86_400_000;
 
-interface RecentInvoice {
-  sync_id: string; id?: number | null; total_amount?: number;
-  payment_type?: string; created_at?: string;
+type HealthKey = "new" | "healthy" | "watch" | "atrisk" | "problem";
+type Tone = "success" | "warning" | "danger" | "muted";
+
+interface RecentInvoice { sync_id: string; total_amount?: number; payment_type?: string; created_at?: string; }
+interface Staple { name: string; qty: number; inStock: boolean; missing: boolean; }
+interface Intel {
+  count: number; daysSince: number | null; cadence: number | null;
+  status: "new" | "active" | "atrisk" | "dormant";
+  creditPct: number | null; trendDecline: boolean;
+  lastInvoice: { amount: number; credit: boolean; ts: number } | null;
+  staples: Staple[];
+  debt: number; limit: number | null; headroom: number | null;
+  limitStatus: "none" | "within" | "near" | "at" | "over";
+  state: HealthKey; reasons: string[]; action: string;
 }
-interface TopProduct { product_name: string; total_qty: number; }
+
+const median = (arr: number[]) => {
+  if (!arr.length) return 0;
+  const s = [...arr].sort((a, b) => a - b);
+  const m = Math.floor(s.length / 2);
+  return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2;
+};
+
+const STATE_META: Record<HealthKey, { label: string; tone: Tone; icon: any }> = {
+  healthy: { label: "علاقة سليمة", tone: "success", icon: "check-circle" },
+  watch: { label: "تحتاج انتباه", tone: "warning", icon: "eye" },
+  atrisk: { label: "علاقة معرّضة للخطر", tone: "warning", icon: "alert-triangle" },
+  problem: { label: "علاقة حرجة", tone: "danger", icon: "alert-octagon" },
+  new: { label: "عميل جديد", tone: "muted", icon: "user-plus" },
+};
+
+const LIMIT_LABEL: Record<string, string> = { within: "ضمن الحدود", near: "قريب من السقف", at: "بلغ السقف", over: "تجاوز السقف" };
 
 export default function ClientProfileScreen() {
-  const colors = useColors();
+  const t = useTheme();
+  const c = t.color;
   const insets = useSafeAreaInsets();
+  const { user } = useAuth();
   const { triggerSync } = useSync();
   const { syncId } = useLocalSearchParams<{ syncId: string }>();
 
   const [client, setClient] = useState<Client | null>(null);
   const [loading, setLoading] = useState(true);
-  const [yearTotal, setYearTotal] = useState(0);
-  const [yearCount, setYearCount] = useState(0);
-  const [allTimeTotal, setAllTimeTotal] = useState(0);
-  const [topProducts, setTopProducts] = useState<TopProduct[]>([]);
+  const [intel, setIntel] = useState<Intel | null>(null);
   const [recent, setRecent] = useState<RecentInvoice[]>([]);
+  const [dialog, setDialog] = useState<{ visible: boolean; variant: ResultVariant; title: string; message?: string; actions?: DialogAction[] }>(
+    { visible: false, variant: "info", title: "" }
+  );
+  const hideDialog = () => setDialog((d) => ({ ...d, visible: false }));
+  const [capturingLoc, setCapturingLoc] = useState(false);
+  const [payOpen, setPayOpen] = useState(false);
+  const [payAmount, setPayAmount] = useState("");
+  const [paySubmitting, setPaySubmitting] = useState(false);
+  const fade = useRef(new Animated.Value(0)).current;
 
   const load = useCallback(async () => {
     const db = await getDb();
     if (!db) { setLoading(false); return; }
-
-    const c = await db.getFirstAsync<Client>(
-      "SELECT * FROM clients WHERE sync_id = ? AND is_deleted = 0",
-      [syncId]
-    );
-    setClient(c ?? null);
-    if (!c) { setLoading(false); return; }
+    const cl = await db.getFirstAsync<Client>("SELECT * FROM clients WHERE sync_id = ? AND is_deleted = 0", [syncId]);
+    setClient(cl ?? null);
+    if (!cl) { setLoading(false); return; }
 
     const idMatch = "(i.client_sync_id = ? OR i.client_id = ?)";
-    const params = [syncId, c.id ?? -1];
-    const yearStart = `${new Date().getFullYear()}-01-01T00:00:00.000Z`;
+    const params = [syncId, cl.id ?? -1];
 
-    const year = await db.getFirstAsync<{ total: number; cnt: number }>(
-      `SELECT COALESCE(SUM(i.total_amount),0) as total, COUNT(*) as cnt
-       FROM invoices i
-       WHERE ${idMatch} AND i.is_deleted = 0 AND i.created_at >= ?`,
-      [...params, yearStart]
-    );
-    setYearTotal(Number(year?.total ?? 0));
-    setYearCount(Number(year?.cnt ?? 0));
+    const rows = await db.getAllAsync<{ sync_id: string; total_amount: number; payment_type: string; created_at: string }>(
+      `SELECT i.sync_id, i.total_amount, i.payment_type, i.created_at FROM invoices i
+       WHERE ${idMatch} AND i.is_deleted = 0 ORDER BY i.created_at ASC`, params);
+    const inv = rows.map(r => ({ sync_id: r.sync_id, amount: Number(r.total_amount ?? 0), credit: r.payment_type === "credit", ts: Date.parse(r.created_at) })).filter(r => Number.isFinite(r.ts));
 
-    const all = await db.getFirstAsync<{ total: number }>(
-      `SELECT COALESCE(SUM(i.total_amount),0) as total
-       FROM invoices i WHERE ${idMatch} AND i.is_deleted = 0`,
-      params
-    );
-    setAllTimeTotal(Number(all?.total ?? 0));
-
-    const top = await db.getAllAsync<TopProduct>(
-      `SELECT ii.product_name as product_name, COALESCE(SUM(ii.quantity),0) as total_qty
-       FROM invoice_items ii
-       JOIN invoices i ON ii.invoice_sync_id = i.sync_id OR ii.invoice_id = i.id
+    const topRows = await db.getAllAsync<{ product_id: number | null; product_name: string; total_qty: number }>(
+      `SELECT MAX(ii.product_id) as product_id, ii.product_name as product_name, COALESCE(SUM(ii.quantity),0) as total_qty
+       FROM invoice_items ii JOIN invoices i ON (ii.invoice_sync_id = i.sync_id OR ii.invoice_id = i.id)
        WHERE ${idMatch} AND i.is_deleted = 0 AND ii.product_name IS NOT NULL
-       GROUP BY ii.product_name
-       ORDER BY total_qty DESC
-       LIMIT 5`,
-      params
-    );
-    setTopProducts(top);
+       GROUP BY ii.product_name ORDER BY total_qty DESC LIMIT 6`, params);
 
+    const lastSync = inv.length ? inv[inv.length - 1].sync_id : null;
+    const lastItemNames = new Set<string>();
+    if (lastSync) {
+      const li = await db.getAllAsync<{ product_name: string }>("SELECT DISTINCT product_name FROM invoice_items WHERE invoice_sync_id = ? AND product_name IS NOT NULL", [lastSync]);
+      li.forEach(r => lastItemNames.add(r.product_name));
+    }
+    const stockSet = new Set<number>();
+    if (user?.truckId != null) {
+      const st = await db.getAllAsync<{ product_id: number }>("SELECT product_id FROM truck_stock WHERE truck_id = ? AND quantity > 0", [user.truckId]);
+      st.forEach(r => { if (r.product_id != null) stockSet.add(r.product_id); });
+    }
     const rec = await db.getAllAsync<RecentInvoice>(
-      `SELECT i.sync_id, i.id, i.total_amount, i.payment_type, i.created_at
-       FROM invoices i
-       WHERE ${idMatch} AND i.is_deleted = 0
-       ORDER BY i.created_at DESC
-       LIMIT 10`,
-      params
-    );
+      `SELECT i.sync_id, i.total_amount, i.payment_type, i.created_at FROM invoices i
+       WHERE ${idMatch} AND i.is_deleted = 0 ORDER BY i.created_at DESC LIMIT 8`, params);
     setRecent(rec);
+
+    const now = Date.now();
+    const n = inv.length;
+    const lastTs = n ? inv[n - 1].ts : null;
+    const firstTs = n ? inv[0].ts : null;
+    const daysSince = lastTs != null ? Math.floor((now - lastTs) / DAY) : null;
+    const cadence = n >= 3 && firstTs != null && lastTs != null ? (lastTs - firstTs) / (n - 1) / DAY : null;
+
+    let status: Intel["status"];
+    if (n === 0 || daysSince == null) status = "new";
+    else if (cadence != null) status = daysSince <= cadence ? "active" : daysSince <= 2 * cadence ? "atrisk" : "dormant";
+    else status = daysSince <= 14 ? "active" : daysSince <= 30 ? "atrisk" : "dormant";
+
+    const last10 = inv.slice(-10);
+    const creditPct = last10.length >= 3 ? Math.round((last10.filter(x => x.credit).length / last10.length) * 100) : null;
+
+    let trendDecline = false;
+    if (n >= 6) {
+      const last2 = inv.slice(-2).map(x => x.amount);
+      const R = median(last2);
+      const windowVals = inv.filter(x => { const age = (now - x.ts) / DAY; return age >= 30 && age <= 120; }).map(x => x.amount);
+      const baseVals = windowVals.length >= 2 ? windowVals : inv.slice(0, -2).map(x => x.amount);
+      const B = median(baseVals);
+      if (B > 0 && R <= 0.6 * B && last2.every(v => v < 0.75 * B)) trendDecline = true;
+    }
+
+    const credit = Number(cl.credit_balance ?? 0);
+    const owes = credit < 0;
+    const debt = Math.max(0, -credit);
+    const limit = cl.credit_limit != null ? Number(cl.credit_limit) : null;
+    const headroom = limit != null ? limit - debt : null;
+    let limitStatus: Intel["limitStatus"];
+    if (limit == null) limitStatus = "none";
+    else if (headroom! < 0) limitStatus = "over";
+    else if (headroom === 0) limitStatus = "at";
+    else if (headroom! <= 0.25 * limit) limitStatus = "near";
+    else limitStatus = "within";
+
+    let state: HealthKey;
+    if (n === 0) state = "new";
+    else if (limitStatus === "over" || (status === "dormant" && owes)) state = "problem";
+    else if (status === "dormant" || limitStatus === "at" || (status === "atrisk" && owes)) state = "atrisk";
+    else if (status === "atrisk" || trendDecline || limitStatus === "near") state = "watch";
+    else state = "healthy";
+
+    const reasons: string[] = [];
+    if (status === "dormant" || status === "atrisk") reasons.push(`لم يشترِ منذ ${daysSince} يوماً${cadence != null ? ` (المعتاد كل ${Math.round(cadence)} أيام)` : ""}`);
+    if (limitStatus === "over") reasons.push("تجاوز سقف الآجل");
+    else if (limitStatus === "at") reasons.push("بلغ سقف الآجل");
+    else if (limitStatus === "near") reasons.push("اقترب من سقف الآجل");
+    if (trendDecline) reasons.push("انخفاض ملحوظ في حجم الطلبات");
+    if (state === "healthy") reasons.push(`يشتري بانتظام${cadence != null ? ` (كل ${Math.round(cadence)} أيام)` : ""}`);
+    if (state === "new") reasons.push("لا يوجد سجل شراء كافٍ بعد");
+
+    const action = { problem: "حصّل الدين أولاً — بيع نقداً فقط", atrisk: "أعد التواصل وحصّل قبل أي بيع آجل", watch: "اعرض عليه المنتجات الغائبة عن آخر طلب", healthy: "علاقة جيدة — اعرض عليه منتجاته المعتادة", new: "ابنِ العلاقة — سجّل أول طلب" }[state];
+
+    const staples: Staple[] = topRows.slice(0, 5).map(r => ({ name: r.product_name, qty: Math.round(Number(r.total_qty ?? 0)), inStock: r.product_id != null && stockSet.has(r.product_id), missing: !lastItemNames.has(r.product_name) }));
+
+    setIntel({ count: n, daysSince, cadence, status, creditPct, trendDecline, lastInvoice: n ? { amount: inv[n - 1].amount, credit: inv[n - 1].credit, ts: inv[n - 1].ts } : null, staples, debt, limit, headroom, limitStatus, state, reasons, action });
     setLoading(false);
-  }, [syncId]);
+  }, [syncId, user?.truckId]);
 
   useRefreshOnFocus(load);
+
+  // One purposeful entrance: content fades/rises in when data is ready.
+  useEffect(() => {
+    if (!loading) {
+      fade.setValue(0);
+      Animated.timing(fade, { toValue: 1, duration: motion.duration.normal, easing: motion.easing.out, useNativeDriver: true }).start();
+    }
+  }, [loading, intel, fade]);
 
   const updateTier = async (tier: string) => {
     if (!client || client.client_type === tier) return;
     const db = await getDb();
     if (!db) return;
-    await db.runAsync(
-      "UPDATE clients SET client_type = ?, _pending = 1, updated_at = ? WHERE sync_id = ?",
-      [tier, new Date().toISOString(), client.sync_id]
-    );
+    await db.runAsync("UPDATE clients SET client_type = ?, _pending = 1, updated_at = ? WHERE sync_id = ?", [tier, new Date().toISOString(), client.sync_id]);
     setClient({ ...client, client_type: tier });
     triggerSync();
   };
 
+  const askTier = (tier: string) => {
+    if (!client || (client.client_type ?? "retail") === tier) return;
+    setDialog({
+      visible: true, variant: "warning", title: "تغيير التسعيرة",
+      message: `تغيير تسعيرة هذا العميل إلى «${TIER_LABEL[tier]}»؟ سيُطبَّق على الفواتير الجديدة.`,
+      actions: [
+        { label: "تأكيد", onPress: () => updateTier(tier) },
+        { label: "إلغاء", variant: "tonal" },
+      ],
+    });
+  };
+
+  const captureClientLocation = async () => {
+    if (!client) return;
+    setCapturingLoc(true);
+    const coords = await captureLocation();
+    setCapturingLoc(false);
+    if (!coords) {
+      setDialog({ visible: true, variant: "error", title: "تعذّر تحديد الموقع", message: "تأكد من تفعيل الموقع ومنح الإذن، ثم حاول مجدداً." });
+      return;
+    }
+    const db = await getDb();
+    if (!db) return;
+    await db.runAsync("UPDATE clients SET latitude = ?, longitude = ?, _pending = 1, updated_at = ? WHERE sync_id = ?",
+      [coords.latitude, coords.longitude, new Date().toISOString(), client.sync_id]);
+    setClient({ ...client, latitude: coords.latitude, longitude: coords.longitude });
+    triggerSync();
+  };
+
+  const submitPayment = async () => {
+    if (!client) return;
+    const amount = parseFloat((payAmount ?? "").replace(",", "."));
+    if (!(amount > 0)) {
+      setDialog({ visible: true, variant: "warning", title: "تنبيه", message: "أدخل مبلغاً صحيحاً" });
+      return;
+    }
+    setPaySubmitting(true);
+    try {
+      const ok = await collectClientPayment({
+        client: { sync_id: client.sync_id, id: client.id ?? null },
+        truckId: user?.truckId ?? null,
+        amount,
+      });
+      if (!ok) { setDialog({ visible: true, variant: "error", title: "خطأ", message: "تعذّر تسجيل الدفعة" }); return; }
+      setPayOpen(false);
+      setPayAmount("");
+      triggerSync();
+      await load();
+      setDialog({ visible: true, variant: "success", title: "تم التحصيل", message: `سُجّلت دفعة ${formatMoney(amount)} وخُصمت من دين العميل.` });
+    } catch (e: any) {
+      setDialog({ visible: true, variant: "error", title: "خطأ", message: e?.message ?? "فشل التحصيل" });
+    } finally {
+      setPaySubmitting(false);
+    }
+  };
+
+  const tones = (tone: Tone) => ({
+    success: { fg: c.successText, tint: c.successTint, solid: c.success },
+    warning: { fg: c.warningText, tint: c.warningTint, solid: c.warning },
+    danger: { fg: c.dangerText, tint: c.dangerTint, solid: c.danger },
+    muted: { fg: c.textMuted, tint: c.surfaceElevated, solid: c.hairline },
+  }[tone]);
+
   const credit = Number(client?.credit_balance ?? 0);
 
   return (
-    <View style={[styles.container, { backgroundColor: colors.background, paddingTop: insets.top }]}>
-      <View style={[styles.topBar, { borderBottomColor: colors.border }]}>
-        <TouchableOpacity onPress={() => router.back()}>
-          <Feather name="arrow-right" size={22} color={colors.foreground} />
-        </TouchableOpacity>
-        <Text style={[styles.title, { color: colors.foreground }]}>ملف العميل</Text>
+    <View style={[styles.container, { backgroundColor: c.bg, paddingTop: insets.top }]}>
+      <View style={[styles.topBar, { backgroundColor: c.rail, borderBottomColor: c.hairline }]}>
+        <PressableScale onPress={() => router.back()} hitSlop={10} accessibilityLabel="رجوع">
+          <Feather name="arrow-right" size={22} color={c.text} />
+        </PressableScale>
+        <Text style={[styles.title, { color: c.text }]}>ملف العميل</Text>
         <View style={{ width: 22 }} />
       </View>
 
       {loading ? (
-        <View style={styles.center}><ActivityIndicator color={colors.primary} /></View>
+        <View style={styles.center}><ActivityIndicator color={c.brand} /></View>
       ) : !client ? (
         <View style={styles.center}>
-          <Feather name="user-x" size={40} color={colors.muted} />
-          <Text style={[styles.emptyText, { color: colors.mutedForeground }]}>العميل غير موجود</Text>
+          <Feather name="user-x" size={40} color={c.textFaint} />
+          <Text style={[styles.emptyText, { color: c.textMuted }]}>العميل غير موجود</Text>
         </View>
       ) : (
-        <ScrollView contentContainerStyle={{ padding: 16, gap: 14, paddingBottom: insets.bottom + 24 }}>
-          <View style={[styles.headerCard, { backgroundColor: colors.primary }]}>
-            <View style={styles.avatar}>
-              <Text style={styles.avatarText}>{client.name.charAt(0)}</Text>
-            </View>
-            <Text style={styles.clientName}>{client.name}</Text>
-            {client.phone ? (
-              <View style={styles.headerMeta}>
-                <View style={styles.headerBadge}>
-                  <Feather name="phone" size={11} color="#fff" />
-                  <Text style={styles.headerBadgeText}>{client.phone}</Text>
-                </View>
-              </View>
-            ) : null}
-            <View style={styles.tierEditRow}>
-              {TIERS.map(t => {
-                const active = (client.client_type ?? "retail") === t;
-                return (
-                  <TouchableOpacity
-                    key={t}
-                    style={[styles.tierEditChip, { backgroundColor: active ? "#fff" : "#ffffff2e" }]}
-                    onPress={() => updateTier(t)}
-                    activeOpacity={0.8}
-                  >
-                    <Text style={[styles.tierEditChipText, { color: active ? colors.primary : "#fff" }]}>
-                      {TIER_LABEL[t]}
-                    </Text>
-                  </TouchableOpacity>
-                );
-              })}
-            </View>
-          </View>
-
-          {credit !== 0 && (() => {
-            // Negative balance = client owes money (server convention).
-            // Positive balance = client has a credit (overpaid).
-            const isDebt = credit < 0;
-            const accentColor = isDebt ? colors.destructive : colors.success;
-            return (
-              <View style={[styles.creditCard, { backgroundColor: accentColor + "18", borderColor: accentColor + "44" }]}>
-                <Text style={[styles.creditVal, { color: accentColor }]}>{fmt(Math.abs(credit))}</Text>
-                <View style={{ alignItems: "flex-end" }}>
-                  <Text style={[styles.creditLabel, { color: colors.foreground }]}>
-                    {isDebt ? "رصيد آجل (دين)" : "رصيد دائن"}
-                  </Text>
-                  <Text style={[styles.creditSub, { color: colors.mutedForeground }]}>
-                    {isDebt ? "مستحق على العميل" : "رصيد لصالح العميل"}
-                  </Text>
-                </View>
-              </View>
-            );
-          })()}
-
-          <View style={styles.statsRow}>
-            <View style={[styles.statCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
-              <Text style={[styles.statVal, { color: colors.primary }]}>{fmt(yearTotal)}</Text>
-              <Text style={[styles.statLabel, { color: colors.mutedForeground }]}>مشتريات {new Date().getFullYear()}</Text>
-            </View>
-            <View style={[styles.statCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
-              <Text style={[styles.statVal, { color: colors.foreground }]}>{yearCount}</Text>
-              <Text style={[styles.statLabel, { color: colors.mutedForeground }]}>فواتير السنة</Text>
-            </View>
-          </View>
-          <View style={[styles.allTimeCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
-            <Text style={[styles.statVal, { color: colors.foreground }]}>{fmt(allTimeTotal)}</Text>
-            <Text style={[styles.statLabel, { color: colors.mutedForeground }]}>إجمالي المشتريات (كل الفترات)</Text>
-          </View>
-
-          {topProducts.length > 0 && (
-            <>
-              <Text style={[styles.sectionTitle, { color: colors.foreground }]}>المنتجات الأكثر شراءً</Text>
-              <View style={[styles.card, { backgroundColor: colors.card, borderColor: colors.border, padding: 0 }]}>
-                {topProducts.map((p, idx) => (
-                  <View
-                    key={p.product_name + idx}
-                    style={[styles.topRow, idx < topProducts.length - 1 && { borderBottomWidth: 1, borderBottomColor: colors.border }]}
-                  >
-                    <View style={[styles.qtyPill, { backgroundColor: colors.primary + "18" }]}>
-                      <Text style={[styles.qtyPillText, { color: colors.primary }]}>{Math.round(p.total_qty)}</Text>
+        <>
+          <Animated.ScrollView style={{ opacity: fade }} contentContainerStyle={{ paddingBottom: 24 }} showsVerticalScrollIndicator={false}>
+            {/* ── TIER 1 — VERDICT HERO (state-tinted, dominant) ── */}
+            {intel && (() => {
+              const meta = STATE_META[intel.state];
+              const tc = tones(meta.tone);
+              const owes = credit < 0;
+              const grad = meta.tone === "success" ? (["#1FA971", "#0C8F6B"] as const)
+                : meta.tone === "warning" ? (["#E8902B", "#C9781E"] as const)
+                : meta.tone === "danger" ? (["#E2483F", "#B3322B"] as const)
+                : t.gradient.brand;
+              const W = "#FFFFFF", W8 = "rgba(255,255,255,0.85)", W6 = "rgba(255,255,255,0.7)";
+              return (
+                <GradientHero colors={grad} radius={26} glow={tc.solid} style={styles.hero}>
+                  <View style={styles.heroTop}>
+                    <View style={[styles.av, { backgroundColor: "rgba(255,255,255,0.2)", borderColor: "rgba(255,255,255,0.3)" }]}>
+                      <Text style={[styles.avText, { color: W }]}>{client.name.charAt(0)}</Text>
                     </View>
-                    <Text style={[styles.topName, { color: colors.foreground }]} numberOfLines={1}>{p.product_name}</Text>
-                    <Text style={[styles.rankNum, { color: colors.mutedForeground }]}>{idx + 1}</Text>
+                    <View style={{ flex: 1, alignItems: "flex-end" }}>
+                      <Text style={[styles.heroName, { color: W }]} numberOfLines={1}>{client.name}</Text>
+                      <Text style={[styles.heroMeta, { color: W8 }]}>{TIER_LABEL[client.client_type ?? "retail"]}{client.phone ? ` · ${client.phone}` : ""}</Text>
+                    </View>
                   </View>
+
+                  <View style={styles.stateRow}>
+                    <Feather name={meta.icon} size={20} color={W} />
+                    <Text style={[styles.stateWord, { color: W }]}>{meta.label}</Text>
+                  </View>
+                  {intel.reasons.length > 0 && (
+                    <Text style={[styles.stateSub, { color: W8 }]}>{intel.reasons.join(" · ")}</Text>
+                  )}
+
+                  {/* gating money — dominant */}
+                  <View style={styles.moneyBlock}>
+                    {owes ? (
+                      <>
+                        <Text style={[styles.moneyLabel, { color: W8 }]}>مدين بـ</Text>
+                        <MoneyText amount={intel.debt} size="display" style={{ color: W }} />
+                      </>
+                    ) : credit > 0 ? (
+                      <>
+                        <Text style={[styles.moneyLabel, { color: W8 }]}>رصيد دائن</Text>
+                        <MoneyText amount={credit} absolute size="display" style={{ color: W }} />
+                      </>
+                    ) : (
+                      <Text style={[styles.moneyClear, { color: W }]}>الحساب خالص</Text>
+                    )}
+                    {intel.limit != null ? (
+                      <Text style={[styles.headroom, { color: W8 }]}>
+                        المتاح للآجل {formatMoney(Math.max(0, intel.headroom ?? 0))} — {LIMIT_LABEL[intel.limitStatus] ?? ""}
+                      </Text>
+                    ) : (
+                      <Text style={[styles.headroom, { color: W6 }]}>بدون سقف للآجل</Text>
+                    )}
+                  </View>
+
+                  {/* the move */}
+                  <View style={[styles.action, { backgroundColor: "rgba(255,255,255,0.18)", borderColor: "rgba(255,255,255,0.25)" }]}>
+                    <Feather name="zap" size={14} color={W} />
+                    <Text style={[styles.actionText, { color: W }]}>{intel.action}</Text>
+                  </View>
+                </GradientHero>
+              );
+            })()}
+
+            {/* ── TIER 2 — what to do (quiet, flowing) ── */}
+            {intel && (
+              <View style={styles.flow}>
+                {/* purchasing rhythm — one quiet line */}
+                {intel.lastInvoice && (
+                  <Text style={[styles.rhythm, { color: c.textMuted }]}>
+                    {intel.cadence != null ? `يشتري كل ~${Math.round(intel.cadence)} أيام · ` : ""}آخر فاتورة {formatMoney(intel.lastInvoice.amount)} ({intel.lastInvoice.credit ? "آجل" : "نقد"}){intel.daysSince != null ? ` قبل ${intel.daysSince} يوماً` : ""}
+                  </Text>
+                )}
+
+                {/* staples — emphasis strip, not a card */}
+                {(() => {
+                  const named = intel.staples.filter(s => s.name && s.name.trim());
+                  return (
+                    <>
+                      <Text style={[styles.flowLabel, { color: c.textFaint }]}>اعرض عليه الآن</Text>
+                      {named.length > 0 ? (
+                        <View style={styles.strip}>
+                          {named.map((s, i) => {
+                            const t2 = s.inStock ? tones("success") : s.missing ? tones("warning") : null;
+                            return (
+                              <View key={s.name + i} style={[styles.pchip, t2 ? { backgroundColor: t2.tint } : { backgroundColor: c.surface, borderWidth: 1, borderColor: c.hairline }]}>
+                                {s.inStock ? <Feather name="check" size={11} color={c.successText} /> : s.missing ? <Feather name="corner-up-left" size={11} color={c.warningText} /> : null}
+                                <Text style={[styles.pchipText, { color: t2 ? t2.fg : c.text }]}>{s.name}</Text>
+                              </View>
+                            );
+                          })}
+                        </View>
+                      ) : (
+                        <Text style={[styles.rhythm, { color: c.textFaint }]}>لا توجد بيانات شراء كافية بعد</Text>
+                      )}
+                    </>
+                  );
+                })()}
+
+                {/* tier — interactive, confirmed on change */}
+                <Text style={[styles.flowLabel, { color: c.textFaint }]}>التسعيرة · اضغط للتغيير</Text>
+                <View style={styles.tierRow}>
+                  {TIERS.map(tier => {
+                    const active = (client.client_type ?? "retail") === tier;
+                    return (
+                      <PressableScale key={tier} style={[styles.tierChip, { backgroundColor: active ? c.brand : c.surface, borderColor: active ? c.brand : c.hairline }]} onPress={() => askTier(tier)}>
+                        <Text style={[styles.tierChipText, { color: active ? c.onBrand : c.text }]}>{TIER_LABEL[tier]}</Text>
+                      </PressableScale>
+                    );
+                  })}
+                </View>
+
+                {/* location — capture/update for this client */}
+                <Text style={[styles.flowLabel, { color: c.textFaint }]}>الموقع</Text>
+                <PressableScale
+                  style={[styles.locRow, { borderColor: client.latitude != null ? c.successText : c.hairline, backgroundColor: client.latitude != null ? c.successTint : c.surface }]}
+                  onPress={captureClientLocation} disabled={capturingLoc}>
+                  <Feather name={client.latitude != null ? "check-circle" : "map-pin"} size={15} color={client.latitude != null ? c.successText : c.brand} />
+                  <Text style={[styles.locRowText, { color: client.latitude != null ? c.successText : c.brand }]}>
+                    {capturingLoc ? "جارٍ التحديد…" : client.latitude != null ? "الموقع مسجّل — اضغط للتحديث" : "أضف موقع العميل الحالي"}
+                  </Text>
+                </PressableScale>
+
+                {/* ── TIER 3 — evidence (quiet reference rows, no cards) ── */}
+                <View style={[styles.divider, { backgroundColor: c.hairline }]} />
+                {intel.creditPct != null && (
+                  <View style={styles.refRow}>
+                    <Text style={[styles.refV, { color: c.textMuted }]}>{intel.creditPct}% آجل{intel.limit != null ? ` · سقف ${formatMoney(intel.limit)}` : ""}</Text>
+                    <Text style={[styles.refK, { color: c.textFaint }]}>الآجل</Text>
+                  </View>
+                )}
+                {recent.length > 0 && <Text style={[styles.flowLabel, { color: c.textFaint, marginTop: 6 }]}>آخر الفواتير</Text>}
+                {recent.map((inv, i) => (
+                  <PressableScale key={inv.sync_id} onPress={() => router.push(`/invoice/${inv.sync_id}`)} style={[styles.refRow, { borderTopWidth: i === 0 ? 0 : 1, borderTopColor: c.hairline }]}>
+                    <View style={{ flexDirection: "row-reverse", alignItems: "center", gap: 6 }}>
+                      <MoneyText amount={inv.total_amount ?? 0} size="footnote" />
+                      <Text style={[styles.refK, { color: c.textFaint }]}>· {inv.payment_type === "credit" ? "آجل" : "نقد"}</Text>
+                    </View>
+                    <Text style={[styles.refK, { color: c.textMuted }]}>{inv.created_at ? new Date(inv.created_at).toLocaleDateString("ar-DZ") : "—"}</Text>
+                  </PressableScale>
                 ))}
               </View>
-            </>
-          )}
+            )}
+          </Animated.ScrollView>
 
-          <Text style={[styles.sectionTitle, { color: colors.foreground }]}>آخر الفواتير</Text>
-          {recent.length === 0 ? (
-            <View style={[styles.card, { backgroundColor: colors.card, borderColor: colors.border, alignItems: "center", paddingVertical: 24 }]}>
-              <Feather name="file-text" size={32} color={colors.muted} />
-              <Text style={[styles.emptyText, { color: colors.mutedForeground, marginTop: 8 }]}>لا توجد فواتير</Text>
-            </View>
-          ) : (
-            <View style={[styles.card, { backgroundColor: colors.card, borderColor: colors.border, padding: 0 }]}>
-              {recent.map((inv, idx) => {
-                const isCredit = inv.payment_type === "credit";
-                return (
-                  <TouchableOpacity
-                    key={inv.sync_id}
-                    style={[styles.invRow, idx < recent.length - 1 && { borderBottomWidth: 1, borderBottomColor: colors.border }]}
-                    onPress={() => router.push(`/invoice/${inv.sync_id}`)}
-                    activeOpacity={0.7}
-                  >
-                    <Feather name="chevron-left" size={18} color={colors.mutedForeground} />
-                    <View style={{ flex: 1, alignItems: "flex-end" }}>
-                      <Text style={[styles.invAmount, { color: colors.foreground }]}>{fmt(inv.total_amount ?? 0)}</Text>
-                      <Text style={[styles.invDate, { color: colors.mutedForeground }]}>
-                        {inv.created_at ? new Date(inv.created_at).toLocaleDateString("ar-DZ") : "—"}
-                        {"  •  "}{isCredit ? "آجل" : "نقد"}
-                      </Text>
-                    </View>
-                  </TouchableOpacity>
-                );
-              })}
-            </View>
-          )}
-        </ScrollView>
+          {/* sticky action bar */}
+          <View style={[styles.actionbar, { backgroundColor: c.rail, borderTopColor: c.hairline, paddingBottom: insets.bottom + 12 }]}>
+            <PressableScale style={[styles.cta, { backgroundColor: c.brand, ...t.elevation.glow }]} haptic onPress={() => router.push({ pathname: "/invoice/new", params: { clientSyncId: client.sync_id } })}>
+              <Feather name="plus" size={18} color={c.onBrand} />
+              <Text style={[styles.ctaText, { color: c.onBrand }]}>بيع جديد</Text>
+            </PressableScale>
+            {Number(client.credit_balance ?? 0) < 0 ? (
+              <PressableScale style={[styles.icb, { backgroundColor: c.successTint, borderColor: c.successText }]} accessibilityLabel="تحصيل دفعة" onPress={() => { setPayAmount(""); setPayOpen(true); }}>
+                <Feather name="dollar-sign" size={18} color={c.successText} />
+              </PressableScale>
+            ) : null}
+            {client.phone ? (
+              <PressableScale style={[styles.icb, { backgroundColor: c.surface, borderColor: c.hairline }]} accessibilityLabel="اتصال" onPress={() => Linking.openURL(`tel:${client.phone}`)}>
+                <Feather name="phone" size={18} color={c.brandText} />
+              </PressableScale>
+            ) : null}
+          </View>
+        </>
       )}
+
+      {/* تحصيل دفعة sheet */}
+      <Modal visible={payOpen} transparent animationType="slide" statusBarTranslucent onRequestClose={() => setPayOpen(false)}>
+        <TouchableWithoutFeedback onPress={() => setPayOpen(false)}>
+          <View style={[styles.payOverlay, { backgroundColor: c.scrim }]} />
+        </TouchableWithoutFeedback>
+        <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : "height"} style={styles.paySheetWrap}>
+          <View style={[styles.paySheet, { backgroundColor: c.surface, borderColor: c.hairline, paddingBottom: insets.bottom + 16 }]}>
+            <View style={[styles.payHandle, { backgroundColor: c.hairline }]} />
+            <Text style={[styles.payTitle, { color: c.text }]}>تحصيل دفعة</Text>
+            {client ? (
+              <Text style={[styles.payHint, { color: c.textMuted }]}>
+                {client.name} — الدين الحالي {formatMoney(Math.max(0, -Number(client.credit_balance ?? 0)))}
+              </Text>
+            ) : null}
+            <TextInput
+              style={[styles.payInput, { color: c.text, backgroundColor: c.bg, borderColor: c.hairline }]}
+              value={payAmount}
+              onChangeText={setPayAmount}
+              keyboardType="decimal-pad"
+              textAlign="center"
+              placeholder="0.00"
+              placeholderTextColor={c.textFaint}
+              autoFocus
+            />
+            <View style={styles.payActions}>
+              <AppButton label="إلغاء" variant="tonal" size="lg" onPress={() => setPayOpen(false)} style={{ flex: 1 }} />
+              <AppButton label="تحصيل" variant="primary" size="lg" icon="check" loading={paySubmitting} onPress={submitPayment} style={{ flex: 2 }} />
+            </View>
+          </View>
+        </KeyboardAvoidingView>
+      </Modal>
+
+      <ResultDialog visible={dialog.visible} variant={dialog.variant} title={dialog.title} message={dialog.message} actions={dialog.actions} onRequestClose={hideDialog} />
     </View>
   );
 }
 
 const styles = StyleSheet.create({
   container: { flex: 1 },
-  topBar: {
-    flexDirection: "row-reverse", alignItems: "center", justifyContent: "space-between",
-    paddingHorizontal: 16, paddingVertical: 12, borderBottomWidth: 1,
-  },
-  title: { fontSize: 17, fontFamily: "Cairo_700Bold" },
+  topBar: { flexDirection: "row-reverse", alignItems: "center", justifyContent: "space-between", paddingHorizontal: 16, paddingVertical: 12, borderBottomWidth: 1 },
+  title: { fontSize: 17, fontFamily: fonts.bold },
   center: { flex: 1, alignItems: "center", justifyContent: "center", gap: 12 },
-  emptyText: { fontSize: 14, fontFamily: "Cairo_400Regular" },
+  emptyText: { fontSize: 14, fontFamily: fonts.regular },
 
-  headerCard: { borderRadius: 16, padding: 18, alignItems: "center", gap: 8 },
-  avatar: {
-    width: 64, height: 64, borderRadius: 32, backgroundColor: "#ffffff33",
-    alignItems: "center", justifyContent: "center",
-  },
-  avatarText: { color: "#fff", fontSize: 28, fontFamily: "Cairo_700Bold" },
-  clientName: { color: "#fff", fontSize: 20, fontFamily: "Cairo_700Bold" },
-  headerMeta: { flexDirection: "row-reverse", gap: 8, flexWrap: "wrap", justifyContent: "center" },
-  headerBadge: {
-    flexDirection: "row-reverse", alignItems: "center", gap: 4,
-    backgroundColor: "#ffffff2e", paddingHorizontal: 10, paddingVertical: 4, borderRadius: 10,
-  },
-  headerBadgeText: { color: "#fff", fontSize: 12, fontFamily: "Cairo_600SemiBold" },
-  tierEditRow: { flexDirection: "row-reverse", gap: 6, marginTop: 4 },
-  tierEditChip: { paddingHorizontal: 12, paddingVertical: 5, borderRadius: 10 },
-  tierEditChipText: { fontSize: 12, fontFamily: "Cairo_600SemiBold" },
+  // Hero
+  hero: { margin: 16, marginBottom: 8, padding: 20 },
+  heroTop: { flexDirection: "row-reverse", alignItems: "center", gap: 11 },
+  av: { width: 42, height: 42, borderRadius: 12, borderWidth: 1, alignItems: "center", justifyContent: "center" },
+  avText: { fontSize: 18, fontFamily: fonts.bold },
+  heroName: { fontSize: 17, fontFamily: fonts.bold, textAlign: "right" },
+  heroMeta: { fontSize: 12, fontFamily: fonts.regular, textAlign: "right", marginTop: 2 },
+  stateRow: { flexDirection: "row-reverse", alignItems: "center", gap: 8, marginTop: 16 },
+  stateWord: { fontSize: 22, fontFamily: fonts.bold },
+  stateSub: { fontSize: 12, fontFamily: fonts.regular, textAlign: "right", marginTop: 6, lineHeight: 19 },
+  moneyBlock: { alignItems: "flex-end", marginTop: 16 },
+  moneyLabel: { fontSize: 11, fontFamily: fonts.semibold, marginBottom: 1 },
+  moneyClear: { fontSize: 20, fontFamily: fonts.bold },
+  headroom: { fontSize: 12, fontFamily: fonts.semibold, marginTop: 7 },
+  action: { flexDirection: "row-reverse", alignItems: "center", gap: 7, borderRadius: 11, borderWidth: 1, paddingHorizontal: 12, paddingVertical: 10, marginTop: 14 },
+  actionText: { flex: 1, fontSize: 13, fontFamily: fonts.bold, textAlign: "right" },
 
-  creditCard: {
-    flexDirection: "row-reverse", alignItems: "center", justifyContent: "space-between",
-    borderRadius: 14, borderWidth: 1, padding: 14,
-  },
-  creditVal: { fontSize: 22, fontFamily: "Cairo_700Bold" },
-  creditLabel: { fontSize: 14, fontFamily: "Cairo_700Bold" },
-  creditSub: { fontSize: 11, fontFamily: "Cairo_400Regular" },
+  // Flow (tier 2 + 3)
+  flow: { paddingHorizontal: 14, paddingTop: 12 },
+  rhythm: { fontSize: 12, fontFamily: fonts.regular, textAlign: "right", lineHeight: 20 },
+  flowLabel: { fontSize: 9.5, fontFamily: fonts.semibold, letterSpacing: 0.6, textAlign: "right", marginTop: 14, marginBottom: 8 },
+  strip: { flexDirection: "row-reverse", flexWrap: "wrap", gap: 7 },
+  pchip: { flexDirection: "row-reverse", alignItems: "center", gap: 5, borderRadius: 9, paddingHorizontal: 10, paddingVertical: 6 },
+  pchipText: { fontSize: 11, fontFamily: fonts.semibold },
+  tierRow: { flexDirection: "row-reverse", gap: 6, marginTop: 16 },
+  locRow: { flexDirection: "row-reverse", alignItems: "center", justifyContent: "center", gap: 8, paddingVertical: 12, borderRadius: 12, borderWidth: 1, marginTop: 8 },
+  locRowText: { fontSize: 13, fontFamily: fonts.bold },
+  tierChip: { paddingHorizontal: 12, paddingVertical: 5, borderRadius: 9, borderWidth: 1 },
+  tierChipText: { fontSize: 11, fontFamily: fonts.semibold },
+  divider: { height: 1, marginTop: 16 },
+  refRow: { flexDirection: "row-reverse", alignItems: "center", justifyContent: "space-between", paddingVertical: 9 },
+  refK: { fontSize: 11, fontFamily: fonts.regular },
+  refV: { fontSize: 12, fontFamily: fonts.semibold },
 
-  statsRow: { flexDirection: "row-reverse", gap: 10 },
-  statCard: { flex: 1, borderRadius: 14, borderWidth: 1, padding: 14, alignItems: "center", gap: 4 },
-  allTimeCard: { borderRadius: 14, borderWidth: 1, padding: 14, alignItems: "center", gap: 4 },
-  statVal: { fontSize: 18, fontFamily: "Cairo_700Bold" },
-  statLabel: { fontSize: 12, fontFamily: "Cairo_400Regular" },
-
-  sectionTitle: { fontSize: 15, fontFamily: "Cairo_700Bold", textAlign: "right" },
-  card: { borderRadius: 14, borderWidth: 1, padding: 14 },
-  topRow: { flexDirection: "row-reverse", alignItems: "center", gap: 10, padding: 14 },
-  qtyPill: { paddingHorizontal: 10, paddingVertical: 4, borderRadius: 8, minWidth: 40, alignItems: "center" },
-  qtyPillText: { fontSize: 14, fontFamily: "Cairo_700Bold" },
-  topName: { flex: 1, fontSize: 14, fontFamily: "Cairo_600SemiBold", textAlign: "right" },
-  rankNum: { fontSize: 13, fontFamily: "Cairo_700Bold", width: 18, textAlign: "center" },
-
-  invRow: { flexDirection: "row-reverse", alignItems: "center", gap: 10, padding: 14 },
-  invAmount: { fontSize: 15, fontFamily: "Cairo_700Bold" },
-  invDate: { fontSize: 12, fontFamily: "Cairo_400Regular", marginTop: 2 },
+  // Action bar
+  actionbar: { flexDirection: "row-reverse", alignItems: "center", gap: 10, paddingHorizontal: 14, paddingTop: 12, borderTopWidth: 1 },
+  cta: { flex: 1, flexDirection: "row-reverse", alignItems: "center", justifyContent: "center", gap: 8, height: 50, borderRadius: 14 },
+  ctaText: { fontSize: 16, fontFamily: fonts.bold },
+  icb: { width: 50, height: 50, borderRadius: 14, borderWidth: 1, alignItems: "center", justifyContent: "center" },
+  payOverlay: { ...StyleSheet.absoluteFillObject },
+  paySheetWrap: { position: "absolute", left: 0, right: 0, bottom: 0 },
+  paySheet: { borderTopLeftRadius: 22, borderTopRightRadius: 22, borderWidth: 1, borderBottomWidth: 0, padding: 16, gap: 12 },
+  payHandle: { width: 40, height: 4, borderRadius: 2, alignSelf: "center", marginBottom: 2 },
+  payTitle: { fontSize: 18, fontFamily: fonts.bold, textAlign: "right" },
+  payHint: { fontSize: 12, fontFamily: fonts.regular, textAlign: "right" },
+  payInput: { height: 56, borderRadius: 12, borderWidth: 1, fontSize: 22, fontFamily: fonts.bold },
+  payActions: { flexDirection: "row-reverse", gap: 10, marginTop: 2 },
 });

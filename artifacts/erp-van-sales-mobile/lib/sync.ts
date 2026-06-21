@@ -8,7 +8,7 @@ const PULL_TABLES = [
   "branches", "categories", "products", "suppliers", "clients", "trucks", "users",
   "truck_stock", "purchases", "purchase_items",
   "invoices", "invoice_items", "returns", "return_items",
-  "cash_transfers", "stock_transfers", "stock_transfer_items",
+  "cash_transfers", "client_payments", "stock_transfers", "stock_transfer_items",
 ];
 // Tables the mobile device can create/modify and push back to the cloud.
 // Read-only on mobile (admin-only): users, suppliers, purchases, purchase_items, truck_stock.
@@ -16,7 +16,7 @@ const PUSH_TABLES = [
   "categories", "products", "clients",
   "invoices", "invoice_items",
   "returns", "return_items",
-  "cash_transfers",
+  "cash_transfers", "client_payments",
   "stock_transfers", "stock_transfer_items",
 ];
 

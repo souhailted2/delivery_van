@@ -43,7 +43,7 @@ function pair(label: string, value: string) {
 }
 
 function formatDZD(amount: number) {
-  return amount.toLocaleString("fr-DZ", { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + " دج";
+  return amount.toLocaleString("fr-DZ", { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + " DZD";
 }
 
 function formatDate(iso: string) {

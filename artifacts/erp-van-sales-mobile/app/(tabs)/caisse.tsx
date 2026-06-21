@@ -1,25 +1,31 @@
 import { Feather } from "@expo/vector-icons";
 import { useRefreshOnFocus } from "@/hooks/useRefreshOnFocus";
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import {
-  Alert, FlatList, Modal, RefreshControl, ScrollView, StyleSheet, Text,
-  TextInput, TouchableOpacity, View,
+  FlatList, KeyboardAvoidingView, Modal, Platform, RefreshControl,
+  ScrollView, StyleSheet, Text, TextInput, TouchableWithoutFeedback, View,
 } from "react-native";
-import { SyncBar } from "@/components/SyncBar";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { AppButton, GradientHero, MoneyText, PressableScale, ResultDialog, StatusPill } from "@/components/ui";
+import type { DialogAction, ResultVariant } from "@/components/ui";
 import { useAuth } from "@/contexts/AuthContext";
 import { useSync } from "@/contexts/SyncContext";
 import { CashTransfer, getDb } from "@/lib/db";
+import { formatMoney } from "@/lib/money";
 import { newSyncId } from "@/lib/uuid";
-import { useColors } from "@/hooks/useColors";
+import { fonts } from "@/constants/tokens";
+import { useTheme } from "@/hooks/useTheme";
 
 interface CashRow extends CashTransfer { truck_name?: string; }
 interface TruckRow { id: number; name: string; cash_balance: number; }
 
 export default function CaisseScreen() {
-  const colors = useColors();
+  const t = useTheme();
+  const c = t.color;
+  const insets = useSafeAreaInsets();
   const { user } = useAuth();
   const isTruck = user?.role === "truck";
-  const { triggerSync, bumpLocalVersion } = useSync();
+  const { triggerSync, bumpLocalVersion, lastSync } = useSync();
   const [transfers, setTransfers] = useState<CashRow[]>([]);
   const [trucks, setTrucks] = useState<TruckRow[]>([]);
   const [pendingCash, setPendingCash] = useState(0);
@@ -30,6 +36,13 @@ export default function CaisseScreen() {
   const [formDirection, setFormDirection] = useState<"in" | "out">("in");
   const [formNote, setFormNote] = useState("");
   const [saving, setSaving] = useState(false);
+
+  const [dialog, setDialog] = useState<{ visible: boolean; variant: ResultVariant; title: string; message?: string; actions?: DialogAction[] }>(
+    { visible: false, variant: "info", title: "" }
+  );
+  const showDialog = (variant: ResultVariant, title: string, message?: string, actions?: DialogAction[]) =>
+    setDialog({ visible: true, variant, title, message, actions });
+  const hideDialog = () => setDialog((d) => ({ ...d, visible: false }));
 
   const load = useCallback(async () => {
     const db = await getDb();
@@ -63,7 +76,10 @@ export default function CaisseScreen() {
     }
   }, [isTruck, user?.truckId]);
 
-  useRefreshOnFocus(load);
+  // On open, pull the latest so approved deliveries clear; re-query whenever a
+  // sync completes so the status (قيد الانتظار → مؤكّد) updates without leaving.
+  useRefreshOnFocus(() => { triggerSync(); load(); });
+  useEffect(() => { load(); }, [lastSync, load]);
 
   const myTruck = isTruck ? trucks.find(t => t.id === user?.truckId) ?? trucks[0] : undefined;
 
@@ -82,14 +98,14 @@ export default function CaisseScreen() {
 
   const handleSave = async () => {
     const truckId = isTruck && user?.truckId ? String(user.truckId) : formTruckId;
-    if (!truckId) { Alert.alert("تنبيه", "اختر الشاحنة"); return; }
+    if (!truckId) { showDialog("warning", "تنبيه", "اختر الشاحنة"); return; }
     const amount = parseFloat(formAmount);
-    if (!amount || amount <= 0) { Alert.alert("تنبيه", "أدخل مبلغاً صحيحاً"); return; }
+    if (!amount || amount <= 0) { showDialog("warning", "تنبيه", "أدخل مبلغاً صحيحاً"); return; }
     // Truck users: block if amount exceeds the cash actually on hand.
     // cashOnHand subtracts already-pending deliveries from the balance, so the
     // driver can't queue more than they physically hold.
     if (isTruck && amount > cashOnHand) {
-      Alert.alert("تنبيه", `المبلغ يتجاوز رصيد الصندوق (${Math.max(0, cashOnHand).toLocaleString("fr-DZ")} د.ج)`);
+      showDialog("warning", "تنبيه", `المبلغ يتجاوز رصيد الصندوق (${formatMoney(Math.max(0, cashOnHand))})`);
       return;
     }
     setSaving(true);
@@ -111,10 +127,10 @@ export default function CaisseScreen() {
       triggerSync();
       load();
       if (isTruck) {
-        Alert.alert("✅ تم الإرسال", "تم إرسال طلب تسليم الدفعة للإدارة. سيُخصم المبلغ بعد الموافقة.");
+        showDialog("success", "تم الإرسال", "تم إرسال طلب تسليم الدفعة للإدارة. سيُخصم المبلغ بعد الموافقة.");
       }
     } catch (e: any) {
-      Alert.alert("خطأ", e?.message ?? "فشل الحفظ");
+      showDialog("error", "خطأ", e?.message ?? "فشل الحفظ");
     } finally {
       setSaving(false);
     }
@@ -131,46 +147,29 @@ export default function CaisseScreen() {
   // When trucks table row is missing, fall back to summing pending cash invoices directly.
   const baseBalance = myTruck ? Number(myTruck.cash_balance ?? 0) : pendingCash;
   const cashOnHand = baseBalance - pendingOut;
-  const fmt = (n: number) => n.toLocaleString("fr-DZ") + " د.ج";
 
   return (
-    <View style={[styles.container, { backgroundColor: colors.background }]}>
-      <SyncBar />
-
-      <View style={[styles.summary, { backgroundColor: colors.primary }]}>
-        {isTruck ? (
-          <>
-            <View style={styles.summaryItem}>
-              <Text style={styles.summaryVal}>{fmt(Math.max(0, cashOnHand))}</Text>
-              <Text style={styles.summaryLabel}>نقداً في الصندوق</Text>
-            </View>
-            <View style={styles.summaryDivider} />
-            <View style={styles.summaryItem}>
-              <Text style={[styles.summaryVal, pendingOut > 0 && { color: "#fde68a" }]}>{fmt(pendingOut)}</Text>
-              <Text style={styles.summaryLabel}>بانتظار التأكيد</Text>
-            </View>
-          </>
-        ) : (
-          <>
-            <View style={styles.summaryItem}>
-              <Text style={styles.summaryVal}>{fmt(totalIn)}</Text>
-              <Text style={styles.summaryLabel}>إجمالي التحصيل</Text>
-            </View>
-            <View style={styles.summaryDivider} />
-            <View style={styles.summaryItem}>
-              <Text style={styles.summaryVal}>{fmt(totalOut)}</Text>
-              <Text style={styles.summaryLabel}>إجمالي الصرف</Text>
-            </View>
-          </>
-        )}
+    <View style={[styles.container, { backgroundColor: c.bg, paddingTop: insets.top + 8 }]}>
+      <View style={styles.topBar}>
+        <Text style={[styles.pageTitle, { color: c.text }]}>الصندوق</Text>
       </View>
 
-      <View style={[styles.topBar, { borderBottomColor: colors.border }]}>
-        <TouchableOpacity style={[styles.addBtn, { backgroundColor: colors.primary }]} onPress={openModal}>
-          <Feather name={isTruck ? "send" : "plus"} size={16} color="#fff" />
-          <Text style={styles.addBtnText}>{isTruck ? "تسليم دفعة" : "حركة جديدة"}</Text>
-        </TouchableOpacity>
-        <Text style={[styles.pageTitle, { color: colors.foreground }]}>{isTruck ? "صندوقي" : "الصندوق"}</Text>
+      <GradientHero colors={t.gradient.success} radius={26} glow="#1FA971" style={styles.heroCard}>
+        <View style={styles.heroTwo}>
+          <View style={styles.heroCol}>
+            <Text style={styles.heroLbl}>نقداً بحوزتك</Text>
+            <MoneyText amount={Math.max(0, cashOnHand)} size="title" style={{ color: "#fff" }} />
+          </View>
+          <View style={styles.heroDiv} />
+          <View style={styles.heroCol}>
+            <Text style={styles.heroLbl}>قيد التسليم للإدارة</Text>
+            <MoneyText amount={pendingOut} size="title" style={{ color: "rgba(255,255,255,0.92)" }} />
+          </View>
+        </View>
+      </GradientHero>
+
+      <View style={styles.actionRow}>
+        <AppButton label={isTruck ? "تسليم دفعة للإدارة" : "حركة جديدة"} icon={isTruck ? "send" : "plus"} size="lg" fullWidth onPress={openModal} />
       </View>
 
       <FlatList
@@ -178,174 +177,169 @@ export default function CaisseScreen() {
         keyExtractor={i => i.sync_id}
         renderItem={({ item }) => {
           const isIn = item.direction === "in";
+          const st = item.status ?? "pending";
+          const pillStatus = st === "approved" ? "approved" : st === "rejected" ? "rejected" : "pending";
+          // direction "in" = truck → office: cash LEAVES the truck → show as "−" red.
           return (
-            <View style={[styles.card, { backgroundColor: colors.card, borderColor: colors.border }]}>
+            <View style={[styles.card, { backgroundColor: c.surface, borderColor: c.hairline }]}>
               <View style={styles.cardRow}>
-                <View style={[styles.avatar, { backgroundColor: (isIn ? "#22c55e" : colors.destructive) + "22" }]}>
-                  <Feather name={isIn ? "arrow-down-circle" : "arrow-up-circle"} size={18} color={isIn ? "#22c55e" : colors.destructive} />
+                <View style={[styles.avatar, { backgroundColor: isIn ? c.dangerTint : c.successTint }]}>
+                  <Feather name={isIn ? "arrow-up-circle" : "arrow-down-circle"} size={18} color={isIn ? c.danger : c.success} />
                 </View>
                 <View style={{ flex: 1, alignItems: "flex-end" }}>
-                  <Text style={[styles.truckName, { color: colors.foreground }]}>{item.truck_name ?? "—"}</Text>
-                  {item.note ? <Text style={[styles.note, { color: colors.mutedForeground }]}>{item.note}</Text> : null}
+                  <Text style={[styles.truckName, { color: c.text }]}>{isIn ? "تسليم للإدارة" : "استلام من الإدارة"}</Text>
+                  {item.note ? <Text style={[styles.note, { color: c.textMuted }]}>{item.note}</Text> : null}
                   <View style={styles.statusDateRow}>
-                    {(() => {
-                      const st = item.status ?? "pending";
-                      const cfg = st === "approved"
-                        ? { label: "مقبول", color: "#059669", bg: "#d1fae5" }
-                        : st === "rejected"
-                        ? { label: "مرفوض", color: colors.destructive, bg: colors.destructive + "22" }
-                        : { label: "قيد الانتظار", color: "#d97706", bg: "#fef3c7" };
-                      return (
-                        <View style={[styles.statusPill, { backgroundColor: cfg.bg }]}>
-                          <Text style={[styles.statusPillText, { color: cfg.color }]}>{cfg.label}</Text>
-                        </View>
-                      );
-                    })()}
-                    <Text style={[styles.date, { color: colors.mutedForeground }]}>
+                    <StatusPill status={pillStatus} />
+                    <Text style={[styles.date, { color: c.textMuted }]}>
                       {item.created_at ? new Date(item.created_at).toLocaleDateString("ar-DZ") : ""}
                     </Text>
                   </View>
                 </View>
-                <Text style={[styles.amount, { color: isIn ? "#22c55e" : colors.destructive }]}>
-                  {isIn ? "+" : "-"}{fmt(Number(item.amount ?? 0))}
-                </Text>
+                <MoneyText amount={isIn ? -Number(item.amount ?? 0) : Number(item.amount ?? 0)} tone={isIn ? "negative" : "positive"} size="callout" />
               </View>
             </View>
           );
         }}
         contentContainerStyle={styles.list}
-        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary} />}
+        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={c.brand} />}
         ListEmptyComponent={
           <View style={styles.empty}>
-            <Feather name="dollar-sign" size={40} color={colors.muted} />
-            <Text style={[styles.emptyText, { color: colors.mutedForeground }]}>لا توجد حركات مالية</Text>
+            <Feather name="dollar-sign" size={40} color={c.textFaint} />
+            <Text style={[styles.emptyText, { color: c.textMuted }]}>لا توجد حركات مالية</Text>
           </View>
         }
         showsVerticalScrollIndicator={false}
       />
 
-      <Modal visible={showModal} animationType="slide" transparent onRequestClose={() => setShowModal(false)}>
-        <View style={styles.overlay}>
-          <View style={[styles.sheet, { backgroundColor: colors.background, borderColor: colors.border }]}>
-            <View style={[styles.sheetHeader, { borderBottomColor: colors.border }]}>
-              <TouchableOpacity onPress={() => setShowModal(false)}>
-                <Feather name="x" size={22} color={colors.foreground} />
-              </TouchableOpacity>
-              <Text style={[styles.sheetTitle, { color: colors.foreground }]}>{isTruck ? "تسليم دفعة للإدارة" : "حركة جديدة"}</Text>
-              <TouchableOpacity
-                style={[styles.saveBtn, { backgroundColor: saving ? colors.muted : colors.primary }]}
-                onPress={handleSave} disabled={saving}
-              >
-                <Text style={styles.saveBtnText}>{saving ? "جاري..." : "حفظ"}</Text>
-              </TouchableOpacity>
+      <Modal visible={showModal} animationType="slide" transparent statusBarTranslucent onRequestClose={() => setShowModal(false)}>
+        <TouchableWithoutFeedback onPress={() => setShowModal(false)}>
+          <View style={[styles.overlay, { backgroundColor: c.scrim }]} />
+        </TouchableWithoutFeedback>
+        <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : "height"} style={styles.sheetWrap}>
+          <View style={[styles.sheet, { backgroundColor: c.surface, borderColor: c.hairline }]}>
+            <View style={[styles.sheetHeader, { borderBottomColor: c.hairline }]}>
+              <PressableScale onPress={() => setShowModal(false)} hitSlop={10} accessibilityLabel="إغلاق">
+                <Feather name="x" size={22} color={c.text} />
+              </PressableScale>
+              <Text style={[styles.sheetTitle, { color: c.text }]}>{isTruck ? "تسليم دفعة للإدارة" : "حركة جديدة"}</Text>
+              <AppButton label={saving ? "جاري..." : "حفظ"} size="sm" loading={saving} onPress={handleSave} />
             </View>
             <ScrollView style={{ padding: 16 }} keyboardShouldPersistTaps="handled">
               {isTruck ? (
-                <View style={[styles.truckNote, { backgroundColor: colors.primary + "12", borderColor: colors.primary + "33" }]}>
-                  <Feather name="truck" size={16} color={colors.primary} />
-                  <Text style={[styles.truckNoteText, { color: colors.foreground }]}>
+                <View style={[styles.truckNote, { backgroundColor: c.brandTint, borderColor: c.brandBorder }]}>
+                  <Feather name="truck" size={16} color={c.brandText} />
+                  <Text style={[styles.truckNoteText, { color: c.text }]}>
                     {myTruck?.name ?? "شاحنتي"} — تسليم مبلغ نقدي للإدارة (يُخصم من رصيد صندوقك)
                   </Text>
                 </View>
               ) : (
                 <>
-                  <Text style={[styles.fieldLabel, { color: colors.mutedForeground }]}>الشاحنة</Text>
+                  <Text style={[styles.fieldLabel, { color: c.textMuted }]}>الشاحنة</Text>
                   <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.chips}>
-                    {trucks.map(t => (
-                      <TouchableOpacity
-                        key={t.id}
+                    {trucks.map(tr => (
+                      <PressableScale
+                        key={tr.id}
                         style={[styles.chip, {
-                          backgroundColor: formTruckId === String(t.id) ? colors.primary : colors.card,
-                          borderColor: formTruckId === String(t.id) ? colors.primary : colors.border,
+                          backgroundColor: formTruckId === String(tr.id) ? c.brand : c.surfaceElevated,
+                          borderColor: formTruckId === String(tr.id) ? c.brand : c.hairline,
                         }]}
-                        onPress={() => setFormTruckId(String(t.id))}
+                        onPress={() => setFormTruckId(String(tr.id))}
                       >
-                        <Text style={[styles.chipText, { color: formTruckId === String(t.id) ? "#fff" : colors.foreground }]}>
-                          {t.name}
+                        <Text style={[styles.chipText, { color: formTruckId === String(tr.id) ? c.onBrand : c.text }]}>
+                          {tr.name}
                         </Text>
-                      </TouchableOpacity>
+                      </PressableScale>
                     ))}
                   </ScrollView>
-                  <Text style={[styles.fieldLabel, { color: colors.mutedForeground, marginTop: 14 }]}>نوع الحركة</Text>
+                  <Text style={[styles.fieldLabel, { color: c.textMuted, marginTop: 14 }]}>نوع الحركة</Text>
                   <View style={styles.directionRow}>
-                    <TouchableOpacity
-                      style={[styles.dirBtn, { backgroundColor: formDirection === "in" ? "#22c55e" : colors.card, borderColor: colors.border }]}
+                    <PressableScale
+                      style={[styles.dirBtn, { backgroundColor: formDirection === "in" ? c.success : c.surfaceElevated, borderColor: formDirection === "in" ? c.success : c.hairline }]}
                       onPress={() => setFormDirection("in")}
                     >
-                      <Feather name="arrow-down-circle" size={16} color={formDirection === "in" ? "#fff" : colors.foreground} />
-                      <Text style={[styles.dirBtnText, { color: formDirection === "in" ? "#fff" : colors.foreground }]}>تحصيل من شاحنة</Text>
-                    </TouchableOpacity>
-                    <TouchableOpacity
-                      style={[styles.dirBtn, { backgroundColor: formDirection === "out" ? colors.destructive : colors.card, borderColor: colors.border }]}
+                      <Feather name="arrow-down-circle" size={16} color={formDirection === "in" ? c.onColor : c.text} />
+                      <Text style={[styles.dirBtnText, { color: formDirection === "in" ? c.onColor : c.text }]}>تحصيل من شاحنة</Text>
+                    </PressableScale>
+                    <PressableScale
+                      style={[styles.dirBtn, { backgroundColor: formDirection === "out" ? c.danger : c.surfaceElevated, borderColor: formDirection === "out" ? c.danger : c.hairline }]}
                       onPress={() => setFormDirection("out")}
                     >
-                      <Feather name="arrow-up-circle" size={16} color={formDirection === "out" ? "#fff" : colors.foreground} />
-                      <Text style={[styles.dirBtnText, { color: formDirection === "out" ? "#fff" : colors.foreground }]}>صرف للشاحنة</Text>
-                    </TouchableOpacity>
+                      <Feather name="arrow-up-circle" size={16} color={formDirection === "out" ? c.onColor : c.text} />
+                      <Text style={[styles.dirBtnText, { color: formDirection === "out" ? c.onColor : c.text }]}>صرف للشاحنة</Text>
+                    </PressableScale>
                   </View>
                 </>
               )}
-              <Text style={[styles.fieldLabel, { color: colors.mutedForeground, marginTop: 14 }]}>المبلغ (د.ج) *</Text>
+              <Text style={[styles.fieldLabel, { color: c.textMuted, marginTop: 14 }]}>المبلغ (DZD) *</Text>
               <TextInput
-                style={[styles.input, { backgroundColor: colors.card, borderColor: colors.border, color: colors.foreground }]}
+                style={[styles.input, { backgroundColor: c.bg, borderColor: c.hairline, color: c.text }]}
                 value={formAmount} onChangeText={setFormAmount}
-                placeholder="0.00" placeholderTextColor={colors.mutedForeground}
+                placeholder="0.00" placeholderTextColor={c.textFaint}
                 keyboardType="decimal-pad" textAlign="right"
               />
-              <Text style={[styles.fieldLabel, { color: colors.mutedForeground, marginTop: 14 }]}>ملاحظة</Text>
+              <Text style={[styles.fieldLabel, { color: c.textMuted, marginTop: 14 }]}>ملاحظة</Text>
               <TextInput
-                style={[styles.input, { backgroundColor: colors.card, borderColor: colors.border, color: colors.foreground }]}
+                style={[styles.input, { backgroundColor: c.bg, borderColor: c.hairline, color: c.text }]}
                 value={formNote} onChangeText={setFormNote}
-                placeholder="اختياري" placeholderTextColor={colors.mutedForeground}
+                placeholder="اختياري" placeholderTextColor={c.textFaint}
                 textAlign="right"
               />
               <View style={{ height: 40 }} />
             </ScrollView>
           </View>
-        </View>
+        </KeyboardAvoidingView>
       </Modal>
+
+      <ResultDialog
+        visible={dialog.visible}
+        variant={dialog.variant}
+        title={dialog.title}
+        message={dialog.message}
+        actions={dialog.actions}
+        onRequestClose={hideDialog}
+      />
     </View>
   );
 }
 
 const styles = StyleSheet.create({
   container: { flex: 1 },
-  summary: { flexDirection: "row-reverse", margin: 12, borderRadius: 16, padding: 16, justifyContent: "space-around" },
+  summary: { flexDirection: "row-reverse", margin: 12, borderRadius: 18, borderWidth: 1, padding: 16, justifyContent: "space-around" },
   summaryItem: { alignItems: "center", gap: 4 },
-  summaryVal: { color: "#fff", fontSize: 16, fontFamily: "Cairo_700Bold" },
-  summaryLabel: { color: "#ffffff99", fontSize: 11, fontFamily: "Cairo_400Regular" },
-  summaryDivider: { width: 1, backgroundColor: "#ffffff44" },
-  topBar: { flexDirection: "row-reverse", alignItems: "center", justifyContent: "space-between", paddingHorizontal: 16, paddingVertical: 10, borderBottomWidth: 1 },
-  pageTitle: { fontSize: 17, fontFamily: "Cairo_700Bold" },
-  addBtn: { flexDirection: "row-reverse", alignItems: "center", gap: 6, paddingHorizontal: 14, paddingVertical: 9, borderRadius: 12 },
-  addBtnText: { color: "#fff", fontSize: 13, fontFamily: "Cairo_600SemiBold" },
-  list: { paddingHorizontal: 12, paddingTop: 12, paddingBottom: 16, gap: 8 },
+  summaryLabel: { fontSize: 11, fontFamily: fonts.regular },
+  summaryDivider: { width: 1 },
+  topBar: { flexDirection: "row-reverse", alignItems: "center", justifyContent: "space-between", paddingHorizontal: 16, paddingBottom: 12 },
+  pageTitle: { fontSize: 20, fontFamily: fonts.bold },
+  heroCard: { marginHorizontal: 16, padding: 20 },
+  heroTwo: { flexDirection: "row-reverse", alignItems: "center" },
+  heroCol: { flex: 1, alignItems: "flex-end", gap: 4 },
+  heroDiv: { width: 1, alignSelf: "stretch", backgroundColor: "rgba(255,255,255,0.25)", marginHorizontal: 14 },
+  heroLbl: { color: "rgba(255,255,255,0.9)", fontSize: 12, fontFamily: fonts.regular, textAlign: "right" },
+  actionRow: { paddingHorizontal: 16, marginTop: 12 },
+  list: { paddingHorizontal: 16, paddingTop: 14, paddingBottom: 120, gap: 9 },
   card: { borderRadius: 14, borderWidth: 1, padding: 14 },
   cardRow: { flexDirection: "row-reverse", alignItems: "center", gap: 10 },
   avatar: { width: 40, height: 40, borderRadius: 10, alignItems: "center", justifyContent: "center" },
-  truckName: { fontSize: 14, fontFamily: "Cairo_600SemiBold" },
-  note: { fontSize: 12, fontFamily: "Cairo_400Regular" },
-  date: { fontSize: 11, fontFamily: "Cairo_400Regular" },
+  truckName: { fontSize: 14, fontFamily: fonts.semibold },
+  note: { fontSize: 12, fontFamily: fonts.regular },
+  date: { fontSize: 11, fontFamily: fonts.regular },
   statusDateRow: { flexDirection: "row-reverse", alignItems: "center", gap: 8, marginTop: 2 },
-  statusPill: { paddingHorizontal: 8, paddingVertical: 2, borderRadius: 10 },
-  statusPillText: { fontSize: 10, fontFamily: "Cairo_600SemiBold" },
-  amount: { fontSize: 15, fontFamily: "Cairo_700Bold" },
   empty: { alignItems: "center", paddingVertical: 60, gap: 12 },
-  emptyText: { fontSize: 14, fontFamily: "Cairo_400Regular" },
-  overlay: { flex: 1, backgroundColor: "rgba(0,0,0,0.45)", justifyContent: "flex-end" },
+  emptyText: { fontSize: 14, fontFamily: fonts.regular },
+  overlay: { ...StyleSheet.absoluteFillObject },
+  sheetWrap: { position: "absolute", left: 0, right: 0, bottom: 0 },
   sheet: { borderTopLeftRadius: 22, borderTopRightRadius: 22, borderWidth: 1, borderBottomWidth: 0, maxHeight: "90%" },
   sheetHeader: { flexDirection: "row-reverse", alignItems: "center", justifyContent: "space-between", paddingHorizontal: 16, paddingVertical: 14, borderBottomWidth: 1 },
-  sheetTitle: { fontSize: 17, fontFamily: "Cairo_600SemiBold" },
-  saveBtn: { paddingHorizontal: 18, paddingVertical: 7, borderRadius: 10 },
-  saveBtnText: { color: "#fff", fontSize: 14, fontFamily: "Cairo_600SemiBold" },
+  sheetTitle: { fontSize: 17, fontFamily: fonts.semibold },
   truckNote: { flexDirection: "row-reverse", alignItems: "center", gap: 8, padding: 12, borderRadius: 12, borderWidth: 1, marginBottom: 4 },
-  truckNoteText: { flex: 1, fontSize: 13, fontFamily: "Cairo_600SemiBold", textAlign: "right" },
-  fieldLabel: { fontSize: 12, fontFamily: "Cairo_400Regular", marginBottom: 8, textAlign: "right" },
+  truckNoteText: { flex: 1, fontSize: 13, fontFamily: fonts.semibold, textAlign: "right" },
+  fieldLabel: { fontSize: 12, fontFamily: fonts.regular, marginBottom: 8, textAlign: "right" },
   chips: { flexDirection: "row-reverse", gap: 8, paddingVertical: 4, marginBottom: 4 },
   chip: { paddingHorizontal: 14, paddingVertical: 8, borderRadius: 20, borderWidth: 1 },
-  chipText: { fontSize: 13, fontFamily: "Cairo_600SemiBold" },
+  chipText: { fontSize: 13, fontFamily: fonts.semibold },
   directionRow: { flexDirection: "row-reverse", gap: 10 },
   dirBtn: { flex: 1, flexDirection: "row-reverse", alignItems: "center", justifyContent: "center", gap: 6, paddingVertical: 10, borderRadius: 12, borderWidth: 1 },
-  dirBtnText: { fontSize: 12, fontFamily: "Cairo_600SemiBold" },
-  input: { height: 46, borderRadius: 10, borderWidth: 1, paddingHorizontal: 14, fontSize: 14, fontFamily: "Cairo_400Regular" },
+  dirBtnText: { fontSize: 12, fontFamily: fonts.semibold },
+  input: { height: 46, borderRadius: 10, borderWidth: 1, paddingHorizontal: 14, fontSize: 14, fontFamily: fonts.regular },
 });

@@ -4,7 +4,6 @@ import React, { useState } from "react";
 import {
   Modal,
   Platform,
-  Pressable,
   ScrollView,
   StyleSheet,
   Text,
@@ -12,7 +11,9 @@ import {
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
-import { useColors } from "@/hooks/useColors";
+import { AppButton, PressableScale } from "@/components/ui";
+import { fonts } from "@/constants/tokens";
+import { useTheme } from "@/hooks/useTheme";
 
 export type ErrorFallbackProps = {
   error: Error;
@@ -20,7 +21,8 @@ export type ErrorFallbackProps = {
 };
 
 export function ErrorFallback({ error, resetError }: ErrorFallbackProps) {
-  const colors = useColors();
+  const t = useTheme();
+  const c = t.color;
   const insets = useSafeAreaInsets();
 
   const [isModalVisible, setIsModalVisible] = useState(false);
@@ -49,54 +51,39 @@ export function ErrorFallback({ error, resetError }: ErrorFallbackProps) {
   });
 
   return (
-    <View style={[styles.container, { backgroundColor: colors.background }]}>
+    <View style={[styles.container, { backgroundColor: c.bg }]}>
       {__DEV__ ? (
-        <Pressable
+        <PressableScale
           onPress={() => setIsModalVisible(true)}
           accessibilityLabel="View error details"
           accessibilityRole="button"
-          style={({ pressed }) => [
+          style={[
             styles.topButton,
             {
               top: insets.top + 16,
-              backgroundColor: colors.card,
-              opacity: pressed ? 0.8 : 1,
+              backgroundColor: c.surface,
             },
           ]}
         >
-          <Feather name="alert-circle" size={20} color={colors.foreground} />
-        </Pressable>
+          <Feather name="alert-circle" size={20} color={c.text} />
+        </PressableScale>
       ) : null}
 
       <View style={styles.content}>
-        <Text style={[styles.title, { color: colors.foreground }]}>
+        <Text style={[styles.title, { color: c.text }]}>
           Something went wrong
         </Text>
 
-        <Text style={[styles.message, { color: colors.mutedForeground }]}>
+        <Text style={[styles.message, { color: c.textMuted }]}>
           Please reload the app to continue.
         </Text>
 
-        <Pressable
+        <AppButton
+          label="Try Again"
+          size="lg"
           onPress={handleRestart}
-          style={({ pressed }) => [
-            styles.button,
-            {
-              backgroundColor: colors.primary,
-              opacity: pressed ? 0.9 : 1,
-              transform: [{ scale: pressed ? 0.98 : 1 }],
-            },
-          ]}
-        >
-          <Text
-            style={[
-              styles.buttonText,
-              { color: colors.primaryForeground },
-            ]}
-          >
-            Try Again
-          </Text>
-        </Pressable>
+          style={styles.button}
+        />
       </View>
 
       {__DEV__ ? (
@@ -106,33 +93,30 @@ export function ErrorFallback({ error, resetError }: ErrorFallbackProps) {
           transparent={true}
           onRequestClose={() => setIsModalVisible(false)}
         >
-          <View style={styles.modalOverlay}>
+          <View style={[styles.modalOverlay, { backgroundColor: c.scrim }]}>
             <View
               style={[
                 styles.modalContainer,
-                { backgroundColor: colors.background },
+                { backgroundColor: c.bg },
               ]}
             >
               <View
                 style={[
                   styles.modalHeader,
-                  { borderBottomColor: colors.border },
+                  { borderBottomColor: c.hairline },
                 ]}
               >
-                <Text style={[styles.modalTitle, { color: colors.foreground }]}>
+                <Text style={[styles.modalTitle, { color: c.text }]}>
                   Error Details
                 </Text>
-                <Pressable
+                <PressableScale
                   onPress={() => setIsModalVisible(false)}
                   accessibilityLabel="Close error details"
                   accessibilityRole="button"
-                  style={({ pressed }) => [
-                    styles.closeButton,
-                    { opacity: pressed ? 0.6 : 1 },
-                  ]}
+                  style={styles.closeButton}
                 >
-                  <Feather name="x" size={24} color={colors.foreground} />
-                </Pressable>
+                  <Feather name="x" size={24} color={c.text} />
+                </PressableScale>
               </View>
 
               <ScrollView
@@ -146,14 +130,14 @@ export function ErrorFallback({ error, resetError }: ErrorFallbackProps) {
                 <View
                   style={[
                     styles.errorContainer,
-                    { backgroundColor: colors.card },
+                    { backgroundColor: c.surface },
                   ]}
                 >
                   <Text
                     style={[
                       styles.errorText,
                       {
-                        color: colors.foreground,
+                        color: c.text,
                         fontFamily: monoFont,
                       },
                     ]}
@@ -189,12 +173,13 @@ const styles = StyleSheet.create({
   },
   title: {
     fontSize: 28,
-    fontWeight: "700",
+    fontFamily: fonts.bold,
     textAlign: "center",
     lineHeight: 40,
   },
   message: {
     fontSize: 16,
+    fontFamily: fonts.regular,
     textAlign: "center",
     lineHeight: 24,
   },
@@ -210,27 +195,10 @@ const styles = StyleSheet.create({
     zIndex: 10,
   },
   button: {
-    paddingVertical: 16,
-    borderRadius: 8,
-    paddingHorizontal: 24,
     minWidth: 200,
-    shadowColor: "#000",
-    shadowOffset: {
-      width: 0,
-      height: 2,
-    },
-    shadowOpacity: 0.1,
-    shadowRadius: 4,
-    elevation: 3,
-  },
-  buttonText: {
-    fontWeight: "600",
-    textAlign: "center",
-    fontSize: 16,
   },
   modalOverlay: {
     flex: 1,
-    backgroundColor: "rgba(0, 0, 0, 0.5)",
     justifyContent: "flex-end",
   },
   modalContainer: {
@@ -250,7 +218,7 @@ const styles = StyleSheet.create({
   },
   modalTitle: {
     fontSize: 20,
-    fontWeight: "600",
+    fontFamily: fonts.semibold,
   },
   closeButton: {
     width: 44,

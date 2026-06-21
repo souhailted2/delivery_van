@@ -18,6 +18,7 @@ export interface Client {
   _lid?: number; sync_id: string; id?: number | null; name: string;
   phone?: string | null; client_type?: string | null; truck_id?: number | null;
   credit_balance?: number; credit_limit?: number | null;
+  latitude?: number | null; longitude?: number | null;
   updated_at?: string; is_deleted?: number; _pending?: number;
 }
 export interface Truck {
@@ -48,8 +49,16 @@ export interface InvoiceItem {
 }
 export interface Return {
   _lid?: number; sync_id: string; id?: number | null;
-  type?: string; truck_id?: number | null; client_id?: number | null;
-  invoice_id?: number | null; total_amount?: number;
+  type?: string; truck_id?: number | null; truck_sync_id?: string | null;
+  client_id?: number | null; client_sync_id?: string | null;
+  invoice_id?: number | null; invoice_sync_id?: string | null; total_amount?: number;
+  created_at?: string; updated_at?: string; is_deleted?: number; _pending?: number;
+}
+export interface ClientPayment {
+  _lid?: number; sync_id: string; id?: number | null;
+  truck_id?: number | null; truck_sync_id?: string | null;
+  client_id?: number | null; client_sync_id?: string | null;
+  amount?: number; method?: string; note?: string | null;
   created_at?: string; updated_at?: string; is_deleted?: number; _pending?: number;
 }
 export interface Supplier {
@@ -137,6 +146,7 @@ const SCHEMA = `
     _lid INTEGER PRIMARY KEY AUTOINCREMENT, sync_id TEXT UNIQUE, id INTEGER,
     name TEXT NOT NULL, phone TEXT, client_type TEXT DEFAULT 'retail',
     truck_id INTEGER, credit_balance REAL DEFAULT 0, credit_limit REAL,
+    latitude REAL, longitude REAL,
     created_at TEXT, updated_at TEXT, is_deleted INTEGER DEFAULT 0, _pending INTEGER DEFAULT 0
   );
   CREATE TABLE IF NOT EXISTS trucks (
@@ -166,7 +176,8 @@ const SCHEMA = `
   );
   CREATE TABLE IF NOT EXISTS returns (
     _lid INTEGER PRIMARY KEY AUTOINCREMENT, sync_id TEXT UNIQUE, id INTEGER,
-    type TEXT, truck_id INTEGER, client_id INTEGER, invoice_id INTEGER,
+    type TEXT, truck_id INTEGER, truck_sync_id TEXT, client_id INTEGER, client_sync_id TEXT,
+    invoice_id INTEGER, invoice_sync_id TEXT,
     total_amount REAL DEFAULT 0, created_at TEXT, updated_at TEXT,
     is_deleted INTEGER DEFAULT 0, _pending INTEGER DEFAULT 0
   );
@@ -217,6 +228,12 @@ const SCHEMA = `
     product_id INTEGER, product_sync_id TEXT, product_name TEXT,
     quantity REAL, updated_at TEXT, _pending INTEGER DEFAULT 0
   );
+  CREATE TABLE IF NOT EXISTS client_payments (
+    _lid INTEGER PRIMARY KEY AUTOINCREMENT, sync_id TEXT UNIQUE, id INTEGER,
+    truck_id INTEGER, truck_sync_id TEXT, client_id INTEGER, client_sync_id TEXT,
+    amount REAL DEFAULT 0, method TEXT DEFAULT 'cash', note TEXT,
+    created_at TEXT, updated_at TEXT, is_deleted INTEGER DEFAULT 0, _pending INTEGER DEFAULT 0
+  );
 `;
 
 export async function getDb(): Promise<SQLiteDatabase | null> {
@@ -236,12 +253,19 @@ export async function getDb(): Promise<SQLiteDatabase | null> {
       try { await db.runAsync("CREATE TABLE IF NOT EXISTS branches (_lid INTEGER PRIMARY KEY AUTOINCREMENT, sync_id TEXT UNIQUE, id INTEGER, name TEXT NOT NULL, address TEXT, phone TEXT, updated_at TEXT, is_deleted INTEGER DEFAULT 0, _pending INTEGER DEFAULT 0)"); } catch {}
       try { await db.runAsync("ALTER TABLE trucks ADD COLUMN can_sell_on_credit INTEGER DEFAULT 1"); } catch {}
       try { await db.runAsync("ALTER TABLE clients ADD COLUMN credit_limit REAL"); } catch {}
+      try { await db.runAsync("ALTER TABLE clients ADD COLUMN latitude REAL"); } catch {}
+      try { await db.runAsync("ALTER TABLE clients ADD COLUMN longitude REAL"); } catch {}
       try { await db.runAsync("ALTER TABLE invoices ADD COLUMN invoice_number TEXT"); } catch {}
       try { await db.runAsync("ALTER TABLE cash_transfers ADD COLUMN direction TEXT DEFAULT 'in'"); } catch {}
       try { await db.runAsync("UPDATE cash_transfers SET direction='in' WHERE direction IS NULL"); } catch {}
       try { await db.runAsync("ALTER TABLE invoices ADD COLUMN truck_sync_id TEXT"); } catch {}
       try { await db.runAsync("ALTER TABLE invoices ADD COLUMN client_sync_id TEXT"); } catch {}
       try { await db.runAsync("ALTER TABLE stock_transfers ADD COLUMN from_warehouse INTEGER DEFAULT 0"); } catch {}
+      // #17 returns: FK sync_id companions so the cloud can resolve the original
+      // invoice/client/truck when applying the money reversal + void.
+      try { await db.runAsync("ALTER TABLE returns ADD COLUMN truck_sync_id TEXT"); } catch {}
+      try { await db.runAsync("ALTER TABLE returns ADD COLUMN client_sync_id TEXT"); } catch {}
+      try { await db.runAsync("ALTER TABLE returns ADD COLUMN invoice_sync_id TEXT"); } catch {}
       return db;
     })().then(
       (db) => { _db = db; return db; },
@@ -353,7 +377,7 @@ export async function getPendingCount(db: SQLiteDatabase): Promise<number> {
     "categories", "products", "clients",
     "invoices", "invoice_items",
     "returns", "return_items",
-    "cash_transfers",
+    "cash_transfers", "client_payments",
     "stock_transfers", "stock_transfer_items",
   ];
   let total = 0;
@@ -381,6 +405,7 @@ export const TABLE_LABELS: [string, string][] = [
   ["returns", "المرتجعات"],
   ["return_items", "بنود المرتجعات"],
   ["cash_transfers", "الصندوق"],
+  ["client_payments", "الدفعات"],
   ["stock_transfers", "تحويلات المخزن"],
   ["stock_transfer_items", "بنود التحويلات"],
 ];
@@ -388,7 +413,7 @@ export const TABLE_LABELS: [string, string][] = [
 // Tables that have an is_deleted soft-delete column
 export const TABLES_WITH_SOFT_DELETE = new Set([
   "categories", "products", "suppliers", "clients", "trucks", "users",
-  "purchases", "invoices", "returns", "cash_transfers", "stock_transfers",
+  "purchases", "invoices", "returns", "cash_transfers", "client_payments", "stock_transfers",
 ]);
 
 export async function getTableCounts(db: SQLiteDatabase): Promise<Record<string, number>> {

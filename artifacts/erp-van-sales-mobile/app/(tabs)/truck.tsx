@@ -2,12 +2,14 @@ import { Feather } from "@expo/vector-icons";
 import { useRefreshOnFocus } from "@/hooks/useRefreshOnFocus";
 import { useCallback, useState } from "react";
 import { FlatList, RefreshControl, StyleSheet, Text, TextInput, View } from "react-native";
-import { SyncBar } from "@/components/SyncBar";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { MoneyText } from "@/components/ui";
 import { useAuth } from "@/contexts/AuthContext";
 import { useSync } from "@/contexts/SyncContext";
 import { getDb } from "@/lib/db";
 import { getTruckForUser, TruckInfo } from "@/lib/truck";
-import { useColors } from "@/hooks/useColors";
+import { fonts } from "@/constants/tokens";
+import { useTheme, type Theme } from "@/hooks/useTheme";
 
 interface StockRow {
   sync_id: string;
@@ -18,24 +20,23 @@ interface StockRow {
   selling_price_retail: number;
 }
 
-function StockCard({ item, colors }: { item: StockRow; colors: any }) {
+function StockCard({ item, t }: { item: StockRow; t: Theme }) {
+  const c = t.color;
   const qty = Number(item.quantity ?? 0);
-  const qtyColor = qty === 0 ? colors.destructive : qty < 5 ? colors.warning : colors.foreground;
+  const qtyColor = qty === 0 ? c.danger : qty < 5 ? c.warning : c.text;
   return (
-    <View style={[styles.card, { backgroundColor: colors.card, borderColor: colors.border }]}>
+    <View style={[styles.card, { backgroundColor: c.surface, borderColor: c.hairline }]}>
       <View style={styles.row}>
-        <View style={[styles.avatar, { backgroundColor: colors.primary + "15" }]}>
-          <Feather name="box" size={16} color={colors.primary} />
+        <View style={[styles.avatar, { backgroundColor: c.brandTint }]}>
+          <Feather name="box" size={16} color={c.brandBright} />
         </View>
         <View style={{ flex: 1, alignItems: "flex-end" }}>
-          <Text style={[styles.productName, { color: colors.foreground }]}>{item.product_name}</Text>
-          <Text style={[styles.price, { color: colors.mutedForeground }]}>
-            {Number(item.selling_price_retail ?? 0).toLocaleString("fr-DZ")} د.ج
-          </Text>
+          <Text style={[styles.productName, { color: c.text }]}>{item.product_name}</Text>
+          <MoneyText amount={Number(item.selling_price_retail ?? 0)} tone="muted" size="caption" />
         </View>
         <View style={{ alignItems: "center" }}>
           <Text style={[styles.qty, { color: qtyColor }]}>{qty.toFixed(0)}</Text>
-          <Text style={[styles.unit, { color: colors.mutedForeground }]}>{item.unit || "قطعة"}</Text>
+          <Text style={[styles.unit, { color: c.textMuted }]}>{item.unit || "قطعة"}</Text>
         </View>
       </View>
     </View>
@@ -43,7 +44,9 @@ function StockCard({ item, colors }: { item: StockRow; colors: any }) {
 }
 
 export default function TruckScreen() {
-  const colors = useColors();
+  const t = useTheme();
+  const c = t.color;
+  const insets = useSafeAreaInsets();
   const { user } = useAuth();
   const { triggerSync } = useSync();
   const [truck, setTruck] = useState<TruckInfo | null>(null);
@@ -92,52 +95,54 @@ export default function TruckScreen() {
   const totalValue = stock.reduce((s, r) => s + r.quantity * r.selling_price_retail, 0);
 
   return (
-    <View style={[styles.container, { backgroundColor: colors.background }]}>
-      <SyncBar />
+    <View style={[styles.container, { backgroundColor: c.bg, paddingTop: insets.top + 8 }]}>
+      <Text style={[styles.pageTitle, { color: c.text }]}>شاحنتي</Text>
       {truck ? (
-        <View style={[styles.header, { backgroundColor: colors.primary }]}>
+        <View style={[styles.header, { backgroundColor: c.surface, borderColor: c.brandBorder, ...t.elevation.glow }]}>
           <View style={styles.headerRow}>
             <View>
-              <Text style={styles.truckName}>{truck.name}</Text>
+              <Text style={[styles.truckName, { color: c.text }]}>{truck.name}</Text>
               {truck.plate_number && (
-                <Text style={styles.plate}>{truck.plate_number}</Text>
+                <Text style={[styles.plate, { color: c.textMuted }]}>{truck.plate_number}</Text>
               )}
             </View>
-            <Feather name="truck" size={28} color="#fff" />
+            <View style={[styles.truckBadge, { backgroundColor: c.brandTint }]}>
+              <Feather name="truck" size={22} color={c.brandBright} />
+            </View>
           </View>
-          <View style={[styles.divider, { backgroundColor: "#ffffff33" }]} />
+          <View style={[styles.divider, { backgroundColor: c.hairline }]} />
           <View style={styles.statsRow}>
             <View style={styles.stat}>
-              <Text style={styles.statVal}>{Number(truck.cash_balance ?? 0).toLocaleString("fr-DZ")} د.ج</Text>
-              <Text style={styles.statLabel}>رصيد الصندوق</Text>
+              <MoneyText amount={Number(truck.cash_balance ?? 0)} size="callout" />
+              <Text style={[styles.statLabel, { color: c.textMuted }]}>رصيد الصندوق</Text>
             </View>
             <View style={styles.stat}>
-              <Text style={styles.statVal}>{totalValue.toLocaleString("fr-DZ")} د.ج</Text>
-              <Text style={styles.statLabel}>قيمة المخزون</Text>
+              <MoneyText amount={totalValue} size="callout" />
+              <Text style={[styles.statLabel, { color: c.textMuted }]}>قيمة المخزون</Text>
             </View>
             <View style={styles.stat}>
-              <Text style={styles.statVal}>{stock.length}</Text>
-              <Text style={styles.statLabel}>أصناف</Text>
+              <Text style={[styles.statVal, { color: c.text }]}>{stock.length}</Text>
+              <Text style={[styles.statLabel, { color: c.textMuted }]}>أصناف</Text>
             </View>
           </View>
         </View>
       ) : user?.truckId ? (
-        <View style={[styles.noTruck, { backgroundColor: colors.card }]}>
-          <Feather name="loader" size={20} color={colors.primary} />
-          <Text style={[styles.noTruckText, { color: colors.mutedForeground }]}>جارٍ تحميل بيانات الشاحنة…</Text>
+        <View style={[styles.noTruck, { backgroundColor: c.surface, borderColor: c.hairline }]}>
+          <Feather name="loader" size={20} color={c.brandBright} />
+          <Text style={[styles.noTruckText, { color: c.textMuted }]}>جارٍ تحميل بيانات الشاحنة…</Text>
         </View>
       ) : (
-        <View style={[styles.noTruck, { backgroundColor: colors.card }]}>
-          <Feather name="alert-circle" size={20} color={colors.warning} />
-          <Text style={[styles.noTruckText, { color: colors.mutedForeground }]}>لم يتم تعيين شاحنة لهذا الحساب</Text>
+        <View style={[styles.noTruck, { backgroundColor: c.surface, borderColor: c.hairline }]}>
+          <Feather name="alert-circle" size={20} color={c.warning} />
+          <Text style={[styles.noTruckText, { color: c.textMuted }]}>لم يتم تعيين شاحنة لهذا الحساب</Text>
         </View>
       )}
-      <View style={[styles.searchBar, { backgroundColor: colors.card, borderColor: colors.border }]}>
-        <Feather name="search" size={16} color={colors.mutedForeground} />
+      <View style={[styles.searchBar, { backgroundColor: c.surface, borderColor: c.hairline }]}>
+        <Feather name="search" size={16} color={c.textMuted} />
         <TextInput
-          style={[styles.searchInput, { color: colors.foreground }]}
+          style={[styles.searchInput, { color: c.text }]}
           placeholder="ابحث عن منتج..."
-          placeholderTextColor={colors.mutedForeground}
+          placeholderTextColor={c.textFaint}
           value={search}
           onChangeText={setSearch}
           textAlign="right"
@@ -146,13 +151,13 @@ export default function TruckScreen() {
       <FlatList
         data={filteredStock}
         keyExtractor={i => i.sync_id}
-        renderItem={({ item }) => <StockCard item={item} colors={colors} />}
+        renderItem={({ item }) => <StockCard item={item} t={t} />}
         contentContainerStyle={styles.list}
-        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary} />}
+        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={c.brand} />}
         ListEmptyComponent={
           <View style={styles.empty}>
-            <Feather name="inbox" size={40} color={colors.muted} />
-            <Text style={[styles.emptyText, { color: colors.mutedForeground }]}>
+            <Feather name="inbox" size={40} color={c.textFaint} />
+            <Text style={[styles.emptyText, { color: c.textMuted }]}>
               {search.trim() ? "لا توجد نتائج" : "المخزون فارغ"}
             </Text>
           </View>
@@ -165,27 +170,28 @@ export default function TruckScreen() {
 
 const styles = StyleSheet.create({
   container: { flex: 1 },
-  header: { margin: 12, borderRadius: 16, padding: 16, gap: 12 },
+  pageTitle: { fontSize: 21, fontFamily: fonts.bold, textAlign: "right", paddingHorizontal: 16, marginBottom: 4 },
+  header: { margin: 12, borderRadius: 20, borderWidth: 1, padding: 16, gap: 12 },
   headerRow: { flexDirection: "row-reverse", justifyContent: "space-between", alignItems: "center" },
-  truckName: { color: "#fff", fontSize: 18, fontFamily: "Cairo_700Bold", textAlign: "right" },
-  plate: { color: "#ffffff99", fontSize: 13, fontFamily: "Cairo_400Regular", textAlign: "right" },
+  truckBadge: { width: 40, height: 40, borderRadius: 20, alignItems: "center", justifyContent: "center" },
+  truckName: { fontSize: 18, fontFamily: fonts.bold, textAlign: "right" },
+  plate: { fontSize: 13, fontFamily: fonts.regular, textAlign: "right" },
   divider: { height: 1 },
   statsRow: { flexDirection: "row-reverse", justifyContent: "space-around" },
   stat: { alignItems: "center", gap: 2 },
-  statVal: { color: "#fff", fontSize: 15, fontFamily: "Cairo_700Bold" },
-  statLabel: { color: "#ffffff99", fontSize: 11, fontFamily: "Cairo_400Regular" },
-  noTruck: { margin: 12, borderRadius: 12, padding: 14, flexDirection: "row-reverse", alignItems: "center", gap: 8 },
-  noTruckText: { fontSize: 13, fontFamily: "Cairo_400Regular" },
-  list: { paddingHorizontal: 12, paddingBottom: 16, gap: 8 },
-  card: { borderRadius: 12, borderWidth: 1, padding: 12 },
+  statVal: { fontSize: 15, fontFamily: fonts.bold },
+  statLabel: { fontSize: 11, fontFamily: fonts.regular },
+  noTruck: { margin: 12, borderRadius: 14, borderWidth: 1, padding: 14, flexDirection: "row-reverse", alignItems: "center", gap: 8 },
+  noTruckText: { fontSize: 13, fontFamily: fonts.regular },
+  list: { paddingHorizontal: 12, paddingBottom: 120, gap: 8 },
+  card: { borderRadius: 14, borderWidth: 1, padding: 12 },
   row: { flexDirection: "row-reverse", alignItems: "center", gap: 10 },
   avatar: { width: 36, height: 36, borderRadius: 8, alignItems: "center", justifyContent: "center" },
-  productName: { fontSize: 14, fontFamily: "Cairo_600SemiBold" },
-  price: { fontSize: 12, fontFamily: "Cairo_400Regular" },
-  qty: { fontSize: 18, fontFamily: "Cairo_700Bold" },
-  unit: { fontSize: 11, fontFamily: "Cairo_400Regular" },
+  productName: { fontSize: 14, fontFamily: fonts.semibold },
+  qty: { fontSize: 18, fontFamily: fonts.bold },
+  unit: { fontSize: 11, fontFamily: fonts.regular },
   searchBar: { flexDirection: "row-reverse", alignItems: "center", gap: 8, paddingHorizontal: 14, height: 44, borderRadius: 12, borderWidth: 1, marginHorizontal: 12, marginBottom: 8 },
-  searchInput: { flex: 1, fontSize: 14, fontFamily: "Cairo_400Regular" },
+  searchInput: { flex: 1, fontSize: 14, fontFamily: fonts.regular },
   empty: { alignItems: "center", paddingVertical: 60, gap: 12 },
-  emptyText: { fontSize: 14, fontFamily: "Cairo_400Regular" },
+  emptyText: { fontSize: 14, fontFamily: fonts.regular },
 });

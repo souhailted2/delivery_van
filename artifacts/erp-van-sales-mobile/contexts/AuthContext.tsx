@@ -9,6 +9,7 @@ interface UserInfo {
   truckId?: number | null;
   branchId?: number | null;
   fullName?: string;
+  truckCanSellOnCredit?: boolean | null;
 }
 
 interface AuthContextValue {
@@ -18,6 +19,7 @@ interface AuthContextValue {
   truckLogin: (truckName: string, password: string) => Promise<void>;
   logout: () => Promise<void>;
   resetDevice: () => Promise<void>;
+  refreshCanSellOnCredit: () => void;
 }
 
 const AuthContext = createContext<AuthContextValue>({
@@ -27,6 +29,7 @@ const AuthContext = createContext<AuthContextValue>({
   truckLogin: async () => {},
   logout: async () => {},
   resetDevice: async () => {},
+  refreshCanSellOnCredit: () => {},
 });
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
@@ -41,7 +44,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           const res = await apiFetch("/auth/me");
           if (res.ok) {
             const data = await res.json();
-            setUser({ id: data.id, username: data.username, role: data.role, truckId: data.truckId, branchId: data.branchId, fullName: data.fullName });
+            setUser({ id: data.id, username: data.username, role: data.role, truckId: data.truckId, branchId: data.branchId, fullName: data.fullName, truckCanSellOnCredit: data.truckCanSellOnCredit });
             return;
           }
         }
@@ -58,7 +61,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
             const setCookie = res.headers.get("set-cookie");
             await saveSession(setCookie);
             const data = await res.json();
-            setUser({ id: data.user?.id ?? 0, username: data.user?.username ?? creds.truckName, role: "truck", truckId: data.user?.truckId, branchId: data.user?.branchId, fullName: data.user?.fullName });
+            setUser({ id: data.user?.id ?? 0, username: data.user?.username ?? creds.truckName, role: "truck", truckId: data.user?.truckId, branchId: data.user?.branchId, fullName: data.user?.fullName, truckCanSellOnCredit: data.user?.truckCanSellOnCredit });
           }
         }
       } catch {
@@ -80,7 +83,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     const setCookie = res.headers.get("set-cookie");
     await saveSession(setCookie);
     const data = await res.json();
-    setUser({ id: data.user?.id ?? 0, username: data.user?.username ?? username, role: data.user?.role ?? "vendeur", truckId: data.user?.truckId, branchId: data.user?.branchId, fullName: data.user?.fullName });
+    setUser({ id: data.user?.id ?? 0, username: data.user?.username ?? username, role: data.user?.role ?? "vendeur", truckId: data.user?.truckId, branchId: data.user?.branchId, fullName: data.user?.fullName, truckCanSellOnCredit: data.user?.truckCanSellOnCredit });
   }, []);
 
   const truckLogin = useCallback(async (truckName: string, password: string) => {
@@ -94,7 +97,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     const setCookie = res.headers.get("set-cookie");
     await saveSession(setCookie);
     const data = await res.json();
-    setUser({ id: data.user?.id ?? 0, username: data.user?.username ?? truckName, role: "truck", truckId: data.user?.truckId, branchId: data.user?.branchId, fullName: data.user?.fullName });
+    setUser({ id: data.user?.id ?? 0, username: data.user?.username ?? truckName, role: "truck", truckId: data.user?.truckId, branchId: data.user?.branchId, fullName: data.user?.fullName, truckCanSellOnCredit: data.user?.truckCanSellOnCredit });
   }, []);
 
   const logout = useCallback(async () => {
@@ -114,8 +117,22 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     setUser(null);
   }, []);
 
+  // Re-pull the current identity (incl. the truck's can-sell-on-credit flag)
+  // from the server and merge it into the user. Called after a sync so the
+  // invoice screen's credit gating reflects the latest server-side permission.
+  const refreshCanSellOnCredit = useCallback(async () => {
+    try {
+      const res = await apiFetch("/auth/me");
+      if (!res.ok) return;
+      const data = await res.json();
+      setUser(prev => (prev ? { ...prev, truckCanSellOnCredit: data.truckCanSellOnCredit ?? prev.truckCanSellOnCredit } : prev));
+    } catch {
+      // offline / transient — keep the last known value
+    }
+  }, []);
+
   return (
-    <AuthContext.Provider value={{ user, loading, login, truckLogin, logout, resetDevice }}>
+    <AuthContext.Provider value={{ user, loading, login, truckLogin, logout, resetDevice, refreshCanSellOnCredit }}>
       {children}
     </AuthContext.Provider>
   );

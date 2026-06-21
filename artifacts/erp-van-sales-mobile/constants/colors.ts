@@ -1,30 +1,43 @@
+/**
+ * Legacy flat color object consumed by `useColors()` (used by not-yet-migrated
+ * screens). Re-skinned to the ALLAL "Premium Light" identity so the whole app
+ * moves to the new look without a per-screen refactor.
+ *
+ * New code should prefer `useTheme()`.
+ */
+import { palette } from "./tokens";
+
 const colors = {
   light: {
-    text: "#1a1a1a",
-    tint: "#0e7c7b",
-    background: "#f2f2f2",
-    foreground: "#1a1a1a",
-    card: "#ffffff",
-    cardForeground: "#1a1a1a",
-    primary: "#0e7c7b",
-    primaryForeground: "#ffffff",
-    secondary: "#e6f2f1",
-    secondaryForeground: "#0e7c7b",
-    muted: "#eef2f1",
-    mutedForeground: "#6b7a78",
-    accent: "#e6f2f1",
-    accentForeground: "#0a5c5b",
-    destructive: "#e03131",
-    destructiveForeground: "#ffffff",
-    success: "#0e7c7b",
-    successForeground: "#ffffff",
-    warning: "#f59e0b",
-    warningForeground: "#ffffff",
-    border: "#e2e8e7",
-    input: "#e2e8e7",
-    ring: "#0e7c7b",
+    text: palette.ink,
+    tint: palette.brand,
+    background: palette.screen,
+    foreground: palette.ink,
+    card: palette.card,
+    cardForeground: palette.ink,
+    primary: palette.brand,
+    primaryForeground: palette.white,
+    secondary: palette.bg,
+    secondaryForeground: palette.ink,
+    muted: palette.bg,
+    mutedForeground: palette.ink2,
+    accent: palette.soft,
+    accentForeground: palette.brand,
+    destructive: palette.red,
+    destructiveForeground: palette.white,
+    success: palette.success,
+    successForeground: palette.white,
+    warning: palette.warning,
+    warningForeground: palette.white,
+    border: palette.line,
+    input: palette.line,
+    ring: palette.brandBright,
+    successTint: "#E6F7F0",
+    warningTint: "#FCF1E3",
+    dangerTint: "#FCEBEA",
+    brandTint: "rgba(14,154,167,0.10)",
   },
-  radius: 10,
+  radius: 16,
 };
 
 export default colors;

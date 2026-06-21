@@ -4,21 +4,22 @@ import { router } from "expo-router";
 import { useState } from "react";
 import {
   ActivityIndicator,
-  Alert,
   KeyboardAvoidingView,
   Platform,
   ScrollView,
   StyleSheet,
   Text,
   TextInput,
-  TouchableOpacity,
   View,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { getDb, setSyncMeta, TABLE_LABELS } from "@/lib/db";
 import { saveServerUrl, getSessionSid, saveTruckCredentials } from "@/lib/api";
 import { pullSync } from "@/lib/sync";
-import { useColors } from "@/hooks/useColors";
+import { AppButton, PressableScale, ResultDialog } from "@/components/ui";
+import type { DialogAction, ResultVariant } from "@/components/ui";
+import { fonts } from "@/constants/tokens";
+import { useTheme } from "@/hooks/useTheme";
 import { useAuth } from "@/contexts/AuthContext";
 
 const TABLE_LABEL_MAP: Record<string, string> = Object.fromEntries(TABLE_LABELS);
@@ -31,7 +32,8 @@ interface ProgressEntry {
 }
 
 export default function SetupScreen() {
-  const colors = useColors();
+  const t = useTheme();
+  const c = t.color;
   const insets = useSafeAreaInsets();
   const { truckLogin } = useAuth();
 
@@ -45,13 +47,20 @@ export default function SetupScreen() {
   const [progress, setProgress] = useState<ProgressEntry[]>([]);
   const [totalRecords, setTotalRecords] = useState(0);
 
+  const [dialog, setDialog] = useState<{ visible: boolean; variant: ResultVariant; title: string; message?: string; actions?: DialogAction[] }>(
+    { visible: false, variant: "info", title: "" }
+  );
+  const showDialog = (variant: ResultVariant, title: string, message?: string, actions?: DialogAction[]) =>
+    setDialog({ visible: true, variant, title, message, actions });
+  const hideDialog = () => setDialog((d) => ({ ...d, visible: false }));
+
   const handleSetup = async () => {
     if (!serverUrl.trim()) {
-      Alert.alert("تنبيه", "يرجى إدخال رابط السيرفر");
+      showDialog("warning", "تنبيه", "يرجى إدخال رابط السيرفر");
       return;
     }
     if (!truckName.trim() || !password.trim()) {
-      Alert.alert("تنبيه", "يرجى إدخال اسم الشاحنة وكلمة المرور");
+      showDialog("warning", "تنبيه", "يرجى إدخال اسم الشاحنة وكلمة المرور");
       return;
     }
 
@@ -75,7 +84,7 @@ export default function SetupScreen() {
       const sid = await getSessionSid();
       if (!sid) {
         setPhase("idle");
-        Alert.alert("خطأ", "لم يتم استلام جلسة صالحة من السيرفر");
+        showDialog("error", "خطأ", "لم يتم استلام جلسة صالحة من السيرفر");
         return;
       }
 
@@ -113,7 +122,7 @@ export default function SetupScreen() {
           : err?.message?.includes("Network request failed") || err?.message?.includes("fetch")
           ? "تعذّر الاتصال بالسيرفر. تحقق من الرابط واتصال الإنترنت."
           : err?.message ?? "حدث خطأ غير متوقع";
-      Alert.alert("خطأ في الإعداد", msg);
+      showDialog("error", "خطأ في الإعداد", msg);
     }
   };
 
@@ -121,7 +130,7 @@ export default function SetupScreen() {
 
   return (
     <KeyboardAvoidingView
-      style={[styles.container, { backgroundColor: colors.background, paddingTop: insets.top }]}
+      style={[styles.container, { backgroundColor: c.bg, paddingTop: insets.top }]}
       behavior={Platform.OS === "ios" ? "padding" : undefined}
     >
       <ScrollView
@@ -130,24 +139,24 @@ export default function SetupScreen() {
         showsVerticalScrollIndicator={false}
       >
         <View style={styles.card}>
-          <View style={[styles.logoBox, { backgroundColor: colors.primary }]}>
-            <Feather name="truck" size={36} color="#fff" />
+          <View style={[styles.logoBox, { backgroundColor: c.brand }]}>
+            <Feather name="truck" size={36} color={c.onBrand} />
           </View>
-          <Text style={[styles.title, { color: colors.foreground }]}>إعداد الجهاز</Text>
-          <Text style={[styles.subtitle, { color: colors.mutedForeground }]}>
+          <Text style={[styles.title, { color: c.text }]}>إعداد الجهاز</Text>
+          <Text style={[styles.subtitle, { color: c.textMuted }]}>
             أدخل بيانات الشاحنة لربط هذا الجهاز بها
           </Text>
 
           {phase === "idle" || phase === "login" ? (
             <>
               <View style={styles.fieldGroup}>
-                <Text style={[styles.label, { color: colors.mutedForeground }]}>رابط السيرفر</Text>
-                <View style={[styles.inputWrap, { borderColor: colors.border, backgroundColor: colors.card }]}>
-                  <Feather name="server" size={16} color={colors.mutedForeground} style={styles.inputIcon} />
+                <Text style={[styles.label, { color: c.textMuted }]}>رابط السيرفر</Text>
+                <View style={[styles.inputWrap, { borderColor: c.hairline, backgroundColor: c.surface }]}>
+                  <Feather name="server" size={16} color={c.textMuted} style={styles.inputIcon} />
                   <TextInput
-                    style={[styles.input, { color: colors.foreground }]}
+                    style={[styles.input, { color: c.text }]}
                     placeholder="https://deleveri.alllal.com"
-                    placeholderTextColor={colors.mutedForeground}
+                    placeholderTextColor={c.textFaint}
                     value={serverUrl}
                     onChangeText={setServerUrl}
                     autoCapitalize="none"
@@ -160,13 +169,13 @@ export default function SetupScreen() {
               </View>
 
               <View style={styles.fieldGroup}>
-                <Text style={[styles.label, { color: colors.mutedForeground }]}>اسم الشاحنة</Text>
-                <View style={[styles.inputWrap, { borderColor: colors.border, backgroundColor: colors.card }]}>
-                  <Feather name="truck" size={16} color={colors.mutedForeground} style={styles.inputIcon} />
+                <Text style={[styles.label, { color: c.textMuted }]}>اسم الشاحنة</Text>
+                <View style={[styles.inputWrap, { borderColor: c.hairline, backgroundColor: c.surface }]}>
+                  <Feather name="truck" size={16} color={c.textMuted} style={styles.inputIcon} />
                   <TextInput
-                    style={[styles.input, { color: colors.foreground }]}
+                    style={[styles.input, { color: c.text }]}
                     placeholder="مثال: شاحنة 1"
-                    placeholderTextColor={colors.mutedForeground}
+                    placeholderTextColor={c.textFaint}
                     value={truckName}
                     onChangeText={setTruckName}
                     autoCapitalize="none"
@@ -178,19 +187,19 @@ export default function SetupScreen() {
               </View>
 
               <View style={styles.fieldGroup}>
-                <Text style={[styles.label, { color: colors.mutedForeground }]}>كلمة المرور</Text>
-                <View style={[styles.inputWrap, { borderColor: colors.border, backgroundColor: colors.card }]}>
-                  <TouchableOpacity
+                <Text style={[styles.label, { color: c.textMuted }]}>كلمة المرور</Text>
+                <View style={[styles.inputWrap, { borderColor: c.hairline, backgroundColor: c.surface }]}>
+                  <PressableScale
                     onPress={() => setShowPass(v => !v)}
                     style={styles.inputIcon}
                     disabled={isBusy}
                   >
-                    <Feather name={showPass ? "eye-off" : "eye"} size={16} color={colors.mutedForeground} />
-                  </TouchableOpacity>
+                    <Feather name={showPass ? "eye-off" : "eye"} size={16} color={c.textMuted} />
+                  </PressableScale>
                   <TextInput
-                    style={[styles.input, { color: colors.foreground }]}
+                    style={[styles.input, { color: c.text }]}
                     placeholder="كلمة المرور"
-                    placeholderTextColor={colors.mutedForeground}
+                    placeholderTextColor={c.textFaint}
                     value={password}
                     onChangeText={setPassword}
                     secureTextEntry={!showPass}
@@ -200,51 +209,45 @@ export default function SetupScreen() {
                 </View>
               </View>
 
-              <TouchableOpacity
-                style={[styles.btn, { backgroundColor: isBusy ? colors.muted : colors.primary }]}
-                onPress={handleSetup}
+              <AppButton
+                label={phase === "login" ? "جارٍ تسجيل الدخول..." : "ربط الجهاز بالشاحنة"}
+                size="lg"
+                fullWidth
+                loading={phase === "login"}
                 disabled={isBusy}
-                activeOpacity={0.8}
-              >
-                {phase === "login" ? (
-                  <View style={styles.btnInner}>
-                    <ActivityIndicator color="#fff" size="small" />
-                    <Text style={styles.btnText}>جارٍ تسجيل الدخول...</Text>
-                  </View>
-                ) : (
-                  <Text style={styles.btnText}>ربط الجهاز بالشاحنة</Text>
-                )}
-              </TouchableOpacity>
+                onPress={handleSetup}
+                style={styles.btn}
+              />
             </>
           ) : null}
 
           {phase === "pulling" && (
-            <View style={[styles.progressBox, { borderColor: colors.border, backgroundColor: colors.card }]}>
+            <View style={[styles.progressBox, { borderColor: c.hairline, backgroundColor: c.surface }]}>
               <View style={styles.progressHeader}>
-                <ActivityIndicator color={colors.primary} size="small" />
-                <Text style={[styles.progressTitle, { color: colors.foreground }]}>
+                <ActivityIndicator color={c.brand} size="small" />
+                <Text style={[styles.progressTitle, { color: c.text }]}>
                   جارٍ سحب البيانات...
                 </Text>
               </View>
               {currentTable && (
-                <Text style={[styles.progressCurrent, { color: colors.primary }]}>
+                <Text style={[styles.progressCurrent, { color: c.brand }]}>
                   ▶ {TABLE_LABEL_MAP[currentTable] ?? currentTable}
                 </Text>
               )}
               <View style={styles.progressList}>
                 {progress.map(({ tableName, count }) => (
                   <View key={tableName} style={styles.progressRow}>
-                    <Text style={[styles.progressTableName, { color: colors.mutedForeground }]}>
+                    <Text style={[styles.progressTableName, { color: c.textMuted }]}>
                       {TABLE_LABEL_MAP[tableName] ?? tableName}
                     </Text>
-                    <Text style={[styles.progressCount, { color: colors.foreground }]}>
+                    <Text style={[styles.progressCount, { color: c.text }]}>
                       {count} سجل
                     </Text>
                   </View>
                 ))}
               </View>
               {totalRecords > 0 && (
-                <Text style={[styles.progressTotal, { color: colors.mutedForeground }]}>
+                <Text style={[styles.progressTotal, { color: c.textMuted, borderTopColor: c.hairline }]}>
                   الإجمالي: {totalRecords} سجل
                 </Text>
               )}
@@ -252,19 +255,28 @@ export default function SetupScreen() {
           )}
 
           {phase === "done" && (
-            <View style={[styles.doneBox, { borderColor: colors.border, backgroundColor: colors.card }]}>
-              <Feather name="check-circle" size={40} color="#22c55e" />
-              <Text style={[styles.doneTitle, { color: colors.foreground }]}>
+            <View style={[styles.doneBox, { borderColor: c.hairline, backgroundColor: c.surface }]}>
+              <Feather name="check-circle" size={40} color={c.success} />
+              <Text style={[styles.doneTitle, { color: c.text }]}>
                 تم ربط الجهاز بنجاح!
               </Text>
-              <Text style={[styles.doneSubtitle, { color: colors.mutedForeground }]}>
+              <Text style={[styles.doneSubtitle, { color: c.textMuted }]}>
                 تم استيراد {totalRecords} سجل. جارٍ فتح التطبيق...
               </Text>
-              <ActivityIndicator color={colors.primary} style={{ marginTop: 12 }} />
+              <ActivityIndicator color={c.brand} style={{ marginTop: 12 }} />
             </View>
           )}
         </View>
       </ScrollView>
+
+      <ResultDialog
+        visible={dialog.visible}
+        variant={dialog.variant}
+        title={dialog.title}
+        message={dialog.message}
+        actions={dialog.actions}
+        onRequestClose={hideDialog}
+      />
     </KeyboardAvoidingView>
   );
 }
@@ -277,43 +289,40 @@ const styles = StyleSheet.create({
     width: 80, height: 80, borderRadius: 20,
     alignItems: "center", justifyContent: "center", marginBottom: 4,
   },
-  title: { fontSize: 24, fontFamily: "Cairo_700Bold" },
-  subtitle: { fontSize: 14, fontFamily: "Cairo_400Regular", textAlign: "center", marginBottom: 4 },
+  title: { fontSize: 24, fontFamily: fonts.bold },
+  subtitle: { fontSize: 14, fontFamily: fonts.regular, textAlign: "center", marginBottom: 4 },
   fieldGroup: { width: "100%", gap: 6 },
-  label: { fontSize: 13, fontFamily: "Cairo_600SemiBold", textAlign: "right" },
+  label: { fontSize: 13, fontFamily: fonts.semibold, textAlign: "right" },
   inputWrap: {
     width: "100%", flexDirection: "row-reverse", alignItems: "center",
     borderWidth: 1, borderRadius: 12, paddingHorizontal: 14, height: 52,
   },
   inputIcon: { marginLeft: 8 },
-  input: { flex: 1, fontSize: 15, fontFamily: "Cairo_400Regular", textAlign: "right" },
+  input: { flex: 1, fontSize: 15, fontFamily: fonts.regular, textAlign: "right" },
   btn: {
-    width: "100%", height: 52, borderRadius: 12,
-    alignItems: "center", justifyContent: "center", marginTop: 6,
+    width: "100%", marginTop: 6,
   },
-  btnInner: { flexDirection: "row", alignItems: "center", gap: 8 },
-  btnText: { color: "#fff", fontSize: 17, fontFamily: "Cairo_700Bold" },
   progressBox: {
     width: "100%", borderWidth: 1, borderRadius: 16,
     padding: 16, gap: 10,
   },
   progressHeader: { flexDirection: "row-reverse", alignItems: "center", gap: 10 },
-  progressTitle: { fontSize: 16, fontFamily: "Cairo_700Bold" },
-  progressCurrent: { fontSize: 14, fontFamily: "Cairo_600SemiBold", textAlign: "right" },
+  progressTitle: { fontSize: 16, fontFamily: fonts.bold },
+  progressCurrent: { fontSize: 14, fontFamily: fonts.semibold, textAlign: "right" },
   progressList: { gap: 6 },
   progressRow: {
     flexDirection: "row-reverse", justifyContent: "space-between", alignItems: "center",
   },
-  progressTableName: { fontSize: 13, fontFamily: "Cairo_400Regular" },
-  progressCount: { fontSize: 13, fontFamily: "Cairo_600SemiBold" },
+  progressTableName: { fontSize: 13, fontFamily: fonts.regular },
+  progressCount: { fontSize: 13, fontFamily: fonts.semibold },
   progressTotal: {
-    fontSize: 13, fontFamily: "Cairo_600SemiBold", textAlign: "right",
-    borderTopWidth: 1, borderTopColor: "#e5e7eb", paddingTop: 8, marginTop: 4,
+    fontSize: 13, fontFamily: fonts.semibold, textAlign: "right",
+    borderTopWidth: 1, paddingTop: 8, marginTop: 4,
   },
   doneBox: {
     width: "100%", borderWidth: 1, borderRadius: 16,
     padding: 24, alignItems: "center", gap: 10,
   },
-  doneTitle: { fontSize: 18, fontFamily: "Cairo_700Bold" },
-  doneSubtitle: { fontSize: 14, fontFamily: "Cairo_400Regular", textAlign: "center" },
+  doneTitle: { fontSize: 18, fontFamily: fonts.bold },
+  doneSubtitle: { fontSize: 14, fontFamily: fonts.regular, textAlign: "center" },
 });

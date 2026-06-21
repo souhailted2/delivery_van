@@ -7,10 +7,12 @@ export function cn(...inputs: ClassValue[]) {
 
 export function formatCurrency(amount: number | string) {
   const num = typeof amount === "string" ? parseFloat(amount) : amount;
-  return new Intl.NumberFormat("fr-DZ", {
-    minimumFractionDigits: 0,
-    maximumFractionDigits: 0,
-  }).format(num) + " DZD";
+  // ALLAL money standard: always two decimals, space grouping, dot decimal, " DZD".
+  const safe = Number.isFinite(num) ? num : 0;
+  const neg = safe < 0;
+  const [intPart, dec] = Math.abs(safe).toFixed(2).split(".");
+  const grouped = intPart.replace(/\B(?=(\d{3})+(?!\d))/g, " ");
+  return `${neg ? "-" : ""}${grouped}.${dec} DZD`;
 }
 
 export function formatDate(date: string | Date) {
