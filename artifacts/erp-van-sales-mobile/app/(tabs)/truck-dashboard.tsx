@@ -181,6 +181,9 @@ export default function TruckDashboardScreen() {
             <Feather name="download" size={18} color={pendingDispatch ? c.warning : c.textMuted} />
             {pendingDispatch && <View style={[styles.dot, { backgroundColor: c.warning, borderColor: c.bg }]} />}
           </PressableScale>
+          <PressableScale style={[styles.inbox, { backgroundColor: c.surface, borderColor: c.hairline }]} onPress={() => router.push("/(tabs)/settings")} haptic accessibilityLabel="الإعدادات">
+            <Feather name="settings" size={18} color={c.textMuted} />
+          </PressableScale>
           <View style={styles.logoChip}><Image source={logo} style={styles.logoImg} resizeMode="contain" /></View>
         </View>
       </View>

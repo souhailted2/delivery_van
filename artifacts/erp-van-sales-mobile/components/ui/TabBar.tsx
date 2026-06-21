@@ -14,19 +14,20 @@ type Cell =
   | { kind: "sell" };
 
 // RTL order (first = rightmost). Center "+بيع" is the raised primary action.
+// Kept symmetric — two tabs on each side of the centered "بيع" — so the raised
+// button sits exactly in the middle. Settings lives in the dashboard header.
 const CELLS: Cell[] = [
   { kind: "tab", route: "truck-dashboard", label: "الرئيسية", icon: "home" },
   { kind: "tab", route: "clients", label: "العملاء", icon: "users" },
   { kind: "sell" },
   { kind: "tab", route: "caisse", label: "الصندوق", icon: "dollar-sign" },
   { kind: "tab", route: "truck", label: "شاحنتي", icon: "box" },
-  { kind: "tab", route: "settings", label: "الإعدادات", icon: "settings" },
 ];
 
 /**
- * Custom premium bottom bar: five flat tabs around a raised, glowing gradient
- * "بيع" (new sale) action. الصندوق is a permanent tab; التحميل (receiving) is
- * reached from the dashboard.
+ * Custom premium bottom bar: four flat tabs around a raised, glowing gradient
+ * "بيع" (new sale) action. الصندوق is a permanent tab; التحميل (receiving) and
+ * الإعدادات are reached from the dashboard header.
  */
 export function TabBar({ state, navigation }: any) {
   const c = useTheme().color;

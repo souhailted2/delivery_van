@@ -19,7 +19,8 @@ function TruckTabLayout() {
       <Tabs.Screen name="truck" />
       <Tabs.Screen name="dispatch" options={{ href: null }} />
       <Tabs.Screen name="caisse" options={{ href: null }} />
-      <Tabs.Screen name="settings" />
+      <Tabs.Screen name="settings" options={{ href: null }} />
+      {/* settings is reached from the dashboard header, not the bottom bar */}
     </Tabs>
   );
 }
