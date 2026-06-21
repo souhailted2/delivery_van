@@ -3,12 +3,13 @@ import * as Haptics from "expo-haptics";
 import { router } from "expo-router";
 import { useRefreshOnFocus } from "@/hooks/useRefreshOnFocus";
 import { useCallback, useRef, useState } from "react";
-import { FlatList, Modal, RefreshControl, StyleSheet, Text, TextInput, View } from "react-native";
+import { FlatList, KeyboardAvoidingView, Modal, Platform, RefreshControl, StyleSheet, Text, TextInput, TouchableWithoutFeedback, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { AppButton, Avatar, Card, EmptyState, MoneyText, PressableScale, SkeletonList } from "@/components/ui";
 import { useAuth } from "@/contexts/AuthContext";
 import { useSync } from "@/contexts/SyncContext";
 import { Client, getDb } from "@/lib/db";
+import { captureLocation } from "@/lib/location";
 import { newSyncId } from "@/lib/uuid";
 import { fonts } from "@/constants/tokens";
 import { useTheme } from "@/hooks/useTheme";
@@ -71,6 +72,9 @@ export default function ClientsScreen() {
   const [showAddModal, setShowAddModal] = useState(false);
   const [newName, setNewName] = useState("");
   const [newPhone, setNewPhone] = useState("");
+  const [newType, setNewType] = useState<string>("retail");
+  const [newCoords, setNewCoords] = useState<{ latitude: number; longitude: number } | null>(null);
+  const [capturing, setCapturing] = useState(false);
   const [saving, setSaving] = useState(false);
   const nameInputRef = useRef<TextInput>(null);
 
@@ -102,8 +106,16 @@ export default function ClientsScreen() {
   useRefreshOnFocus(load);
 
   const handleAdd = () => {
-    setNewName(""); setNewPhone(""); setShowAddModal(true);
-    setTimeout(() => nameInputRef.current?.focus(), 200);
+    setNewName(""); setNewPhone(""); setNewType("retail"); setNewCoords(null); setShowAddModal(true);
+    setTimeout(() => nameInputRef.current?.focus(), 300);
+  };
+
+  const captureForNew = async () => {
+    setCapturing(true);
+    const coords = await captureLocation();
+    setCapturing(false);
+    if (coords) { setNewCoords(coords); Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success); }
+    else Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
   };
 
   const confirmAdd = async () => {
@@ -114,10 +126,11 @@ export default function ClientsScreen() {
     try {
       await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
       const truckId = user?.truckId ?? null;
+      const now = new Date().toISOString();
       await db.runAsync(
-        `INSERT INTO clients (sync_id, name, phone, client_type, truck_id, is_deleted, _pending, updated_at, created_at)
-         VALUES (?, ?, ?, ?, ?, 0, 1, ?, ?)`,
-        [newSyncId(), newName.trim(), newPhone.trim() || null, "retail", truckId, new Date().toISOString(), new Date().toISOString()]
+        `INSERT INTO clients (sync_id, name, phone, client_type, truck_id, latitude, longitude, is_deleted, _pending, updated_at, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, 0, 1, ?, ?)`,
+        [newSyncId(), newName.trim(), newPhone.trim() || null, newType, truckId, newCoords?.latitude ?? null, newCoords?.longitude ?? null, now, now]
       );
       setShowAddModal(false);
       triggerSync();
@@ -131,25 +144,47 @@ export default function ClientsScreen() {
 
   return (
     <View style={[styles.container, { backgroundColor: c.bg, paddingTop: insets.top + 8 }]}>
-      <Modal visible={showAddModal} transparent animationType="fade">
-        <View style={[styles.overlay, { backgroundColor: c.scrim }]}>
-          <Card raised radius={22} pad={20} style={{ width: "100%", gap: 12 }}>
-            <Text style={[styles.modalTitle, { color: c.text }]}>عميل جديد</Text>
+      <Modal visible={showAddModal} transparent animationType="slide" onRequestClose={() => setShowAddModal(false)}>
+        <TouchableWithoutFeedback onPress={() => setShowAddModal(false)}>
+          <View style={[styles.overlay, { backgroundColor: c.scrim }]} />
+        </TouchableWithoutFeedback>
+        <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : "height"} style={styles.sheetWrap}>
+          <Card raised radius={24} pad={20} style={[styles.sheet, { paddingBottom: insets.bottom + 16 }]}>
+            <View style={[styles.handle, { backgroundColor: c.hairline }]} />
+            <Text style={[styles.modalTitle, { color: c.text }]}>زبون جديد</Text>
             <TextInput ref={nameInputRef}
               style={[styles.input, { backgroundColor: c.bg, borderColor: c.hairline, color: c.text }]}
-              placeholder="اسم العميل *" placeholderTextColor={c.textFaint}
+              placeholder="اسم الزبون *" placeholderTextColor={c.textFaint}
               value={newName} onChangeText={setNewName} textAlign="right" returnKeyType="next" />
             <TextInput
               style={[styles.input, { backgroundColor: c.bg, borderColor: c.hairline, color: c.text }]}
               placeholder="رقم الهاتف (اختياري)" placeholderTextColor={c.textFaint}
-              value={newPhone} onChangeText={setNewPhone} keyboardType="phone-pad" textAlign="right"
-              returnKeyType="done" onSubmitEditing={confirmAdd} />
+              value={newPhone} onChangeText={setNewPhone} keyboardType="phone-pad" textAlign="right" returnKeyType="done" />
+            <Text style={[styles.fieldLabel, { color: c.textMuted }]}>نوع الزبون</Text>
+            <View style={styles.typeRow}>
+              {Object.keys(TYPE_LABELS).map(tp => {
+                const on = newType === tp;
+                return (
+                  <PressableScale key={tp} style={[styles.typeChip, { backgroundColor: on ? c.brand : c.bg, borderColor: on ? c.brand : c.hairline }]} onPress={() => setNewType(tp)}>
+                    <Text style={[styles.typeChipText, { color: on ? c.onBrand : c.text }]}>{TYPE_LABELS[tp]}</Text>
+                  </PressableScale>
+                );
+              })}
+            </View>
+            <PressableScale
+              style={[styles.locBtn, { backgroundColor: newCoords ? c.successTint : c.bg, borderColor: newCoords ? c.successText : c.hairline }]}
+              onPress={captureForNew} disabled={capturing}>
+              <Feather name={newCoords ? "check-circle" : "map-pin"} size={16} color={newCoords ? c.successText : c.brand} />
+              <Text style={[styles.locBtnText, { color: newCoords ? c.successText : c.brand }]}>
+                {capturing ? "جارٍ تحديد الموقع…" : newCoords ? "تم تسجيل الموقع ✓" : "تحديد موقع الزبون الحالي"}
+              </Text>
+            </PressableScale>
             <View style={styles.modalActions}>
               <AppButton label="إلغاء" variant="tonal" size="lg" onPress={() => setShowAddModal(false)} style={{ flex: 1 }} />
-              <AppButton label="إضافة" variant="primary" size="lg" icon="user-plus" loading={saving} disabled={!newName.trim()} onPress={confirmAdd} style={{ flex: 2 }} />
+              <AppButton label="حفظ" variant="primary" size="lg" icon="check" loading={saving} disabled={!newName.trim()} onPress={confirmAdd} style={{ flex: 2 }} />
             </View>
           </Card>
-        </View>
+        </KeyboardAvoidingView>
       </Modal>
 
       <View style={styles.titleRow}>
@@ -208,8 +243,17 @@ const styles = StyleSheet.create({
   badges: { flexDirection: "row-reverse", flexWrap: "wrap", gap: 5, marginTop: 6 },
   badge: { borderRadius: 8, paddingHorizontal: 8, paddingVertical: 3 },
   badgeText: { fontSize: 11, fontFamily: fonts.bold },
-  overlay: { flex: 1, alignItems: "center", justifyContent: "center", padding: 24 },
+  overlay: { ...StyleSheet.absoluteFillObject },
+  sheetWrap: { position: "absolute", left: 0, right: 0, bottom: 0 },
+  sheet: { borderBottomLeftRadius: 0, borderBottomRightRadius: 0, gap: 12 },
+  handle: { width: 40, height: 4, borderRadius: 2, alignSelf: "center", marginBottom: 2 },
   modalTitle: { fontSize: 20, fontFamily: fonts.bold, textAlign: "right" },
   input: { borderWidth: 1, borderRadius: 12, paddingHorizontal: 14, height: 48, fontSize: 15, fontFamily: fonts.regular },
+  fieldLabel: { fontSize: 12, fontFamily: fonts.semibold, textAlign: "right", marginTop: 2 },
+  typeRow: { flexDirection: "row-reverse", gap: 8 },
+  typeChip: { flex: 1, alignItems: "center", justifyContent: "center", paddingVertical: 11, borderRadius: 12, borderWidth: 1 },
+  typeChipText: { fontSize: 13, fontFamily: fonts.semibold },
+  locBtn: { flexDirection: "row-reverse", alignItems: "center", justifyContent: "center", gap: 8, paddingVertical: 13, borderRadius: 12, borderWidth: 1 },
+  locBtnText: { fontSize: 14, fontFamily: fonts.bold },
   modalActions: { flexDirection: "row-reverse", gap: 10, marginTop: 4 },
 });

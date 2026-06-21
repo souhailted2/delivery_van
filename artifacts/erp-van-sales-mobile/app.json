@@ -25,7 +25,9 @@
         "backgroundColor": "#0e7c7b"
       },
       "permissions": [
-        "android.permission.INTERNET"
+        "android.permission.INTERNET",
+        "android.permission.ACCESS_FINE_LOCATION",
+        "android.permission.ACCESS_COARSE_LOCATION"
       ]
     },
     "web": {
@@ -41,7 +43,11 @@
       "expo-font",
       "expo-web-browser",
       "expo-sqlite",
-      "expo-secure-store"
+      "expo-secure-store",
+      [
+        "expo-location",
+        { "locationWhenInUsePermission": "يستخدم التطبيق موقعك لتسجيل موقع العميل على الخريطة." }
+      ]
     ],
     "experiments": {
       "typedRoutes": true

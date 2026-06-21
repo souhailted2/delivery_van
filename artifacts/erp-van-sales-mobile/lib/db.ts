@@ -18,6 +18,7 @@ export interface Client {
   _lid?: number; sync_id: string; id?: number | null; name: string;
   phone?: string | null; client_type?: string | null; truck_id?: number | null;
   credit_balance?: number; credit_limit?: number | null;
+  latitude?: number | null; longitude?: number | null;
   updated_at?: string; is_deleted?: number; _pending?: number;
 }
 export interface Truck {
@@ -137,6 +138,7 @@ const SCHEMA = `
     _lid INTEGER PRIMARY KEY AUTOINCREMENT, sync_id TEXT UNIQUE, id INTEGER,
     name TEXT NOT NULL, phone TEXT, client_type TEXT DEFAULT 'retail',
     truck_id INTEGER, credit_balance REAL DEFAULT 0, credit_limit REAL,
+    latitude REAL, longitude REAL,
     created_at TEXT, updated_at TEXT, is_deleted INTEGER DEFAULT 0, _pending INTEGER DEFAULT 0
   );
   CREATE TABLE IF NOT EXISTS trucks (
@@ -236,6 +238,8 @@ export async function getDb(): Promise<SQLiteDatabase | null> {
       try { await db.runAsync("CREATE TABLE IF NOT EXISTS branches (_lid INTEGER PRIMARY KEY AUTOINCREMENT, sync_id TEXT UNIQUE, id INTEGER, name TEXT NOT NULL, address TEXT, phone TEXT, updated_at TEXT, is_deleted INTEGER DEFAULT 0, _pending INTEGER DEFAULT 0)"); } catch {}
       try { await db.runAsync("ALTER TABLE trucks ADD COLUMN can_sell_on_credit INTEGER DEFAULT 1"); } catch {}
       try { await db.runAsync("ALTER TABLE clients ADD COLUMN credit_limit REAL"); } catch {}
+      try { await db.runAsync("ALTER TABLE clients ADD COLUMN latitude REAL"); } catch {}
+      try { await db.runAsync("ALTER TABLE clients ADD COLUMN longitude REAL"); } catch {}
       try { await db.runAsync("ALTER TABLE invoices ADD COLUMN invoice_number TEXT"); } catch {}
       try { await db.runAsync("ALTER TABLE cash_transfers ADD COLUMN direction TEXT DEFAULT 'in'"); } catch {}
       try { await db.runAsync("UPDATE cash_transfers SET direction='in' WHERE direction IS NULL"); } catch {}

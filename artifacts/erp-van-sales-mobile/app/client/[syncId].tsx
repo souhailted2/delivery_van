@@ -7,6 +7,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { GradientHero, MoneyText, PressableScale, ResultDialog } from "@/components/ui";
 import type { DialogAction, ResultVariant } from "@/components/ui";
 import { Client, getDb } from "@/lib/db";
+import { captureLocation } from "@/lib/location";
 import { useAuth } from "@/contexts/AuthContext";
 import { useSync } from "@/contexts/SyncContext";
 import { formatMoney } from "@/lib/money";
@@ -66,6 +67,7 @@ export default function ClientProfileScreen() {
     { visible: false, variant: "info", title: "" }
   );
   const hideDialog = () => setDialog((d) => ({ ...d, visible: false }));
+  const [capturingLoc, setCapturingLoc] = useState(false);
   const fade = useRef(new Animated.Value(0)).current;
 
   const load = useCallback(async () => {
@@ -195,6 +197,23 @@ export default function ClientProfileScreen() {
         { label: "إلغاء", variant: "tonal" },
       ],
     });
+  };
+
+  const captureClientLocation = async () => {
+    if (!client) return;
+    setCapturingLoc(true);
+    const coords = await captureLocation();
+    setCapturingLoc(false);
+    if (!coords) {
+      setDialog({ visible: true, variant: "error", title: "تعذّر تحديد الموقع", message: "تأكد من تفعيل الموقع ومنح الإذن، ثم حاول مجدداً." });
+      return;
+    }
+    const db = await getDb();
+    if (!db) return;
+    await db.runAsync("UPDATE clients SET latitude = ?, longitude = ?, _pending = 1, updated_at = ? WHERE sync_id = ?",
+      [coords.latitude, coords.longitude, new Date().toISOString(), client.sync_id]);
+    setClient({ ...client, latitude: coords.latitude, longitude: coords.longitude });
+    triggerSync();
   };
 
   const tones = (tone: Tone) => ({
@@ -337,6 +356,17 @@ export default function ClientProfileScreen() {
                   })}
                 </View>
 
+                {/* location — capture/update for this client */}
+                <Text style={[styles.flowLabel, { color: c.textFaint }]}>الموقع</Text>
+                <PressableScale
+                  style={[styles.locRow, { borderColor: client.latitude != null ? c.successText : c.hairline, backgroundColor: client.latitude != null ? c.successTint : c.surface }]}
+                  onPress={captureClientLocation} disabled={capturingLoc}>
+                  <Feather name={client.latitude != null ? "check-circle" : "map-pin"} size={15} color={client.latitude != null ? c.successText : c.brand} />
+                  <Text style={[styles.locRowText, { color: client.latitude != null ? c.successText : c.brand }]}>
+                    {capturingLoc ? "جارٍ التحديد…" : client.latitude != null ? "الموقع مسجّل — اضغط للتحديث" : "أضف موقع العميل الحالي"}
+                  </Text>
+                </PressableScale>
+
                 {/* ── TIER 3 — evidence (quiet reference rows, no cards) ── */}
                 <View style={[styles.divider, { backgroundColor: c.hairline }]} />
                 {intel.creditPct != null && (
@@ -411,6 +441,8 @@ const styles = StyleSheet.create({
   pchip: { flexDirection: "row-reverse", alignItems: "center", gap: 5, borderRadius: 9, paddingHorizontal: 10, paddingVertical: 6 },
   pchipText: { fontSize: 11, fontFamily: fonts.semibold },
   tierRow: { flexDirection: "row-reverse", gap: 6, marginTop: 16 },
+  locRow: { flexDirection: "row-reverse", alignItems: "center", justifyContent: "center", gap: 8, paddingVertical: 12, borderRadius: 12, borderWidth: 1, marginTop: 8 },
+  locRowText: { fontSize: 13, fontFamily: fonts.bold },
   tierChip: { paddingHorizontal: 12, paddingVertical: 5, borderRadius: 9, borderWidth: 1 },
   tierChipText: { fontSize: 11, fontFamily: fonts.semibold },
   divider: { height: 1, marginTop: 16 },

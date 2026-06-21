@@ -729,29 +729,22 @@ export default function NewInvoiceScreen() {
             <View style={styles.paymentRow}>
               {(["cash", "credit"] as const)
                 .filter(pt => pt === "cash" || (user?.truckCanSellOnCredit !== false))
-                .map(pt => (
-                <PressableScale
-                  key={pt}
-                  style={[
-                    styles.paymentBtn,
-                    {
-                      backgroundColor: paymentType === pt ? c.brand : c.surface,
-                      borderColor: paymentType === pt ? c.brand : c.hairline,
-                      flex: 1,
-                    }
-                  ]}
-                  onPress={() => setPaymentType(pt)}
-                >
-                  <Feather
-                    name={pt === "cash" ? "dollar-sign" : "credit-card"}
-                    size={26}
-                    color={paymentType === pt ? c.onBrand : c.textMuted}
-                  />
-                  <Text style={[styles.paymentBtnText, { color: paymentType === pt ? c.onBrand : c.text }]}>
-                    {pt === "cash" ? "نقد" : "آجل"}
-                  </Text>
-                </PressableScale>
-              ))}
+                .map(pt => {
+                  const on = paymentType === pt;
+                  return (
+                    <PressableScale
+                      key={pt}
+                      style={[styles.paymentBtn, { backgroundColor: c.surface, borderColor: on ? c.brand : c.hairline, borderWidth: on ? 2 : 1.5, flex: 1 }]}
+                      onPress={() => setPaymentType(pt)}
+                    >
+                      <View style={[styles.payIcon, { backgroundColor: on ? c.brand : c.brandTint }]}>
+                        <Feather name={pt === "cash" ? "dollar-sign" : "credit-card"} size={22} color={on ? c.onBrand : c.brand} />
+                      </View>
+                      <Text style={[styles.paymentBtnText, { color: on ? c.brand : c.text }]}>{pt === "cash" ? "نقد" : "آجل"}</Text>
+                      <Text style={[styles.payHint, { color: c.textFaint }]}>{pt === "cash" ? "يُحصّل الآن" : "على الحساب"}</Text>
+                    </PressableScale>
+                  );
+                })}
             </View>
 
             <AppButton
@@ -985,9 +978,11 @@ const styles = StyleSheet.create({
   paymentRow: { flexDirection: "row-reverse", gap: 12 },
   paymentBtn: {
     flexDirection: "column", alignItems: "center", justifyContent: "center",
-    gap: 10, paddingVertical: 22, borderRadius: 18, borderWidth: 1.5,
+    gap: 8, paddingVertical: 18, borderRadius: 18,
   },
+  payIcon: { width: 46, height: 46, borderRadius: 14, alignItems: "center", justifyContent: "center", marginBottom: 2 },
   paymentBtnText: { fontSize: 16, fontFamily: fonts.bold },
+  payHint: { fontSize: 11, fontFamily: fonts.regular },
 
   // ── Add-client modal ──────────────────────────────────────────────────────
   modalOverlay: { ...StyleSheet.absoluteFillObject },
