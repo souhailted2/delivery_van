@@ -76,11 +76,11 @@ export async function createReturn(opts: {
   truckId: number | null;
   truckSyncId?: string | null;
   lines: ReturnLine[];
-}): Promise<boolean> {
+}): Promise<string | null> {
   const lines = opts.lines.filter(l => Number(l.quantity) > 0);
-  if (!lines.length) return false;
+  if (!lines.length) return null;
   const db = await getDb();
-  if (!db) return false;
+  if (!db) return null;
   const now = new Date().toISOString();
   const retSyncId = newSyncId();
   const total = lines.reduce((s, l) => s + Number(l.quantity) * Number(l.unit_price), 0);
@@ -131,5 +131,5 @@ export async function createReturn(opts: {
       [now, opts.invoice.sync_id] as any[],
     );
   }
-  return true;
+  return retSyncId;
 }

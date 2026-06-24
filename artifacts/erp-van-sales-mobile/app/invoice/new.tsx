@@ -398,11 +398,18 @@ export default function NewInvoiceScreen() {
       await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
       bumpLocalVersion();
       triggerSync();
-      showDialog("success", "تم", "تم حفظ الفاتورة بنجاح", [
+      showDialog("success", "تم", "تم حفظ الفاتورة بنجاح. اضغط «طباعة الإيصال» لإرسالها إلى RawBT.", [
         {
           label: "طباعة الإيصال",
-          onPress: () => {
-            printInvoiceReceipt(receipt).catch(() => {}).finally(() => router.back());
+          onPress: async () => {
+            try {
+              await printInvoiceReceipt(receipt);
+              router.back();
+            } catch (e: any) {
+              // Surface the failure instead of swallowing it — otherwise the
+              // driver assumes the receipt printed when it didn't.
+              showDialog("error", "تعذّرت الطباعة", e?.message ?? "تعذّر فتح الطباعة. تأكد من تثبيت تطبيق RawBT.");
+            }
           },
         },
         { label: "إغلاق", variant: "tonal", onPress: () => router.back() },

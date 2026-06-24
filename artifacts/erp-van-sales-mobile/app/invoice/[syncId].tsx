@@ -12,7 +12,7 @@ import type { DialogAction, ResultVariant } from "@/components/ui";
 import { useSync } from "@/contexts/SyncContext";
 import { getDb, Invoice } from "@/lib/db";
 import { formatMoney } from "@/lib/money";
-import { printInvoiceReceipt, ReceiptInvoice } from "@/lib/receipt";
+import { printInvoiceReceipt, printReturnReceipt, ReceiptInvoice, ReceiptReturn } from "@/lib/receipt";
 import { createReturn } from "@/lib/txn";
 import { fonts } from "@/constants/tokens";
 import { useTheme, type Theme } from "@/hooks/useTheme";
@@ -135,7 +135,7 @@ export default function InvoiceDetailScreen() {
     }
     setSubmitting(true);
     try {
-      const ok = await createReturn({
+      const returnSyncId = await createReturn({
         type,
         invoice: {
           sync_id: invoice.sync_id, id: invoice.id ?? null,
@@ -146,17 +146,46 @@ export default function InvoiceDetailScreen() {
         truckSyncId: invoice.truck_sync_id ?? null,
         lines,
       });
-      if (!ok) { showDialog("error", "خطأ", "تعذّر تنفيذ العملية"); return; }
+      if (!returnSyncId) { showDialog("error", "خطأ", "تعذّر تنفيذ العملية"); return; }
       setReturnOpen(false);
       setReturnQty({});
       bumpLocalVersion();
       triggerSync();
+
+      // Build a printable return receipt mirroring the original invoice format.
+      const retReceipt: ReceiptReturn = {
+        returnNumber: `MRT-${returnSyncId.slice(-6).toUpperCase()}`,
+        createdAt: new Date().toISOString(),
+        type,
+        clientName: invoice.client_name ?? "عميل غير معروف",
+        truckName: invoice.truck_name ?? "—",
+        totalAmount: lines.reduce((s, l) => s + l.quantity * l.unit_price, 0),
+        items: lines.map(l => ({
+          productName: l.product_name ?? "منتج محذوف",
+          priceType: "",
+          quantity: l.quantity,
+          unitPrice: l.unit_price,
+          subtotal: l.quantity * l.unit_price,
+        })),
+      };
+      const printAction: DialogAction = {
+        label: "طباعة إيصال المرتجع",
+        onPress: async () => {
+          try {
+            await printReturnReceipt(retReceipt);
+          } catch (e: any) {
+            showDialog("error", "تعذّرت الطباعة", e?.message ?? "تأكد من تثبيت تطبيق RawBT.");
+            return;
+          }
+          if (type === "void") router.back(); else load();
+        },
+      };
       if (type === "void") {
         showDialog("success", "تم الإلغاء", "أُلغيت الفاتورة وأُعيدت الكمية إلى مخزون الشاحنة.",
-          [{ label: "حسناً", onPress: () => router.back() }]);
+          [printAction, { label: "حسناً", variant: "tonal", onPress: () => router.back() }]);
       } else {
         showDialog("success", "تم المرتجع", "سُجّل المرتجع وأُعيدت الكمية إلى مخزون الشاحنة.",
-          [{ label: "حسناً", onPress: () => load() }]);
+          [printAction, { label: "حسناً", variant: "tonal", onPress: () => load() }]);
       }
     } catch (e: any) {
       showDialog("error", "خطأ", e?.message ?? "فشلت العملية");
@@ -241,6 +270,9 @@ export default function InvoiceDetailScreen() {
               disabled={printing}
               onPress={handlePrint}
             />
+            <Text style={[styles.printHint, { color: c.textFaint }]}>
+              تُرسَل الفاتورة مباشرة إلى تطبيق RawBT. لطباعة العربية بوضوح فعّل وضع الصورة (Image) في إعدادات RawBT.
+            </Text>
             <AppButton
               label="مرتجع / إلغاء الفاتورة"
               icon="rotate-ccw"
@@ -314,6 +346,7 @@ function DetailRow({ label, value, t }: { label: string; value: string; t: Theme
 const styles = StyleSheet.create({
   container: { flex: 1 },
   bottomBar: { paddingHorizontal: 16, paddingTop: 12, borderTopWidth: 1 },
+  printHint: { fontSize: 11, fontFamily: fonts.regular, textAlign: "center", lineHeight: 16 },
   topBar: {
     flexDirection: "row-reverse", alignItems: "center", justifyContent: "space-between",
     paddingHorizontal: 16, paddingVertical: 12, borderBottomWidth: 1,
